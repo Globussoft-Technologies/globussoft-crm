@@ -2373,7 +2373,8 @@ function renderTravelNav({
         <Link to="/travel/visa/embassy-rules" icon={Shield} label="Embassy Rules" requiredPermission={{ module: "visa", action: "manage" }} />
       </>)}
 
-      {group("Marketing", ["/travel/brochures", "/travel/forms", "/travel/meeting-forms", "/landing-pages", "/admin/brand-kits"], <>
+      {group("Marketing", ["/travel/email-automation", "/travel/EmailAutomation", "/travel/brochures", "/travel/forms", "/travel/meeting-forms", "/landing-pages", "/admin/brand-kits"], <>
+        <Link to="/travel/email-automation" icon={Mail} label="Email Automation" requiredPermission={{ module: "marketing", action: "read" }} />
         <Link to="/travel/brochures" icon={Sparkles} label="Brochure Engine" requiredPermission={{ module: "marketing", action: "read" }} />
         <Link to="/travel/forms" icon={Code} label="Web Forms" requiredPermission={{ module: "marketing", action: "read" }} />
         <Link to="/travel/meeting-forms" icon={Clock} label="Meeting Forms" requiredPermission={{ module: "marketing", action: "read" }} />
@@ -2548,6 +2549,7 @@ function renderTravelNavLegacy({
           (cover, day-by-day itinerary, route map, inclusions, pricing).
           Gated by marketing.read so it's visible alongside the other
           marketing-output surfaces (Landing Pages). */}
+      <Link to="/travel/email-automation" icon={Mail} label="Email Automation" requiredPermission={{ module: "marketing", action: "read" }} />
       <Link to="/travel/brochures" icon={Sparkles} label="Brochure Engine" requiredPermission={{ module: "marketing", action: "read" }} />
       {/* Destination Landing Pages  travel-only surface backed by the
           existing LandingPage platform (/api/landing-pages). The shared

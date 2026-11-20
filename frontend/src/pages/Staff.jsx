@@ -25,6 +25,7 @@ import { AuthContext } from "../App";
 import { usePermissions } from "../hooks/usePermissions";
 import { useActiveSubBrand } from "../utils/subBrand";
 import { formatDate } from "../utils/date";
+import { sanitizeGenericCrmPhoneInput, validateGenericCrmPhone } from "../utils/genericCrmPhoneValidation";
 import {
   defaultSubBrandFor,
   SUB_BRAND_IDS,
@@ -1081,6 +1082,18 @@ export default function Staff() {
     if (password.length < 6) {
       notify.error("Password must be at least 6 characters.");
       return;
+    }
+    if (isGeneric) {
+      const workNumberError = validateGenericCrmPhone(creating.workNumber, "Work number");
+      if (workNumberError) {
+        notify.error(workNumberError);
+        return;
+      }
+      const mobileNumberError = validateGenericCrmPhone(creating.mobileNumber, "Mobile number");
+      if (mobileNumberError) {
+        notify.error(mobileNumberError);
+        return;
+      }
     }
     if (!creating.rbacRoleId) {
       notify.error("Please choose a role.");
@@ -2823,7 +2836,7 @@ export default function Staff() {
                   </button>
                 </div>
               </label>
-              {!isTravel && !isWellness && (<> <label>Job title<input className="input-field" value={creating.jobTitle} onChange={(e) => setCreating({ ...creating, jobTitle: e.target.value })} placeholder="e.g. SDR" /></label><label>Work number<input className="input-field" value={creating.workNumber} onChange={(e) => setCreating({ ...creating, workNumber: e.target.value })} placeholder="Staff official contact number" /></label><label>Mobile number<input className="input-field" value={creating.mobileNumber} onChange={(e) => setCreating({ ...creating, mobileNumber: e.target.value })} placeholder="Staff personal mobile number" /></label><label>Reporting to<select className="input-field" value={creating.reportingTo} onChange={(e) => setCreating({ ...creating, reportingTo: e.target.value })}><option value="">Click to select</option>{staff.filter((member) => member.role === "MANAGER" || member.role === "ADMIN").map((member) => <option key={member.id} value={member.id}>{member.name || member.email}</option>)}</select></label><label>Teams<select className="input-field" value={creating.teams} onChange={(e) => setCreating({ ...creating, teams: e.target.value })}><option value="">Click to select</option>{salesTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label></>)}
+              {!isTravel && !isWellness && (<> <label>Job title<input className="input-field" value={creating.jobTitle} onChange={(e) => setCreating({ ...creating, jobTitle: e.target.value })} placeholder="e.g. SDR" /></label><label>Work number<input className="input-field" inputMode="tel" pattern="[+0-9\s().-]+" aria-label="Work number" value={creating.workNumber} onChange={(e) => setCreating({ ...creating, workNumber: sanitizeGenericCrmPhoneInput(e.target.value) })} onBlur={() => { const error = validateGenericCrmPhone(creating.workNumber, "Work number"); if (error) notify.error(error); }} placeholder="Staff official contact number" /></label><label>Mobile number<input className="input-field" inputMode="tel" pattern="[+0-9\s().-]+" aria-label="Mobile number" value={creating.mobileNumber} onChange={(e) => setCreating({ ...creating, mobileNumber: sanitizeGenericCrmPhoneInput(e.target.value) })} onBlur={() => { const error = validateGenericCrmPhone(creating.mobileNumber, "Mobile number"); if (error) notify.error(error); }} placeholder="Staff personal mobile number" /></label><label>Reporting to<select className="input-field" value={creating.reportingTo} onChange={(e) => setCreating({ ...creating, reportingTo: e.target.value })}><option value="">Click to select</option>{staff.filter((member) => member.role === "MANAGER" || member.role === "ADMIN").map((member) => <option key={member.id} value={member.id}>{member.name || member.email}</option>)}</select></label><label>Teams<select className="input-field" value={creating.teams} onChange={(e) => setCreating({ ...creating, teams: e.target.value })}><option value="">Click to select</option>{salesTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label></>)}
               {/* Single Role dropdown — replaces the prior 3-way split
                   (access tier + job role + wellness role). The picked RBAC
                   role's key drives all three values via saveCreate's

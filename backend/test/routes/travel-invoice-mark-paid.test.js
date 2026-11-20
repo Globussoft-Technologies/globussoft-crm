@@ -214,6 +214,12 @@ describe('POST /api/travel/invoices/:id/schedule/:milestoneId/mark-paid', () => 
     expect(res.body.payment).toBeTruthy();
     expect(res.body.milestone.status).toBe('paid');
     expect(prisma.payment.create).toHaveBeenCalledTimes(1);
+    expect(eventBusModule.emitEvent).toHaveBeenCalledWith(
+      'payment.collected',
+      expect.objectContaining({ invoiceId: 300, paymentId: 9001, amount: 30000 }),
+      1,
+      undefined,
+    );
     const paymentArgs = prisma.payment.create.mock.calls[0][0].data;
     expect(paymentArgs.amount).toBe(30000);
     expect(paymentArgs.gateway).toBe('upi');

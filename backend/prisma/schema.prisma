@@ -164,6 +164,10 @@ model Tenant {
   pipelineStages           PipelineStage[]
   pipelineStageAssignments PipelineStageAssignment[]
   emailTemplates           EmailTemplate[]
+  travelEmailTemplates     TravelEmailTemplate[]
+  travelEmailSequences     TravelEmailSequence[]
+  travelEmailEnrollments   TravelEmailEnrollment[]
+  travelEmailDeliveryLogs  TravelEmailDeliveryLog[]
   reportSchedules          ReportSchedule[]
   marketplaceLeads         MarketplaceLead[]
   marketplaceConfigs       MarketplaceConfig[]
@@ -376,36 +380,36 @@ model Tenant {
   // back-relations. Calendar cluster (CalendarIntegration / CalendarEvent /
   // ScheduledEmail / Booking) plus sales config (WinLossReason / LeadRoutingRule
   // / Territory) plus support (KbCategory / KbArticle / SlaPolicy).
-  calendarIntegrations CalendarIntegration[]
-  gmailIntegrations    GmailIntegration[]
-  calendarEvents       CalendarEvent[]
-  scheduledEmails      ScheduledEmail[]
-  bookings             Booking[]
-  winLossReasons       WinLossReason[]
-  leadRoutingRules     LeadRoutingRule[]
-  territories          Territory[]
-  pickupLocations      PickupLocation[]
-  plotSites            PlotSite[]
-  transportPersons     TransportPerson[]
-  plotBrokers          PlotBroker[]
-  billingPersons       BillingPerson[]
-  customerPickups      CustomerPickup[]
-  payoutPartners       PayoutPartner[]
-  plotOwnerships       PlotOwnership[]
-  payoutCommissionRules PayoutCommissionRule[]
-  payoutSettings       PayoutSettings[]
+  calendarIntegrations    CalendarIntegration[]
+  gmailIntegrations       GmailIntegration[]
+  calendarEvents          CalendarEvent[]
+  scheduledEmails         ScheduledEmail[]
+  bookings                Booking[]
+  winLossReasons          WinLossReason[]
+  leadRoutingRules        LeadRoutingRule[]
+  territories             Territory[]
+  pickupLocations         PickupLocation[]
+  plotSites               PlotSite[]
+  transportPersons        TransportPerson[]
+  plotBrokers             PlotBroker[]
+  billingPersons          BillingPerson[]
+  customerPickups         CustomerPickup[]
+  payoutPartners          PayoutPartner[]
+  plotOwnerships          PlotOwnership[]
+  payoutCommissionRules   PayoutCommissionRule[]
+  payoutSettings          PayoutSettings[]
   bookingPricingSnapshots BookingPricingSnapshot[]
-  paymentReceipts      PaymentReceipt[]
-  distributionLines    DistributionLine[]
-  payouts              Payout[]
-  payoutLines          PayoutLine[]
-  payoutDocuments      PayoutDocument[]
-  idempotencyRecords    IdempotencyRecord[]
-  payoutClawbacks       PayoutClawback[]
-  payoutConfirmations   PayoutConfirmation[]
-  kbCategories         KbCategory[]
-  kbArticles           KbArticle[]
-  slaPolicies          SlaPolicy[]
+  paymentReceipts         PaymentReceipt[]
+  distributionLines       DistributionLine[]
+  payouts                 Payout[]
+  payoutLines             PayoutLine[]
+  payoutDocuments         PayoutDocument[]
+  idempotencyRecords      IdempotencyRecord[]
+  payoutClawbacks         PayoutClawback[]
+  payoutConfirmations     PayoutConfirmation[]
+  kbCategories            KbCategory[]
+  kbArticles              KbArticle[]
+  slaPolicies             SlaPolicy[]
 
   // #413 PlaybookProgress audit (wave 18): added defensively after the batch-2
   // deferral. The model's tenancy was implicit via dealId; routes already
@@ -1100,10 +1104,10 @@ model Contact {
   // customer's display name without a separate contact-list request.
   travelQuotes              TravelQuote[]
   passportIdentities        PassportIdentity[]
-  assignedTmcTrips          TmcTrip[]                  @relation("TmcTripTeacher")
-  tmcParentTrips            TmcParentTrip[]            @relation("TmcParentTripParent")
-  tmcTeacherParentTrips     TmcParentTrip[]            @relation("TmcParentTripTeacher")
-  tmcTeacherReviews         TmcTripTeacherReview[]     @relation("TmcTripTeacherReviewTeacher")
+  assignedTmcTrips          TmcTrip[]                     @relation("TmcTripTeacher")
+  tmcParentTrips            TmcParentTrip[]               @relation("TmcParentTripParent")
+  tmcTeacherParentTrips     TmcParentTrip[]               @relation("TmcParentTripTeacher")
+  tmcTeacherReviews         TmcTripTeacherReview[]        @relation("TmcTripTeacherReviewTeacher")
   tmcCatalogueResponses     TmcTeacherCatalogueResponse[] @relation("TmcTeacherCatalogueResponseTeacher")
   customerPickups           CustomerPickup[]
 
@@ -1872,23 +1876,23 @@ model Invoice {
   // populated by the wellness invoice flow; generic + travel invoices keep
   // their existing shape. Snapshotting makes an issued invoice stable even
   // when the patient profile changes later.
-  patientId       Int?
-  customerName    String?
-  customerPhone   String?
-  customerEmail   String?
-  customerAddress String? @db.Text
-  gstin           String? @db.VarChar(15)
-  billingAddress  String? @db.Text
-  shippingAddress String? @db.Text
-  paymentMode     String? // cash, upi, card, bank_transfer, other
-  lineItemsJson   String? @db.Text // [{type, itemId, name, quantity, unitPrice, amount}]
-  notes           String? @db.Text
-  proofScreenshotUrl      String? @db.Text
+  patientId               Int?
+  customerName            String?
+  customerPhone           String?
+  customerEmail           String?
+  customerAddress         String?           @db.Text
+  gstin                   String?           @db.VarChar(15)
+  billingAddress          String?           @db.Text
+  shippingAddress         String?           @db.Text
+  paymentMode             String? // cash, upi, card, bank_transfer, other
+  lineItemsJson           String?           @db.Text // [{type, itemId, name, quantity, unitPrice, amount}]
+  notes                   String?           @db.Text
+  proofScreenshotUrl      String?           @db.Text
   proofScreenshotFilename String?
-  currency        String  @default("USD")
-  amountPaid      Float?
-  balance         Float?
-  plotInvoiceItems PlotInvoiceItem[]
+  currency                String            @default("USD")
+  amountPaid              Float?
+  balance                 Float?
+  plotInvoiceItems        PlotInvoiceItem[]
 
   // #601 — wellness visit linkage. Optional so generic CRM invoices don't
   // need it. SetNull on visit delete; Invoice itself stays Restrict-on-tenant.
@@ -2172,16 +2176,16 @@ model QuoteLineItem {
 }
 
 model Task {
-  id        Int       @id @default(autoincrement())
-  title     String
-  dueDate   DateTime?
-  status    String    @default("Pending") // Pending, Completed
-  priority  String    @default("Medium") // Low, Medium, High, Critical
-  notes     String?   @db.LongText
+  id          Int       @id @default(autoincrement())
+  title       String
+  dueDate     DateTime?
+  status      String    @default("Pending") // Pending, Completed
+  priority    String    @default("Medium") // Low, Medium, High, Critical
+  notes       String?   @db.LongText
   completedAt DateTime?
-  createdAt DateTime  @default(now())
+  createdAt   DateTime  @default(now())
   // #167: soft-delete column (see Contact).
-  deletedAt DateTime?
+  deletedAt   DateTime?
 
   // Lead Reports cluster — activity kind + result of a scheduled meeting or
   // site visit. Both nullable and additive: every pre-existing Task row keeps
@@ -2485,6 +2489,108 @@ model EmailTemplate {
   tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   sequenceSteps SequenceStep[]
+}
+
+// Travel CRM automation is intentionally stored in its own tables.  Do not
+// reuse EmailTemplate/Sequence/SequenceEnrollment: those tables power the
+// Generic CRM (and legacy Wellness) workflows and must never expose Travel
+// templates, enrollments, or delivery history.
+model TravelEmailTemplate {
+  id           Int                       @id @default(autoincrement())
+  tenantId     Int
+  subBrand     String?                   @db.VarChar(50) // null = All subbrands
+  eventKey     String                    @db.VarChar(100)
+  name         String                    @db.VarChar(160)
+  subject      String                    @db.VarChar(255)
+  body         String                    @db.LongText
+  isDefault    Boolean                   @default(false)
+  isActive     Boolean                   @default(true)
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  tenant       Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  steps        TravelEmailSequenceStep[] @relation("TravelPrimaryStepTemplate")
+  deliveryLogs TravelEmailDeliveryLog[]
+
+  @@index([tenantId, eventKey, subBrand, isActive])
+  @@index([tenantId, updatedAt])
+}
+
+model TravelEmailSequence {
+  id           Int                       @id @default(autoincrement())
+  tenantId     Int
+  subBrand     String?                   @db.VarChar(50) // null = All subbrands
+  name         String                    @db.VarChar(160)
+  isActive     Boolean                   @default(false)
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+  tenant       Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  steps        TravelEmailSequenceStep[]
+  enrollments  TravelEmailEnrollment[]
+  deliveryLogs TravelEmailDeliveryLog[]
+
+  @@index([tenantId, subBrand, isActive])
+}
+
+model TravelEmailSequenceStep {
+  id                Int                  @id @default(autoincrement())
+  sequenceId        Int
+  templateId        Int
+  position          Int
+  delayMinutes      Int                  @default(0)
+  sequence          TravelEmailSequence  @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  template          TravelEmailTemplate  @relation("TravelPrimaryStepTemplate", fields: [templateId], references: [id], onDelete: Restrict)
+
+  @@unique([sequenceId, position])
+  @@index([templateId])
+}
+
+model TravelEmailEnrollment {
+  id               Int                      @id @default(autoincrement())
+  tenantId         Int
+  sequenceId       Int
+  contactId        Int?
+  eventKey         String                   @db.VarChar(100)
+  recipientEmail   String                   @db.VarChar(255)
+  currentStep      Int                      @default(0)
+  status           String                   @default("ACTIVE") // ACTIVE | COMPLETED | PAUSED | FAILED
+  nextRun          DateTime?
+  eventPayloadJson String?                  @db.LongText
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  tenant           Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sequence         TravelEmailSequence      @relation(fields: [sequenceId], references: [id], onDelete: Cascade)
+  deliveryLogs     TravelEmailDeliveryLog[]
+
+  @@index([tenantId, status, nextRun])
+  @@index([tenantId, contactId, createdAt])
+}
+
+model TravelEmailDeliveryLog {
+  id                Int                    @id @default(autoincrement())
+  tenantId          Int
+  sequenceId        Int?
+  enrollmentId      Int?
+  stepId            Int?
+  templateId        Int?
+  contactId         Int?
+  eventKey          String                 @db.VarChar(100)
+  recipientEmail    String                 @db.VarChar(255)
+  subject           String                 @db.VarChar(255)
+  bodyHtml          String?                @db.LongText
+  status            String                 @db.VarChar(30) // SENT | FAILED | SKIPPED
+  provider          String?                @db.VarChar(50)
+  providerMessageId String?                @db.VarChar(255)
+  errorMessage      String?                @db.Text
+  sentAt            DateTime?
+  createdAt         DateTime               @default(now())
+  tenant            Tenant                 @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sequence          TravelEmailSequence?   @relation(fields: [sequenceId], references: [id], onDelete: SetNull)
+  enrollment        TravelEmailEnrollment? @relation(fields: [enrollmentId], references: [id], onDelete: SetNull)
+  template          TravelEmailTemplate?   @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, status, createdAt])
+  @@index([tenantId, eventKey, contactId])
 }
 
 model Project {
@@ -3606,32 +3712,32 @@ model PickupLocation {
 }
 
 model PlotSite {
-  id                    Int             @id @default(autoincrement())
+  id                    Int                 @id @default(autoincrement())
   name                  String
   plotNumber            String?
   block                 String?
-  address               String?         @db.Text
+  address               String?             @db.Text
   referenceCode         String?
   area                  String?
   areaUnit              String?
   roadWidth             String?
   facing                String?
   propertyType          String?
-  boundaryJson          String?         @db.Text
+  boundaryJson          String?             @db.Text
   boundaryAreaSqFt      Float?
-  price                 Decimal?        @db.Decimal(15, 2)
-  availability          String          @default("AVAILABLE") // AVAILABLE, HOLD, BOOKED, REGISTERED, RESERVED, SOLD
-  notes                 String?         @db.Text
-  isActive              Boolean         @default(true)
-  pickupLocationIdsJson String?         @db.Text
+  price                 Decimal?            @db.Decimal(15, 2)
+  availability          String              @default("AVAILABLE") // AVAILABLE, HOLD, BOOKED, REGISTERED, RESERVED, SOLD
+  notes                 String?             @db.Text
+  isActive              Boolean             @default(true)
+  pickupLocationIdsJson String?             @db.Text
   pickupLocationId      Int?
-  pickupLocation        PickupLocation? @relation(fields: [pickupLocationId], references: [id], onDelete: SetNull)
-  tenantId              Int             @default(1)
-  tenant                Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  pickupLocation        PickupLocation?     @relation(fields: [pickupLocationId], references: [id], onDelete: SetNull)
+  tenantId              Int                 @default(1)
+  tenant                Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   brokers               PlotBroker[]
   commissionPlan        PlotCommissionPlan?
-  createdAt             DateTime        @default(now())
-  updatedAt             DateTime        @updatedAt
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
 
   @@index([tenantId, availability, isActive])
   @@index([tenantId, pickupLocationId])
@@ -3642,21 +3748,21 @@ model PlotSite {
 // The plan freezes the plot's actual price and the collection target after
 // markup so later inventory price edits do not rewrite a commission record.
 model PlotCommissionPlan {
-  id                Int      @id @default(autoincrement())
-  tenantId          Int
-  plotSiteId        Int      @unique
-  basePricePaise    BigInt
-  markupType        String   @default("PERCENT") // PERCENT | FIXED
-  markupBp          Int      @default(0)
-  markupPaise       BigInt   @default(0)
-  targetPricePaise  BigInt
-  isActive          Boolean  @default(true)
-  createdByUserId   Int
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  plotSite          PlotSite @relation(fields: [plotSiteId], references: [id], onDelete: Cascade)
-  rules             PlotCommissionRule[]
+  id               Int                  @id @default(autoincrement())
+  tenantId         Int
+  plotSiteId       Int                  @unique
+  basePricePaise   BigInt
+  markupType       String               @default("PERCENT") // PERCENT | FIXED
+  markupBp         Int                  @default(0)
+  markupPaise      BigInt               @default(0)
+  targetPricePaise BigInt
+  isActive         Boolean              @default(true)
+  createdByUserId  Int
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  tenant           Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plotSite         PlotSite             @relation(fields: [plotSiteId], references: [id], onDelete: Cascade)
+  rules            PlotCommissionRule[]
 
   @@unique([tenantId, plotSiteId])
   @@index([tenantId, isActive, updatedAt])
@@ -3667,20 +3773,20 @@ model PlotCommissionPlan {
 // users or all active staff without introducing a second join table into the
 // existing generic CRM schema.
 model PlotCommissionRule {
-  id                Int      @id @default(autoincrement())
-  tenantId          Int
-  planId            Int
-  name              String
-  commissionBasis   String   @default("COLLECTED_AMOUNT") // COLLECTED_AMOUNT | MARKUP_AMOUNT | ACTUAL_AMOUNT
-  rateBp            Int      @default(0)
-  applyToAllStaff   Boolean  @default(false)
-  staffUserIdsJson  String?  @db.Text
-  isActive          Boolean  @default(true)
-  createdByUserId   Int
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  plan              PlotCommissionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  id               Int                @id @default(autoincrement())
+  tenantId         Int
+  planId           Int
+  name             String
+  commissionBasis  String             @default("COLLECTED_AMOUNT") // COLLECTED_AMOUNT | MARKUP_AMOUNT | ACTUAL_AMOUNT
+  rateBp           Int                @default(0)
+  applyToAllStaff  Boolean            @default(false)
+  staffUserIdsJson String?            @db.Text
+  isActive         Boolean            @default(true)
+  createdByUserId  Int
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  tenant           Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan             PlotCommissionPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, planId, isActive])
   @@index([tenantId, createdAt])
@@ -3836,7 +3942,7 @@ model PlotCommission {
 model PayoutPartner {
   id                    Int      @id @default(autoincrement())
   tenantId              Int
-  partnerType           String   // OWNER, CHANNEL_PARTNER, BROKER
+  partnerType           String // OWNER, CHANNEL_PARTNER, BROKER
   name                  String
   mobile                String?
   email                 String?
@@ -3874,19 +3980,19 @@ model PlotOwnership {
 }
 
 model PayoutCommissionRule {
-  id              Int      @id @default(autoincrement())
+  id              Int       @id @default(autoincrement())
   tenantId        Int
   payoutPartnerId Int
   plotSiteId      Int?
-  ruleType        String   // PCT_BASE, PCT_LIST, PCT_FINAL, FLAT
-  rateBp          Int      @default(0)
-  flatPaise       BigInt   @default(0)
-  paidFrom        String   @default("COMPANY_MARGIN")
+  ruleType        String // PCT_BASE, PCT_LIST, PCT_FINAL, FLAT
+  rateBp          Int       @default(0)
+  flatPaise       BigInt    @default(0)
+  paidFrom        String    @default("COMPANY_MARGIN")
   effectiveFrom   DateTime?
   effectiveTo     DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, payoutPartnerId, plotSiteId])
   @@index([tenantId, effectiveFrom, effectiveTo])
@@ -3919,37 +4025,37 @@ model PayoutSettings {
 }
 
 model BookingPricingSnapshot {
-  id                  Int      @id @default(autoincrement())
-  tenantId            Int
-  plotBookingId       Int
-  plotSiteId          Int
-  contactId           Int
-  ownerPartnerIdsJson String?  @db.Text
-  channelPartnerId    Int?
-  brokerPartnerId     Int?
-  basePricePaise      BigInt
-  listPricePaise      BigInt
-  finalPricePaise     BigInt
-  cpMarkupPaise       BigInt   @default(0)
-  brokerCommissionPaise BigInt @default(0)
-  cpCommissionPaise   BigInt   @default(0)
-  pricingModel        String
-  splitMethod         String
-  splitMode           String   @default("CONFIGURED")
-  customSplitJson     String?  @db.LongText
-  bookingStatus       String   @default("PENDING_SPLIT_APPROVAL")
-  holdTrigger         String
-  ownerRelease        String
-  rulesJson            String?  @db.Text
-  createdByUserId      Int
-  approvedByUserId     Int?
-  approvedAt           DateTime?
-  lockedAt             DateTime?
-  cancelledAt          DateTime?
-  cancellationReason   String?  @db.Text
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-  tenant              Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                    Int       @id @default(autoincrement())
+  tenantId              Int
+  plotBookingId         Int
+  plotSiteId            Int
+  contactId             Int
+  ownerPartnerIdsJson   String?   @db.Text
+  channelPartnerId      Int?
+  brokerPartnerId       Int?
+  basePricePaise        BigInt
+  listPricePaise        BigInt
+  finalPricePaise       BigInt
+  cpMarkupPaise         BigInt    @default(0)
+  brokerCommissionPaise BigInt    @default(0)
+  cpCommissionPaise     BigInt    @default(0)
+  pricingModel          String
+  splitMethod           String
+  splitMode             String    @default("CONFIGURED")
+  customSplitJson       String?   @db.LongText
+  bookingStatus         String    @default("PENDING_SPLIT_APPROVAL")
+  holdTrigger           String
+  ownerRelease          String
+  rulesJson             String?   @db.Text
+  createdByUserId       Int
+  approvedByUserId      Int?
+  approvedAt            DateTime?
+  lockedAt              DateTime?
+  cancelledAt           DateTime?
+  cancellationReason    String?   @db.Text
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  tenant                Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, plotBookingId])
   @@index([tenantId, bookingStatus, updatedAt])
@@ -3957,7 +4063,7 @@ model BookingPricingSnapshot {
 }
 
 model PaymentReceipt {
-  id                Int      @id @default(autoincrement())
+  id                Int       @id @default(autoincrement())
   tenantId          Int
   plotBookingId     Int
   bookingSnapshotId Int?
@@ -3967,16 +4073,16 @@ model PaymentReceipt {
   receivedOn        DateTime
   installmentNumber Int?
   proofDocumentId   Int?
-  status            String   @default("RECORDED")
+  status            String    @default("RECORDED")
   receivedInAccount String?
   createdByUserId   Int
   verifiedByUserId  Int?
   verifiedAt        DateTime?
   paymentId         Int?
-  rejectionReason   String?  @db.Text
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rejectionReason   String?   @db.Text
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, mode, referenceNo])
   @@index([tenantId, plotBookingId, status, receivedOn])
@@ -3984,30 +4090,30 @@ model PaymentReceipt {
 }
 
 model DistributionLine {
-  id                Int      @id @default(autoincrement())
-  tenantId          Int
-  plotBookingId     Int
-  paymentReceiptId  Int
-  payoutPartnerId   Int?
-  partyType         String   // OWNER, CHANNEL_PARTNER, BROKER, COMPANY
-  kind              String   // OWNER_SHARE, CP_MARKUP, BROKER_COMMISSION, COMPANY_SHARE
-  grossPaise        BigInt
-  tdsBp             Int      @default(0)
-  tdsPaise          BigInt   @default(0)
-  gstBp             Int      @default(0)
-  gstPaise          BigInt   @default(0)
-  netPaise          BigInt
-  status            String   @default("PENDING_HOLD")
-  holdUntil         DateTime?
-  approvedByUserId  Int?
-  approvedAt        DateTime?
+  id                      Int       @id @default(autoincrement())
+  tenantId                Int
+  plotBookingId           Int
+  paymentReceiptId        Int
+  payoutPartnerId         Int?
+  partyType               String // OWNER, CHANNEL_PARTNER, BROKER, COMPANY
+  kind                    String // OWNER_SHARE, CP_MARKUP, BROKER_COMMISSION, COMPANY_SHARE
+  grossPaise              BigInt
+  tdsBp                   Int       @default(0)
+  tdsPaise                BigInt    @default(0)
+  gstBp                   Int       @default(0)
+  gstPaise                BigInt    @default(0)
+  netPaise                BigInt
+  status                  String    @default("PENDING_HOLD")
+  holdUntil               DateTime?
+  approvedByUserId        Int?
+  approvedAt              DateTime?
   financeApprovedByUserId Int?
   financeApprovedAt       DateTime?
   managerApprovedByUserId Int?
   managerApprovedAt       DateTime?
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  tenant                  Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, paymentReceiptId, partyType, payoutPartnerId, kind])
   @@index([tenantId, plotBookingId, status, createdAt])
@@ -4015,53 +4121,53 @@ model DistributionLine {
 }
 
 model Payout {
-  id                    Int      @id @default(autoincrement())
-  tenantId              Int
-  payoutPartnerId       Int
-  grossNetPaise         BigInt   @default(0)
-  clawbackPaise         BigInt   @default(0)
-  totalNetPaise         BigInt
-  utr                   String
-  paidOn                DateTime
-  bankProofDocumentId   Int?
-  advicePdfDocumentId   Int?
-  status                String   @default("PAID")
-  acknowledgedAt        DateTime?
-  disputedAt            DateTime?
-  disputeReason         String?  @db.Text
-  createdByUserId       Int
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  tenant                Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                  Int       @id @default(autoincrement())
+  tenantId            Int
+  payoutPartnerId     Int
+  grossNetPaise       BigInt    @default(0)
+  clawbackPaise       BigInt    @default(0)
+  totalNetPaise       BigInt
+  utr                 String
+  paidOn              DateTime
+  bankProofDocumentId Int?
+  advicePdfDocumentId Int?
+  status              String    @default("PAID")
+  acknowledgedAt      DateTime?
+  disputedAt          DateTime?
+  disputeReason       String?   @db.Text
+  createdByUserId     Int
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  tenant              Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, utr])
   @@index([tenantId, payoutPartnerId, paidOn])
 }
 
 model PayoutLine {
-  id                Int      @id @default(autoincrement())
-  tenantId          Int
-  payoutId          Int
-  distributionLineId Int     @unique
-  amountPaise       BigInt
-  createdAt         DateTime @default(now())
-  tenant            Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  id                 Int      @id @default(autoincrement())
+  tenantId           Int
+  payoutId           Int
+  distributionLineId Int      @unique
+  amountPaise        BigInt
+  createdAt          DateTime @default(now())
+  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, payoutId])
   @@index([tenantId, distributionLineId])
 }
 
 model PayoutDocument {
-  id             Int      @id @default(autoincrement())
-  tenantId       Int
-  kind           String
-  fileUrl        String
-  fileName       String?
-  mimeType       String?
-  sizeBytes      Int?
+  id               Int      @id @default(autoincrement())
+  tenantId         Int
+  kind             String
+  fileUrl          String
+  fileName         String?
+  mimeType         String?
+  sizeBytes        Int?
   uploadedByUserId Int
-  createdAt      DateTime @default(now())
-  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt        DateTime @default(now())
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, kind, createdAt])
 }
@@ -4081,7 +4187,7 @@ model IdempotencyRecord {
 }
 
 model PayoutClawback {
-  id                 Int      @id @default(autoincrement())
+  id                 Int       @id @default(autoincrement())
   tenantId           Int
   plotBookingId      Int
   payoutPartnerId    Int
@@ -4089,34 +4195,34 @@ model PayoutClawback {
   originalPayoutId   Int?
   recoveredPayoutId  Int?
   amountPaise        BigInt
-  recoveredPaise     BigInt   @default(0)
-  status             String   @default("PENDING_RECOVERY")
-  reason             String?  @db.Text
+  recoveredPaise     BigInt    @default(0)
+  status             String    @default("PENDING_RECOVERY")
+  reason             String?   @db.Text
   recoveredAt        DateTime?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
-  tenant             Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  tenant             Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, payoutPartnerId, status])
   @@index([tenantId, plotBookingId, status])
 }
 
 model PayoutConfirmation {
-  id              Int      @id @default(autoincrement())
+  id              Int       @id @default(autoincrement())
   tenantId        Int
-  payoutId        Int      @unique
+  payoutId        Int       @unique
   payoutPartnerId Int
   mobile          String
   otpHash         String
-  publicTokenHash String?  @unique
-  status          String   @default("PENDING")
+  publicTokenHash String?   @unique
+  status          String    @default("PENDING")
   sentAt          DateTime?
   expiresAt       DateTime
-  attempts        Int      @default(0)
+  attempts        Int       @default(0)
   verifiedAt      DateTime?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   @@index([tenantId, payoutPartnerId, status])
 }
@@ -8561,31 +8667,31 @@ model TmcParentTrip {
 // CustomerTraveller pattern: every portal query must enforce tenant + parent
 // ownership explicitly instead of relying on relation traversal.
 model TmcParentDocument {
-  id              Int      @id @default(autoincrement())
-  tenantId        Int      @default(1)
-  parentContactId Int
-  tripId          Int?
-  documentType    String // Admin-defined document requirement label
+  id                    Int       @id @default(autoincrement())
+  tenantId              Int       @default(1)
+  parentContactId       Int
+  tripId                Int?
+  documentType          String // Admin-defined document requirement label
   documentRequirementId Int?
-  captureMode     String   @default("file") // file | digital_consent
-  filename        String
-  fileUrl         String?  @db.Text
-  fileBlob        Bytes?   @db.MediumBlob
-  fileSize        Int?
-  mimeType        String?
-  storage         String? // s3 | ocs | disk | db
-  storageKey      String?
-  status          String   @default("in_review") // in_review | approved | rejected
-  notes           String?  @db.Text
-  answersJson     String?  @db.LongText // immutable digital-consent answers snapshot
-  termsSnapshot   String?  @db.LongText // exact terms shown at submission time
-  signatureName   String?  @db.VarChar(255)
-  agreedAt        DateTime?
-  uploadedAt      DateTime @default(now())
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  captureMode           String    @default("file") // file | digital_consent
+  filename              String
+  fileUrl               String?   @db.Text
+  fileBlob              Bytes?    @db.MediumBlob
+  fileSize              Int?
+  mimeType              String?
+  storage               String? // s3 | ocs | disk | db
+  storageKey            String?
+  status                String    @default("in_review") // in_review | approved | rejected
+  notes                 String?   @db.Text
+  answersJson           String?   @db.LongText // immutable digital-consent answers snapshot
+  termsSnapshot         String?   @db.LongText // exact terms shown at submission time
+  signatureName         String?   @db.VarChar(255)
+  agreedAt              DateTime?
+  uploadedAt            DateTime  @default(now())
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
-  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant              Tenant                   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   documentRequirement TripDocumentRequirement? @relation(fields: [documentRequirementId], references: [id], onDelete: SetNull)
 
   @@index([tenantId, parentContactId, createdAt])
@@ -8661,7 +8767,7 @@ model TmcTeacherCatalogueResponse {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  tenant Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   teacher Contact @relation("TmcTeacherCatalogueResponseTeacher", fields: [teacherContactId], references: [id], onDelete: Cascade)
 
   @@unique([tenantId, teacherContactId])
@@ -8965,17 +9071,17 @@ model TripInstalmentPayment {
 }
 
 model TripDocumentRequirement {
-  id        Int      @id @default(autoincrement())
-  tripId    Int
-  docType   String // Admin-defined document name shown to TMC parents
-  acceptedFileTypes String? @db.Text // JSON array: pdf, jpg, png, doc, docx
-  required  Boolean  @default(true)
-  captureMode String  @default("file") // file | digital_consent
-  consentTerms String? @db.LongText // terms shown by the digital consent form
-  trip      TmcTrip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  parentDocuments TmcParentDocument[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                Int                 @id @default(autoincrement())
+  tripId            Int
+  docType           String // Admin-defined document name shown to TMC parents
+  acceptedFileTypes String?             @db.Text // JSON array: pdf, jpg, png, doc, docx
+  required          Boolean             @default(true)
+  captureMode       String              @default("file") // file | digital_consent
+  consentTerms      String?             @db.LongText // terms shown by the digital consent form
+  trip              TmcTrip             @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  parentDocuments   TmcParentDocument[]
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
 
   @@index([tripId])
 }
@@ -11740,19 +11846,19 @@ model SystemSetting {
 // intentionally not related to Tenant so the record survives organization
 // hard deletion.
 model SuperAdminAuditLog {
-  id                   Int       @id @default(autoincrement())
-  actor                String    @db.VarChar(191)
-  action               String    @db.VarChar(64)
-  status               String    @db.VarChar(24)
-  organizationId       Int? // Snapshot only; deliberately no Tenant foreign key
-  organizationName     String    @db.VarChar(191)
-  organizationSlug     String?   @db.VarChar(191)
-  ownerEmail           String?   @db.VarChar(191)
-  reason               String?   @db.Text
-  errorMessage         String?   @db.Text
-  deletedRowCount      Int?
-  createdAt            DateTime  @default(now())
-  completedAt          DateTime?
+  id               Int       @id @default(autoincrement())
+  actor            String    @db.VarChar(191)
+  action           String    @db.VarChar(64)
+  status           String    @db.VarChar(24)
+  organizationId   Int? // Snapshot only; deliberately no Tenant foreign key
+  organizationName String    @db.VarChar(191)
+  organizationSlug String?   @db.VarChar(191)
+  ownerEmail       String?   @db.VarChar(191)
+  reason           String?   @db.Text
+  errorMessage     String?   @db.Text
+  deletedRowCount  Int?
+  createdAt        DateTime  @default(now())
+  completedAt      DateTime?
 
   @@index([createdAt])
   @@index([organizationId, createdAt])

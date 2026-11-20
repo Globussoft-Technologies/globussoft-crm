@@ -736,6 +736,7 @@ const tenantsRoutes = require("./routes/tenants");
 const tenantSettingsRoutes = require("./routes/tenant_settings");
 const { router: travelPromotionalWebsiteRoutes } = require("./routes/travel_promotional_website");
 const travelEmailProviderRoutes = require("./routes/travel_email_provider");
+const travelEmailAutomationRoutes = require("./routes/travel_email_automation");
 // #870 — per-user preference surface (theme persistence for cross-device roaming).
 const userPreferencesRoutes = require("./routes/user_preferences");
 const tourProgressRoutes = require("./routes/tour_progress");
@@ -1345,6 +1346,7 @@ app.use("/api/landing-sites", landingSitesRoutes);
 app.use("/api/tenants", tenantsRoutes);
 app.use("/api/travel/promotional-website", travelPromotionalWebsiteRoutes);
 app.use("/api/travel/email-provider", travelEmailProviderRoutes);
+app.use("/api/travel/email-automation", travelEmailAutomationRoutes);
 // /api/tenant-settings — operator-writable cap-override surface backing the
 // per-tenant cap pattern (helper at backend/lib/tenantSettings.js). Mounted
 // next to /api/tenants because the URL space + audience are sibling concerns.
@@ -2435,6 +2437,8 @@ if (process.env.DISABLE_CRONS === "1") {
   // Initialize Sequence Engine
   const { initSequenceCron } = require("./cron/sequenceEngine");
   initSequenceCron();
+  const { initTravelEmailAutomationCron } = require("./cron/travelEmailAutomationEngine");
+  initTravelEmailAutomationCron();
 
   // Initialize Lead Scoring Engine (runs every 10 min, immediate first tick)
   const { initLeadScoringCron } = require("./cron/leadScoringEngine");

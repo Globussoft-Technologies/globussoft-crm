@@ -11156,8 +11156,12 @@ const Leads = ({ initialListState = null } = {}) => {
                     style={{
                       position: "absolute",
                       top: "calc(100% + 4px)",
-                      right: 0,
-                      left: "auto",
+                      // Anchor from the trigger's left edge. Right-aligning a
+                      // 420px menu makes it extend outside the table card when
+                      // the trigger sits near the left side, clipping the
+                      // first action labels.
+                      left: 0,
+                      right: "auto",
                       zIndex: 1089,
                       width: "min(420px, 92vw)",
                       maxWidth: "calc(100vw - 1rem)",
@@ -11588,8 +11592,17 @@ const Leads = ({ initialListState = null } = {}) => {
             }}
           >
             <div
-              className="search-with-leading-icon"
-              style={{ width: "min(100%, 300px)" }}
+              style={{
+                width: "min(100%, 300px)",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "0 8px",
+                border: "1px solid var(--border-color)",
+                borderRadius: 8,
+                background: "var(--surface-hover)",
+                boxSizing: "border-box",
+              }}
             >
               <Search
                 size={18}
@@ -11601,7 +11614,7 @@ const Leads = ({ initialListState = null } = {}) => {
               <input
                 data-tour="leads-search"
                 type="search"
-                className="input-field crm-search-input"
+                className="input-field"
                 placeholder="Search leads..."
                 value={searchTerm}
                 onChange={(e) => {
@@ -11609,9 +11622,15 @@ const Leads = ({ initialListState = null } = {}) => {
                   if (isTravel) setLeadsPage(0);
                 }}
                 style={{
-                  backgroundColor: "var(--surface-hover)",
+                  backgroundColor: "transparent",
+                  border: 0,
+                  outline: 0,
                   height: 38,
                   fontSize: "0.85rem",
+                  flex: "1 1 auto",
+                  minWidth: 0,
+                  padding: "6px 0",
+                  boxShadow: "none",
                 }}
               />
             </div>

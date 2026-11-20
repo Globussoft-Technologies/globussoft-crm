@@ -100,9 +100,11 @@ async function upsertContactByEmail({ email, tenantId, update, create }) {
     where: { email, tenantId, deletedAt: null },
   });
   if (existing) {
-    return prisma.contact.update({ where: { id: existing.id }, data: update });
+    const updated = await prisma.contact.update({ where: { id: existing.id }, data: update });
+    return { ...updated, __created: false };
   }
-  return prisma.contact.create({ data: create });
+  const created = await prisma.contact.create({ data: create });
+  return { ...created, __created: true };
 }
 
 
@@ -6476,6 +6478,28 @@ publicRouter.post("/:slug/payment-order", express.json(), async (req, res) => {
       },
     });
 
+    require("../lib/eventBus").emitEvent("payment.link_issued", {
+      paymentId: payment.id,
+      recipientEmail: registration.parentEmail,
+      recipientName: registration.parentName,
+      parentEmail: registration.parentEmail,
+      parentName: registration.parentName,
+      parentPhone: registration.parentPhone,
+      studentName: registration.studentName,
+      studentSchool: registration.studentSchool,
+      studentClass: registration.studentClass,
+      tripId: page.tripId,
+      destination: page.destination || page.title || "your trip",
+      paymentLink: paymentLink.short_url,
+      payment: {
+        amount: selection.amountMajor,
+        link: paymentLink.short_url,
+      },
+      subBrand: page.subBrand || null,
+    }, tenantId, req.io).catch((error) => {
+      console.error("[LandingPage] payment.link_issued email event failed:", error.message);
+    });
+
     const prefillSource = req.body && typeof req.body.fields === "object" && req.body.fields ? req.body.fields : req.body || {};
     const pickPrefill = (...keys) => {
       for (const key of keys) {
@@ -7432,6 +7456,38 @@ function extractLandingPagePaymentSubmission(body = {}) {
   };
 }
 
+async function emitLandingPagePaymentCollected(payment, tenantId) {
+  try {
+    await require("../lib/eventBus").emitEvent(
+      "payment.collected",
+      {
+        paymentId: payment.id,
+        invoiceId: payment.invoiceId,
+        contactId: payment.contactId || undefined,
+        amount: Number(payment.amount || 0),
+        method: payment.gateway || "razorpay",
+        currency: payment.currency,
+        paidAt: payment.paidAt,
+      },
+      tenantId,
+      null,
+    );
+  } catch (error) {
+    console.error("[LandingPage] payment.received event failed:", error.message);
+  }
+}
+
+async function markLandingPagePaymentSuccessful(paymentRecord, tenantId, additionalData = {}) {
+  const alreadyPaid = ["SUCCESS", "CAPTURED", "PAID"].includes(String(paymentRecord.status || "").toUpperCase());
+  const paidAt = additionalData.paidAt || new Date();
+  const updated = await prisma.payment.update({
+    where: { id: paymentRecord.id },
+    data: { ...additionalData, status: "SUCCESS", paidAt },
+  });
+  if (!alreadyPaid) await emitLandingPagePaymentCollected(updated || { ...paymentRecord, ...additionalData, status: "SUCCESS", paidAt }, tenantId);
+  return updated;
+}
+
 async function refreshHostedPaymentStatus(paymentRecord, paymentLinkId, tenantId) {
   if (!paymentRecord || !paymentLinkId || ["SUCCESS", "CAPTURED", "PAID"].includes(String(paymentRecord.status || "").toUpperCase())) return paymentRecord;
   const gateway = await getTenantRazorpayClient(tenantId);
@@ -7443,7 +7499,7 @@ async function refreshHostedPaymentStatus(paymentRecord, paymentLinkId, tenantId
   }
   const status = String(remote?.status || "").toUpperCase();
   if (!["PAID", "PARTIALLY_PAID"].includes(status)) return paymentRecord;
-  return prisma.payment.update({ where: { id: paymentRecord.id }, data: { status: "SUCCESS", paidAt: new Date() } });
+  return markLandingPagePaymentSuccessful(paymentRecord, tenantId);
 }
 
 async function findPendingLandingPageSelection({ page, tenantId, selection, draft }) {
@@ -7484,7 +7540,7 @@ async function findPendingLandingPageSelection({ page, tenantId, selection, draf
       console.warn("[LandingPage] pending payment refresh skipped:", err.message);
     }
     if (["PAID", "PARTIALLY_PAID"].includes(gatewayStatus)) {
-      await prisma.payment.update({ where: { id: payment.id }, data: { status: "SUCCESS", paidAt: new Date() } });
+      await markLandingPagePaymentSuccessful(payment, tenantId);
       continue;
     }
     if (["CANCELLED", "EXPIRED"].includes(gatewayStatus) || gatewayExpired) continue;
@@ -7898,11 +7954,26 @@ async function handleRegistrationDraft(req, res, page, formProps) {
     });
     await applyLeadRouting(formProps, tenantId, contact.id);
 
+    // Persist the required CRM pair before dispatching optional workflow
+    // automation. A workflow lookup/provider failure must not leave the
+    // registration with a Contact but no corresponding Deal.
     await prisma.deal.create({
 
       data: { title: `LP Inbound: ${page.title}`, amount: 0, stage: "lead", contactId: contact.id, tenantId },
 
     });
+
+    if (contact.__created) {
+      await require("../lib/eventBus").emitEvent("contact.created", {
+        contactId: contact.id,
+        name: contact.name,
+        email: contact.email,
+        phone: contact.phone,
+        status: contact.status,
+        source: contact.source,
+        subBrand: contact.subBrand || page.subBrand || null,
+      }, tenantId, req.io);
+    }
 
   } catch (err) {
 
@@ -7996,6 +8067,10 @@ async function handleRegistrationDraft(req, res, page, formProps) {
   });
   const portalRedirect = tmcParentRegistrationUrl
     || `/customer/register?tenantSlug=${encodeURIComponent(tenant?.slug || '')}&name=${encodeURIComponent(resolvedParentName)}&email=${encodeURIComponent(resolvedParentEmail)}&next=${encodeURIComponent('/travel/portal')}`;
+  require("../lib/eventBus").emitEvent("registration.submitted", {
+    parentEmail: resolvedParentEmail, parentName: resolvedParentName, subBrand: page.subBrand || null,
+    registrationId: completedDraftId, tripId: page.tripId, setupLink: portalRedirect,
+  }, tenantId, req.io).catch(() => {});
   return res.status(201).json({
 
     ok: true,
@@ -8227,7 +8302,7 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
       if (hostedLink) {
         paymentRecord = await refreshHostedPaymentStatus(paymentRecord, paymentSubmission.paymentLinkId, tenantId);
         if (!["SUCCESS", "CAPTURED", "PAID"].includes(String(paymentRecord.status || "").toUpperCase()) && ["PAID", "PARTIALLY_PAID"].includes(paymentSubmission.paymentLinkStatus)) {
-          paymentRecord = await prisma.payment.update({ where: { id: paymentRecord.id }, data: { status: "SUCCESS", paidAt: new Date() } });
+          paymentRecord = await markLandingPagePaymentSuccessful(paymentRecord, tenantId);
         }
         if (!["SUCCESS", "CAPTURED", "PAID"].includes(String(paymentRecord.status || "").toUpperCase())) {
           return res.status(409).json({ error: "Payment is not yet confirmed. Please wait a moment and try again.", code: "PAYMENT_NOT_CONFIRMED" });
@@ -8433,14 +8508,10 @@ router.post("/:id/submit", verifyToken, express.json(), async (req, res) => {
         paymentAllocations: paymentResult.allocations,
       };
 
-      await prisma.payment.update({
-        where: { id: paymentRecord.id },
-        data: {
-          status: "SUCCESS",
-          paidAt: paymentCapturedAt || new Date(),
-          contactId: contact.id,
-          metadata: JSON.stringify(updatedPaymentMeta),
-        },
+      await markLandingPagePaymentSuccessful(paymentRecord, tenantId, {
+        paidAt: paymentCapturedAt || new Date(),
+        contactId: contact.id,
+        metadata: JSON.stringify(updatedPaymentMeta),
       });
     }
 
@@ -8554,7 +8625,7 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
       if (hostedLink) {
         paymentRecord = await refreshHostedPaymentStatus(paymentRecord, paymentSubmission.paymentLinkId, tenantId);
         if (!["SUCCESS", "CAPTURED", "PAID"].includes(String(paymentRecord.status || "").toUpperCase()) && ["PAID", "PARTIALLY_PAID"].includes(paymentSubmission.paymentLinkStatus)) {
-          paymentRecord = await prisma.payment.update({ where: { id: paymentRecord.id }, data: { status: "SUCCESS", paidAt: new Date() } });
+          paymentRecord = await markLandingPagePaymentSuccessful(paymentRecord, tenantId);
         }
         if (!["SUCCESS", "CAPTURED", "PAID"].includes(String(paymentRecord.status || "").toUpperCase())) {
           return res.status(409).json({ error: "Payment is not yet confirmed. Please wait a moment and try again.", code: "PAYMENT_NOT_CONFIRMED" });
@@ -8801,13 +8872,10 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
         installmentIndex: paymentInstallmentIndex,
         capturedAt: paymentCapturedAt,
       });
-      await prisma.payment.update({
-        where: { id: paymentRecord.id },
-        data: {
-          status: "SUCCESS",
-          paidAt: paymentCapturedAt,
-          contactId: contact.id,
-          metadata: JSON.stringify({
+      await markLandingPagePaymentSuccessful(paymentRecord, tenantId, {
+        paidAt: paymentCapturedAt,
+        contactId: contact.id,
+        metadata: JSON.stringify({
             ...paymentMeta,
             landingPageRegistrationCompleted: true,
             contactId: contact.id,
@@ -8818,8 +8886,7 @@ publicRouter.post("/:slug/submit", express.json(), async (req, res) => {
             razorpayOrderId: paymentSubmission.razorpayOrderId,
             razorpayPaymentId: paymentSubmission.razorpayPaymentId,
             paymentAllocations: paymentResult.allocations,
-          }),
-        },
+        }),
       });
     }
 

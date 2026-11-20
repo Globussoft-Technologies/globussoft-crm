@@ -1238,7 +1238,10 @@ function applyGenericLeadColumns(response) {
   };
   const values = columns.map(
     (column) =>
-      column.filterField || payloadFieldAliases[column.key] || column.key,
+      column.webhookField ||
+      column.filterField ||
+      payloadFieldAliases[column.key] ||
+      column.key,
   );
   const labels = Object.fromEntries(
     columns.map((column, index) => [

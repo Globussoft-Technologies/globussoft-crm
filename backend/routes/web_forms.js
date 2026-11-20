@@ -256,10 +256,24 @@ function genericWebFormWorkflowPayload({ contact, form, submission, payload, cus
     if (contact?.[field] !== undefined) contactFields[field] = contact[field];
   }
 
-  return {
+  const workflowFields = {
     ...contactFields,
     ...(payload || {}),
     ...(customFieldValues || {}),
+  };
+  if (workflowFields.phone) {
+    const phoneDigits = String(workflowFields.phone).replace(/\D/g, "");
+    const normalizedPhone = normalizeGenericCrmPhone(
+      workflowFields.phone,
+      phoneDigits.length === 10 ? "91" : "",
+    );
+    workflowFields.phone = normalizedPhone && !String(normalizedPhone).startsWith("+")
+      ? `+${normalizedPhone}`
+      : normalizedPhone;
+  }
+
+  return {
+    ...workflowFields,
     contactId: contact.id,
     webForm: form.name,
     webFormId: form.id,
@@ -2320,6 +2334,25 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
         );
       } catch (eventError) {
         console.error("[web_forms] Generic contact workflow event failed:", eventError.message);
+      }
+    } else if (formScope === "travel" && createdNewContact) {
+      try {
+        await require("../lib/eventBus").emitEvent(
+          "contact.created",
+          {
+            contactId: contact.id,
+            name: contact.name,
+            email: contact.email,
+            phone: contact.phone,
+            status: contact.status,
+            source: contact.source,
+            subBrand: contact.subBrand || null,
+          },
+          form.tenantId,
+          req.io,
+        );
+      } catch (eventError) {
+        console.error("[web_forms] Travel contact welcome event failed:", eventError.message);
       }
     }
 

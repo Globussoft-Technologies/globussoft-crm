@@ -41,6 +41,7 @@ const {
   normalizeLeadStatus,
 } = require("../lib/callifiedLeadStatus");
 const { sanitizeText } = require("../lib/sanitizeJson");
+const { getLeadCustomFieldValues } = require("../lib/leadCustomFieldValues");
 const { normalizePhoneValue, normalizeGenericCrmPhone } = require("../lib/phoneFormatting");
 const {
   deleteContactDependents,
@@ -138,6 +139,7 @@ function workflowContactPayload(
   userId,
   changedFields = [],
   previous = null,
+  genericCrm = false,
 ) {
   const callifiedStatus = String(
     contact.callifiedLeadStatus || "",
@@ -147,11 +149,20 @@ function workflowContactPayload(
     ["Prospect", "Customer"].includes(contact.status) ||
     callifiedStatus === "qualified";
   const externalId = contact.externalId || null;
+  const contactPhoneDigits = String(contact.phone || "").replace(/\D/g, "");
+  const genericWorkflowPhone = contact.phone
+    ? normalizeGenericCrmPhone(contact.phone, contactPhoneDigits.length === 10 ? "91" : "")
+    : contact.phone;
+  const workflowPhone = genericCrm
+    ? (genericWorkflowPhone && !String(genericWorkflowPhone).startsWith("+")
+      ? `+${genericWorkflowPhone}`
+      : genericWorkflowPhone)
+    : (contact.phone ? normalizePhoneValue(contact.phone) : contact.phone);
   return {
     contactId: contact.id,
     name: contact.name,
     email: contact.email,
-    phone: contact.phone ? normalizePhoneValue(contact.phone) : contact.phone,
+    phone: workflowPhone,
     company: contact.company,
     title: contact.title,
     status: contact.status,
@@ -172,10 +183,23 @@ function workflowContactPayload(
     metaIsJunk: isJunk,
     metaIsQualified: isQualified,
     changedFields,
+    ...(contact.customFields || {}),
     ...(previous ? { previous } : {}),
     userId,
     tenantId: contact.tenantId,
   };
+}
+
+function normalizeGenericWebhookPhone(phone) {
+  if (!phone) return phone;
+  const digits = String(phone).replace(/\D/g, "");
+  const normalized = normalizeGenericCrmPhone(
+    phone,
+    digits.length === 10 ? "91" : "",
+  );
+  return normalized && !String(normalized).startsWith("+")
+    ? `+${normalized}`
+    : normalized;
 }
 
 function serializeContactTags(contact, genericCrm = false) {
@@ -3088,9 +3112,19 @@ router.post("/", requireContactOrLeadWrite, async (req, res) => {
 
     try {
       const { emitEvent } = require("../lib/eventBus");
+      const customFieldsForWorkflow = await getLeadCustomFieldValues(
+        contact.id,
+        req.user.tenantId,
+      );
       await emitEvent(
         "contact.created",
-        workflowContactPayload(contact, req.user.userId),
+        workflowContactPayload(
+          { ...contact, customFields: customFieldsForWorkflow },
+          req.user.userId,
+            [],
+            null,
+            isGenericCrmRequest(req),
+        ),
         req.user.tenantId,
         req.io,
       );
@@ -3113,7 +3147,9 @@ router.post("/", requireContactOrLeadWrite, async (req, res) => {
           {
             id: contact.id,
             name: contact.name,
-            phone: normalizePhoneForRequest(req, contact.phone),
+            phone: isGenericCrmRequest(req)
+              ? normalizeGenericWebhookPhone(contact.phone)
+              : normalizePhoneForRequest(req, contact.phone),
             email: contact.email,
             status: contact.status,
             assignedToId: contact.assignedToId,
@@ -3379,6 +3415,13 @@ router.delete(
           bulk: true,
         },
       );
+      require("../lib/eventBus").safeEmitEvent("account.deleted", {
+        contactId: contact.id,
+        recipientEmail: contact.email,
+        recipientName: contact.name,
+        deletionReason: typeof req.body?.deletionReason === "string" ? req.body.deletionReason.trim() : "",
+        subBrand: contact.subBrand || null,
+      }, req.user.tenantId, "Admin bulk contact deletion");
     }
     const count = await hardDeleteContacts(prisma, targetContactIds);
 
@@ -3877,11 +3920,15 @@ const updateContactById = async (req, res) => {
     // gap #17: emit contact.updated for workflow rules. Always-safe fields exposed
     // for rule conditions. Failure here must NEVER fail the update.
     try {
+      const customFieldsForWorkflow = await getLeadCustomFieldValues(
+        contact.id,
+        req.user.tenantId,
+      );
       require("../lib/eventBus")
         .emitEvent(
           "contact.updated",
           workflowContactPayload(
-            contact,
+            { ...contact, customFields: customFieldsForWorkflow },
             req.user.userId,
             Object.keys(req.body || {}),
             {
@@ -3895,6 +3942,7 @@ const updateContactById = async (req, res) => {
               tags: parseContactTags(existing.tagsJson),
               callifiedLeadStatus: existing.callifiedLeadStatus,
             },
+            isGenericCrmRequest(req),
           ),
           req.user.tenantId,
           req.io,
@@ -3919,7 +3967,9 @@ const updateContactById = async (req, res) => {
         {
           id: contact.id,
           name: contact.name,
-          phone: normalizePhoneForRequest(req, contact.phone),
+          phone: isGenericCrmRequest(req)
+            ? normalizeGenericWebhookPhone(contact.phone)
+            : normalizePhoneForRequest(req, contact.phone),
           email: contact.email,
           status: contact.status,
           assignedToId: contact.assignedToId,
@@ -4319,7 +4369,9 @@ router.put("/:id/assign", requireContactOrLeadUpdate, async (req, res) => {
         {
           id: contact.id,
           name: contact.name,
-          phone: normalizePhoneForRequest(req, contact.phone),
+          phone: isGenericCrmRequest(req)
+            ? normalizeGenericWebhookPhone(contact.phone)
+            : normalizePhoneForRequest(req, contact.phone),
           status: contact.status,
           assignedToId: contact.assignedToId,
           tenantId: req.user.tenantId,
@@ -4939,6 +4991,13 @@ router.delete("/:id", requireContactOrLeadDelete, async (req, res) => {
         assignedToId: existing.assignedToId,
       },
     );
+    require("../lib/eventBus").safeEmitEvent("account.deleted", {
+      contactId: existing.id,
+      recipientEmail: existing.email,
+      recipientName: existing.name,
+      deletionReason: typeof req.body?.deletionReason === "string" ? req.body.deletionReason.trim() : "",
+      subBrand: existing.subBrand || null,
+    }, req.user.tenantId, "Admin contact deletion");
     await hardDeleteContact(prisma, existing.id);
 
     // [GP-CRM integration] Keep the existing partner event contract so
@@ -4952,7 +5011,9 @@ router.delete("/:id", requireContactOrLeadDelete, async (req, res) => {
         {
           id: existing.id,
           name: existing.name,
-          phone: normalizePhoneForRequest(req, existing.phone),
+          phone: isGenericCrmRequest(req)
+            ? normalizeGenericWebhookPhone(existing.phone)
+            : normalizePhoneForRequest(req, existing.phone),
           email: existing.email,
           status: existing.status,
           assignedToId: existing.assignedToId,

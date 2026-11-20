@@ -616,6 +616,22 @@ router.post("/public/:slug/book", async (req, res) => {
     });
 
     if (req.io) req.io.emit("booking_created", { bookingPageId: page.id, bookingId: booking.id });
+    require("../lib/eventBus").emitEvent("booking.confirmed", {
+      bookingId: booking.id,
+      contactId: booking.contactId || null,
+      recipientEmail: booking.contactEmail,
+      recipientName: booking.contactName,
+      booking: {
+        reference: String(booking.id),
+        status: booking.status,
+      },
+      site_visit: {
+        date_time: booking.scheduledAt,
+        location: page.title,
+      },
+    }, page.tenantId, req.io).catch((error) => {
+      console.error("[BookingPages] booking.confirmed email event failed:", error.message);
+    });
 
     res.status(201).json({
       success: true,

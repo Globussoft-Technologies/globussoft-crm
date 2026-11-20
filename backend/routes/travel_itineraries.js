@@ -2645,6 +2645,30 @@ router.patch(
         link: `booking:${itin.id}`,
       });
 
+      const cancellationEvent = decision === "approve" ? "cancellation.approved" : decision === "decline" ? "cancellation.rejected" : "refund.processed";
+      require("../lib/eventBus").emitEvent(cancellationEvent, {
+        contactId: itin.contactId,
+        subBrand: itin.subBrand,
+        destination: itin.destination,
+        itineraryId: itin.id,
+        trip: {
+          name: itin.title || itin.destination,
+          code: String(itin.id),
+          destination: itin.destination,
+          startDate: itin.startDate,
+          endDate: itin.endDate,
+          cancellationReason: itin.cancellationReason || note || "",
+        },
+        ...(decision === "refunded" ? {
+          refund: {
+            amount: refund?.refundAmount != null ? `${itin.currency || "INR"} ${Number(refund.refundAmount).toLocaleString("en-IN")}` : "",
+            reference: refund?.gatewayRefund?.id || "",
+            date: new Date().toISOString(),
+            method: refund?.gatewayRefund ? "Razorpay" : "Manual",
+          },
+        } : {}),
+      }, itin.tenantId, req.io).catch(() => {});
+
       res.json({ ...updated, refund });
     } catch (e) {
       console.error("[travel-itin] cancellation resolve error:", e.message);
@@ -4429,9 +4453,15 @@ router.post("/itineraries/:id/accept", verifyToken, requireTravelTenant, async (
       "itinerary.accepted",
       {
         id: updated.id,
-        contactId: updated.contactId || null,
-        tripId: updated.tripId || null,
-        subBrand: updated.subBrand || null,
+        contactId: updated.contactId || itin.contactId || null,
+        tripId: updated.tripId || itin.tripId || null,
+        subBrand: updated.subBrand || itin.subBrand || null,
+        destination: updated.destination || itin.destination || null,
+        tripName: updated.title || itin.title || itin.destination || null,
+        tripCode: String(updated.id || itin.id),
+        tripStartDate: updated.startDate || itin.startDate || null,
+        tripEndDate: updated.endDate || itin.endDate || null,
+        tripStatus: updated.status || "accepted",
         totalAmount: updated.totalAmount || null,
         currency: updated.currency || null,
         tenantId: req.travelTenant.id,

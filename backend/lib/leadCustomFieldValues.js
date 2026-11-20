@@ -73,4 +73,37 @@ async function writeLeadCustomFieldValues(contactId, tenantId, customFields) {
   }
 }
 
-module.exports = { writeLeadCustomFieldValues };
+async function getLeadCustomFieldValues(contactId, tenantId) {
+  const prisma = require("./prisma");
+  try {
+    const [definitions, values] = await Promise.all([
+      prisma.leadCustomFieldDefinition.findMany({ where: { tenantId } }),
+      prisma.leadCustomFieldValue.findMany({ where: { tenantId, contactId } }),
+    ]);
+    const valuesByFieldId = new Map(values.map((value) => [value.fieldId, value]));
+    const result = {};
+    for (const definition of definitions) {
+      const value = valuesByFieldId.get(definition.id);
+      if (!value) {
+        result[definition.fieldKey] = null;
+        continue;
+      }
+      if (definition.fieldType === "number") result[definition.fieldKey] = value.valueNumber;
+      else if (definition.fieldType === "date") result[definition.fieldKey] = value.valueDate;
+      else if (definition.fieldType === "checkbox") result[definition.fieldKey] = value.valueBool;
+      else if (definition.fieldType === "multiselect") {
+        try {
+          result[definition.fieldKey] = value.valueText ? JSON.parse(value.valueText) : null;
+        } catch (_error) {
+          result[definition.fieldKey] = value.valueText;
+        }
+      } else result[definition.fieldKey] = value.valueText;
+    }
+    return result;
+  } catch (error) {
+    console.error("[lead-custom-fields] getLeadCustomFieldValues failed (non-fatal):", error && error.message);
+    return {};
+  }
+}
+
+module.exports = { getLeadCustomFieldValues, writeLeadCustomFieldValues };

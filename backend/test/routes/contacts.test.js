@@ -93,6 +93,7 @@ Module._cache[eventBusPath] = {
   loaded: true,
   exports: {
     emitEvent: emitEventMock,
+    safeEmitEvent: vi.fn(),
     onEvent: () => {},
   },
 };
@@ -1151,6 +1152,31 @@ describe('POST /api/contacts — create', () => {
       tenantId: TENANT_ID,
       contact: created,
     }));
+  });
+
+  test('Generic CRM contact workflow payload adds +91 to a local phone number', async () => {
+    const created = {
+      id: 12346,
+      name: 'Local Phone Lead',
+      email: 'local-phone@example.com',
+      phone: '8569392998',
+      tenantId: TENANT_ID,
+      assignedToId: USER_ID,
+      status: 'Lead',
+    };
+    findDuplicateMock.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce(created);
+
+    const res = await request(makeApp({ vertical: 'generic' }))
+      .post('/api/contacts')
+      .send({
+        name: 'Local Phone Lead',
+        email: 'local-phone@example.com',
+        phone: '8569392998',
+      });
+
+    expect(res.status).toBe(201);
+    expect(emitEventMock.mock.calls[0][1].phone).toBe('+918569392998');
   });
 
   test('active source rule assigns its Callified campaign to a new website-form Lead', async () => {

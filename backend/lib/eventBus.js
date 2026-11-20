@@ -16,6 +16,53 @@ const bus = new EventEmitter();
 bus.setMaxListeners(100);
 let genericCampaignEventSequence = 0;
 
+// Travel email automation has a separate persistence and dispatch path. The
+// listener is deliberately vertical-gated in the service as well, so a
+// shared event such as contact.created can never enroll Generic or Wellness
+// records into Travel sequences.
+const { processTravelEmailEvent } = require("./travelEmailAutomation");
+for (const travelEvent of [
+  "lead.created.welcome", "lead.created.registration_invitation", "registration.submitted",
+  "registration.needs_verification", "registration.approved", "account.ready", "account.created",
+  "account.deleted", "payment.received", "payment.due_reminder", "payment.link_issued", "payment.failed",
+  "payment.reminder", "cancellation.requested", "cancellation.approved", "cancellation.rejected",
+  "refund.processed", "trip.details_changed", "trip.confirmed", "trip.cancelled", "trip.reminder",
+  "trip.completed", "trip.announced", "trip.upcoming_reminder", "booking.confirmed",
+  "site_visit.scheduled", "catalogue.request_submitted", "diagnostic.completed",
+  "invitation.opened", "registration.started", "registration.expired", "lead.follow_up_due",
+  "lead.assigned", "lead.converted", "document.required", "document.reviewed", "trip.rescheduled",
+  "trip.urgent_update",
+]) {
+  bus.on(travelEvent, ({ payload, tenantId }) => processTravelEmailEvent(travelEvent, payload, tenantId)
+    .catch((error) => console.error(`[TravelEmailAutomation] ${travelEvent} failed:`, error.message)));
+}
+
+bus.on("contact.created", ({ payload, tenantId }) => processTravelEmailEvent("lead.created.welcome", payload, tenantId)
+  .catch((error) => console.error("[TravelEmailAutomation] lead.created.welcome failed:", error.message)));
+bus.on("payment.collected", ({ payload, tenantId }) => processTravelEmailEvent("payment.received", payload, tenantId)
+  .catch((error) => console.error("[TravelEmailAutomation] payment.received failed:", error.message)));
+bus.on("travel.invoice.paid", ({ payload, tenantId }) => processTravelEmailEvent("payment.received", payload, tenantId)
+  .catch((error) => console.error("[TravelEmailAutomation] travel invoice payment failed:", error.message)));
+bus.on("registration.submitted", ({ payload, tenantId }) => processTravelEmailEvent("registration.started", payload, tenantId)
+  .catch((error) => console.error("[TravelEmailAutomation] registration.started failed:", error.message)));
+// Travel itinerary routes use these canonical lifecycle events. Keep the
+// email vocabulary customer-facing while accepting the existing operational
+// event names emitted by the itinerary service.
+bus.on("itinerary.accepted", ({ payload, tenantId }) => processTravelEmailEvent("trip.confirmed", payload, tenantId)
+  .catch((error) => console.error("[TravelEmailAutomation] trip.confirmed failed:", error.message)));
+bus.on("itinerary.completed", ({ payload, tenantId }) => processTravelEmailEvent("trip.completed", payload, tenantId)
+  .catch((error) => console.error("[TravelEmailAutomation] trip.completed failed:", error.message)));
+bus.on("cancellation.approved", ({ payload, tenantId }) => processTravelEmailEvent("trip.cancelled", payload, tenantId)
+  .catch((error) => console.error("[TravelEmailAutomation] trip.cancelled failed:", error.message)));
+bus.on("booking.confirmed", ({ payload, tenantId }) => processTravelEmailEvent("site_visit.scheduled", payload, tenantId)
+  .catch((error) => console.error("[TravelEmailAutomation] site_visit.scheduled failed:", error.message)));
+bus.on("invoice.payment_due", ({ payload, tenantId }) => processTravelEmailEvent("payment.due_reminder", payload, tenantId)
+  .catch((error) => console.error("[TravelEmailAutomation] payment.due_reminder failed:", error.message)));
+bus.on("invoice.overdue", ({ payload, tenantId }) => processTravelEmailEvent("payment.failed", payload, tenantId)
+  .catch((error) => console.error("[TravelEmailAutomation] payment.failed failed:", error.message)));
+bus.on("payment.refunded", ({ payload, tenantId }) => processTravelEmailEvent("refund.processed", payload, tenantId)
+  .catch((error) => console.error("[TravelEmailAutomation] refund.processed failed:", error.message)));
+
 // Node's EventEmitter does not await promises returned by async listeners.
 // That made contact.created look successful to the route while Generic CRM
 // campaign enrollment was still running in the background (and could be lost

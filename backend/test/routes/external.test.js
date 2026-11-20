@@ -898,6 +898,34 @@ describe("POST /api/v1/external/leads — create pipeline", () => {
     });
   });
 
+  test("generic CRM adds +91 to a local 10-digit external lead phone", async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({
+      vertical: "generic",
+      callifiedAutoCampaignId: null,
+      embedAllowlistJson: null,
+    });
+    prisma.contact.findFirst.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce({
+      id: 557,
+      name: "Generic External Lead",
+      email: "generic-external@example.com",
+      phone: "+918569392998",
+      status: "Lead",
+      source: "website-form",
+      tenantId: 7,
+    });
+
+    const res = await request(makeApp()).post("/api/v1/external/leads").send({
+      name: "Generic External Lead",
+      phone: "8569392998",
+      email: "generic-external@example.com",
+      source: "website-form",
+    });
+
+    expect(res.status).toBe(201);
+    expect(prisma.contact.create.mock.calls[0][0].data.phone).toBe("+918569392998");
+  });
+
   test("backfills Callified campaign on existing lead when rule matches", async () => {
     prisma.tenantSetting.findUnique.mockImplementation(({ where }) => {
       const key = where?.tenantId_key?.key;

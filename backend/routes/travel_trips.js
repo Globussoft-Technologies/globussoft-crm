@@ -3693,6 +3693,16 @@ router.post(
         },
       );
       res.json({ approved: true, participant, registration: updatedDraft });
+      require("../lib/eventBus").emitEvent("registration.approved", {
+        parentEmail: participant.parentEmail, parentName: participant.parentName, subBrand: draft.subBrand,
+        parentPhone: participant.parentPhone, studentName: participant.fullName,
+        registrationId: updatedDraft.id, registrationStatus: updatedDraft.status,
+        contactId: trip.schoolContactId, trip: {
+          name: trip.name, code: trip.tripCode, tripCode: trip.tripCode,
+          destination: trip.destination, startDate: trip.departDate, endDate: trip.returnDate,
+          status: trip.status,
+        }, tripId: trip.id,
+      }, req.travelTenant.id, req.io).catch(() => {});
       sendApprovalPaymentPortalEmail({
         tenantId: req.travelTenant.id,
         trip,

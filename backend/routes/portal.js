@@ -1120,6 +1120,9 @@ router.post("/travel/itineraries/:id/request-cancellation", verifyPortalToken, r
       amountPaid: Number(itin.advancePaidAmount || 0),
       currency: itin.currency,
     });
+    require("../lib/eventBus").emitEvent("cancellation.requested", {
+      contactId: req.portal.contactId, subBrand: itin.subBrand, destination: itin.destination, itineraryId: itin.id,
+    }, req.portal.tenantId, null).catch(() => {});
     // Acknowledge to the customer in their portal bell.
     travelPortalNotifications.safeNotifyTravelCustomer({
       contactId: req.portal.contactId,

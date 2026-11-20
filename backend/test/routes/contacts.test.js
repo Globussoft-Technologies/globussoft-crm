@@ -93,6 +93,7 @@ Module._cache[eventBusPath] = {
   loaded: true,
   exports: {
     emitEvent: emitEventMock,
+    safeEmitEvent: vi.fn(),
     onEvent: () => {},
   },
 };

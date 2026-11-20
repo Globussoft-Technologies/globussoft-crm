@@ -3215,6 +3215,20 @@ router.post("/diagnostics/public/submit", async (req, res) => {
       bank,
     ).catch(() => null);
 
+    try {
+      await require("../lib/travelEmailAutomation").processTravelEmailEvent("diagnostic.completed", {
+        diagnosticId: diag.id,
+        contactId,
+        recipientEmail: email || null,
+        recipientName: String(name).trim() || "there",
+        student: { name: String(name).trim() || "there" },
+        reportUrl: reportPdfUrl || "",
+        diagnostic: { reportUrl: reportPdfUrl || "" },
+      }, tenant.id);
+    } catch (emailErr) {
+      console.warn("[travel-diag-public] completion email trigger failed (non-fatal):", emailErr.message);
+    }
+
     // Customer-facing payload: NO raw score, NO contact id, NO diagnostic id.
     // The advisor sees those internally. The public confirmation just
     // surfaces the persona ("you're a Confident Family Traveller") +
@@ -3770,6 +3784,22 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
     }
 
     const reportSlug = buildReportSlug(diag.id, reportSlugToken);
+    const reportBase = String(getFrontendUrlFromRequest(req) || process.env.FRONTEND_URL || "").replace(/\/+$/, "");
+    const reportUrl = reportBase ? `${reportBase}/p/tmc/report/${reportSlug}` : `/p/tmc/report/${reportSlug}`;
+    try {
+      await require("../lib/travelEmailAutomation").processTravelEmailEvent("diagnostic.completed", {
+        diagnosticId: diag.id,
+        contactId,
+        recipientEmail: email,
+        recipientName: String(contact.contact_name || "there").trim(),
+        student: { name: String(contact.school_name || contact.contact_name || "there").trim() },
+        reportUrl,
+        diagnostic: { reportUrl },
+        reportSlug,
+      }, tenant.id);
+    } catch (emailErr) {
+      console.warn("[travel-diag-tmc] completion email trigger failed (non-fatal):", emailErr.message);
+    }
     res.status(201).json({
       diagnosticId: diag.id,
       reportSlug,

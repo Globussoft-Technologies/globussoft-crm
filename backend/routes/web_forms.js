@@ -2335,6 +2335,25 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       } catch (eventError) {
         console.error("[web_forms] Generic contact workflow event failed:", eventError.message);
       }
+    } else if (formScope === "travel" && createdNewContact) {
+      try {
+        await require("../lib/eventBus").emitEvent(
+          "contact.created",
+          {
+            contactId: contact.id,
+            name: contact.name,
+            email: contact.email,
+            phone: contact.phone,
+            status: contact.status,
+            source: contact.source,
+            subBrand: contact.subBrand || null,
+          },
+          form.tenantId,
+          req.io,
+        );
+      } catch (eventError) {
+        console.error("[web_forms] Travel contact welcome event failed:", eventError.message);
+      }
     }
 
     submitStage = "send_notification";

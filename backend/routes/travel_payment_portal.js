@@ -734,6 +734,35 @@ router.post("/payment-portal/confirm-razorpay", async (req, res) => {
       paymentId: razorpayPaymentId,
       capturedAt,
     });
+    const paymentAmount = Number(updatedPayment.amount || 0);
+    const paymentCurrency = updatedPayment.currency || "INR";
+    require("../lib/eventBus").safeEmitEvent(
+      "payment.collected",
+      {
+        paymentId: updatedPayment.id,
+        contactId: updatedPayment.contactId || null,
+        recipientEmail: participant.parentEmail,
+        recipientName: participant.parentName || participant.fullName,
+        subBrand: "tmc",
+        tripId: trip.id,
+        tripName: trip.tripCode || trip.destination,
+        tripDestination: trip.destination,
+        amount: paymentAmount,
+        currency: paymentCurrency,
+        method: "razorpay",
+        paidAt: capturedAt,
+        payment: {
+          amount: `${paymentCurrency} ${paymentAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+          transactionAmount: paymentAmount,
+          installment: `Installment ${Number(instalment.instalmentIndex || 0) + 1}`,
+          method: "Razorpay",
+          date: capturedAt.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" }),
+          reference: razorpayPaymentId,
+        },
+      },
+      trip.tenantId,
+      "travel-payment-portal/confirm-razorpay",
+    );
     res.json({
       success: true,
       payment: updatedPayment,

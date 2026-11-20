@@ -3235,8 +3235,8 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     fireEvent.click(bulkActionsButton);
     const menu = await screen.findByRole('menu', { name: /Bulk actions/i });
     expect(menu).toHaveStyle({
-      right: '0px',
-      left: 'auto',
+      left: '0px',
+      right: 'auto',
       boxSizing: 'border-box',
     });
     fireEvent.click(within(menu).getByRole('button', { name: 'Select current page' }));

@@ -1649,16 +1649,16 @@ const Contacts = () => {
 
       <div className="card contacts-page-card" style={{ overflow: isGeneric ? 'visible' : 'hidden' }}>
         <div className="contacts-filters-bar" style={{ padding: '1rem', borderBottom: '1px solid var(--border-color)', display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <div className="search-with-leading-icon" style={{ position: 'relative', flex: 1, maxWidth: '300px' }}>
-            <Search size={18} aria-hidden style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-secondary)', pointerEvents: 'none' }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, maxWidth: '300px', minWidth: 0, padding: '0 8px', border: '1px solid var(--border-color)', borderRadius: 8, background: 'var(--surface-hover)', boxSizing: 'border-box' }}>
+            <Search size={18} aria-hidden style={{ flex: '0 0 auto', color: 'var(--text-secondary)', pointerEvents: 'none' }} />
             <input
               data-tour="contacts-search"
               type="text"
-              className="input-field crm-search-input"
+              className="input-field"
               placeholder="Search contacts..."
               value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
-              style={{ backgroundColor: 'var(--surface-hover)' }}
+              style={{ backgroundColor: 'transparent', border: 0, outline: 0, flex: '1 1 auto', minWidth: 0, padding: '6px 0', boxShadow: 'none' }}
             />
           </div>
           <select

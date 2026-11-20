@@ -189,7 +189,24 @@ async function finalizeRefund(payment, { refundId, amount, reason, refundStatus,
   try {
     require("./eventBus").emitEvent(
       "payment.refunded",
-      { paymentId: payment.id, amount, refundId: refundId || null, tenantId: payment.tenantId },
+      {
+        paymentId: payment.id,
+        contactId: payment.contactId || null,
+        subBrand: meta.subBrand || null,
+        itineraryId: meta.itineraryId || null,
+        tripName: meta.tripName || payment.description || null,
+        amount,
+        refundId: refundId || null,
+        refundDate: new Date().toISOString(),
+        refundMethod: payment.gateway || "original payment method",
+        refund: {
+          amount: `${payment.currency || "INR"} ${Number(amount || 0).toLocaleString("en-IN")}`,
+          reference: refundId || "",
+          date: new Date().toISOString(),
+          method: payment.gateway || "original payment method",
+        },
+        tenantId: payment.tenantId,
+      },
       payment.tenantId,
     );
   } catch (_e) { /* best-effort */ }

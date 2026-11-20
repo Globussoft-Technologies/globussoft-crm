@@ -256,6 +256,34 @@ describe('<SequenceBuilder /> — page surface', () => {
     expect(screen.getByText(/Condition branch/i)).toBeInTheDocument();
   });
 
+  it('saves separate If / Else destinations for a condition step', async () => {
+    renderBuilder();
+    await waitFor(() => {
+      expect(screen.getByText(/Conditional branch/i)).toBeInTheDocument();
+    });
+
+    const conditionLabels = screen.getAllByText(/Conditional branch/i);
+    fireEvent.click(conditionLabels[conditionLabels.length - 1]);
+
+    const yesSelect = await screen.findByRole('combobox', { name: 'If true, go to' });
+    const noSelect = screen.getByRole('combobox', { name: 'If false, go to' });
+    fireEvent.change(yesSelect, { target: { value: '1' } });
+    fireEvent.change(noSelect, { target: { value: '3' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save/i }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/sequences/steps/103',
+        expect.objectContaining({
+          method: 'PUT',
+          body: expect.stringContaining('"trueNextPosition":1'),
+        }),
+      );
+    });
+    const saveCall = fetchApiMock.mock.calls.find(([url, options]) => url === '/api/sequences/steps/103' && options?.method === 'PUT');
+    expect(saveCall[1].body).toContain('"falseNextPosition":3');
+  });
+
   it('clicking "+ Email" POSTs /api/sequences/:id/steps with kind=email + pauseOnReply=true', async () => {
     // Track the POST.
     fetchApiMock.mockImplementation((url, opts) => {

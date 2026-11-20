@@ -667,6 +667,15 @@ is that the sidebar text and icon will reduce based on viewport/* Travel pages w
     box-sizing: border-box;
   }
 
+  /* Keep the bulk menu within the viewport on narrow screens. Desktop uses
+     left anchoring so the menu cannot be clipped by the table card. */
+  .lead-bulk-actions-control > [role="menu"] {
+    left: auto !important;
+    right: 0 !important;
+    width: min(420px, calc(100vw - 2rem)) !important;
+    max-width: calc(100vw - 2rem);
+  }
+
   [data-vertical="travel"] .leads-pagination-footer {
     padding: 0.75rem 1rem !important;
     box-sizing: border-box;

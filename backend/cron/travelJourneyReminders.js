@@ -87,7 +87,7 @@ async function runJourneyRemindersForTenant(tenantId) {
         lte: new Date(Date.now() + 14 * 86400_000),
       },
     },
-    select: { id: true, contactId: true, destination: true, startDate: true },
+    select: { id: true, contactId: true, title: true, destination: true, startDate: true, endDate: true },
     take: 500,
   });
 
@@ -110,7 +110,7 @@ async function runJourneyRemindersForTenant(tenantId) {
     const contacts = contactIds.length
       ? await prisma.contact.findMany({
           where: { id: { in: contactIds } },
-          select: { id: true, phone: true, name: true },
+            select: { id: true, phone: true, name: true, email: true },
         })
       : [];
     contactById = Object.fromEntries(contacts.map((c) => [c.id, c]));
@@ -163,6 +163,26 @@ async function runJourneyRemindersForTenant(tenantId) {
         // WhatsApp dispatch via watiClient (Q9) — stub when creds absent;
         // best-effort, never blocks the milestone loop.
         const contact = itin.contactId ? contactById[itin.contactId] : null;
+        if (contact?.email) {
+          require("../lib/eventBus").emitEvent("trip.reminder", {
+            itineraryId: itin.id,
+            contactId: contact.id,
+            recipientEmail: contact.email,
+            recipientName: contact.name,
+            subBrand: "rfu",
+            destination: itin.destination,
+            trip: {
+              name: itin.title || itin.destination,
+              code: String(itin.id),
+              destination: itin.destination,
+              startDate: itin.startDate,
+              endDate: itin.endDate,
+            },
+            reminderTag: m.tag,
+          }, tenantId).catch((error) => {
+            console.error(`[TravelJourneyReminders] email event failed for itinerary ${itin.id}:`, error.message);
+          });
+        }
         if (contact && contact.phone) {
           await watiClient.sendBestEffort({
             tenantId,

@@ -3415,6 +3415,13 @@ router.delete(
           bulk: true,
         },
       );
+      require("../lib/eventBus").safeEmitEvent("account.deleted", {
+        contactId: contact.id,
+        recipientEmail: contact.email,
+        recipientName: contact.name,
+        deletionReason: typeof req.body?.deletionReason === "string" ? req.body.deletionReason.trim() : "",
+        subBrand: contact.subBrand || null,
+      }, req.user.tenantId, "Admin bulk contact deletion");
     }
     const count = await hardDeleteContacts(prisma, targetContactIds);
 
@@ -4984,6 +4991,13 @@ router.delete("/:id", requireContactOrLeadDelete, async (req, res) => {
         assignedToId: existing.assignedToId,
       },
     );
+    require("../lib/eventBus").safeEmitEvent("account.deleted", {
+      contactId: existing.id,
+      recipientEmail: existing.email,
+      recipientName: existing.name,
+      deletionReason: typeof req.body?.deletionReason === "string" ? req.body.deletionReason.trim() : "",
+      subBrand: existing.subBrand || null,
+    }, req.user.tenantId, "Admin contact deletion");
     await hardDeleteContact(prisma, existing.id);
 
     // [GP-CRM integration] Keep the existing partner event contract so

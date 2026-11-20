@@ -9,6 +9,7 @@ const requireCJS = createRequire(import.meta.url);
 const prisma = requireCJS("../../lib/prisma");
 const emailSender = requireCJS("../../lib/emailSender");
 const content = requireCJS("../../lib/travelReviewContent");
+const travelEmailAutomation = requireCJS("../../lib/travelEmailAutomation");
 const { runTravelReviewTick } = requireCJS("../../cron/travelReviewEngine");
 
 const NOW = new Date("2026-06-20T09:00:00Z");
@@ -21,6 +22,7 @@ beforeEach(() => {
   prisma.travelPortalNotification = { create: vi.fn().mockResolvedValue({ id: 1 }) };
   emailSender.sendEmail = vi.fn();
   content.buildRequestEmail = vi.fn(() => ({ subject: "How was your trip?", text: "T", html: "T" }));
+  travelEmailAutomation.processTravelEmailEvent = vi.fn().mockResolvedValue({ ignored: true, reason: "no_template" });
 
   prisma.travelTripReview.findMany.mockResolvedValue([]); // none reviewed yet
   prisma.contact.findMany.mockResolvedValue([{ id: 7, name: "Mohit", email: "mohit@example.com" }]);

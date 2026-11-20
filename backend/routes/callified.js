@@ -19,7 +19,6 @@
 
 const express = require("express");
 const router = express.Router();
-router.use('/dial-jobs', require('./generic_lead_dial_jobs'));
 const { verifyToken } = require("../middleware/auth");
 const {
   requirePermission,

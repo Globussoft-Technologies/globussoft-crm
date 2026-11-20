@@ -1550,6 +1550,7 @@ app.use("/api/travel", require("./routes/travel_whatsapp"));
 app.use("/api/brand-kits", brandKitsRoutes);
 app.use("/api/adsgpt", adsgptRoutes);
 app.use("/api/ratehawk", ratehawkRoutes);
+app.use("/api/callified/dial-jobs", require("./routes/generic_lead_dial_jobs"));
 app.use("/api/callified", callifiedRoutes);
 app.use("/api/booking-expedia", bookingExpediaRoutes);
 app.use("/api/travel", travelMeetingFormsRoutes);

@@ -1121,6 +1121,7 @@ describe('POST /api/forms/public/:slug/submit', () => {
       fieldsJson: JSON.stringify([
         { id: 'contact-name', sourceKind: 'contact', sourceKey: 'name', fieldType: 'text', label: 'Name', required: true, hidden: false, width: 'full', options: [] },
         { id: 'contact-email', sourceKind: 'contact', sourceKey: 'email', fieldType: 'email', label: 'Email', required: true, hidden: false, width: 'full', options: [] },
+        { id: 'contact-phone', sourceKind: 'contact', sourceKey: 'phone', fieldType: 'tel', label: 'Phone', required: false, hidden: false, width: 'full', options: [] },
         { id: 'contact-source', sourceKind: 'contact', sourceKey: 'source', fieldType: 'text', label: 'Source', required: false, hidden: false, width: 'full', options: [] },
       ]),
       styleJson: '{}',
@@ -1135,6 +1136,7 @@ describe('POST /api/forms/public/:slug/submit', () => {
       tenantId: TENANT_ID,
       name: 'Submitted Lead',
       email: 'submitted@example.com',
+      phone: '+918569392998',
       source: 'Website campaign',
       status: 'Lead',
     });
@@ -1142,6 +1144,8 @@ describe('POST /api/forms/public/:slug/submit', () => {
       .post('/api/forms/public/contact-us/submit?scope=generic')
       .field('name', 'Submitted Lead')
       .field('email', 'submitted@example.com')
+      .field('phone', '8569392998')
+      .field('phoneCountry', '+91')
       .field('source', 'Website campaign');
 
     expect(response.status).toBe(201);
@@ -1154,6 +1158,7 @@ describe('POST /api/forms/public/:slug/submit', () => {
         webFormId: 82,
         name: 'Submitted Lead',
         email: 'submitted@example.com',
+        phone: '+918569392998',
         source: 'Website campaign',
         status: 'Lead',
         tenantId: TENANT_ID,

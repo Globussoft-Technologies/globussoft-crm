@@ -256,10 +256,24 @@ function genericWebFormWorkflowPayload({ contact, form, submission, payload, cus
     if (contact?.[field] !== undefined) contactFields[field] = contact[field];
   }
 
-  return {
+  const workflowFields = {
     ...contactFields,
     ...(payload || {}),
     ...(customFieldValues || {}),
+  };
+  if (workflowFields.phone) {
+    const phoneDigits = String(workflowFields.phone).replace(/\D/g, "");
+    const normalizedPhone = normalizeGenericCrmPhone(
+      workflowFields.phone,
+      phoneDigits.length === 10 ? "91" : "",
+    );
+    workflowFields.phone = normalizedPhone && !String(normalizedPhone).startsWith("+")
+      ? `+${normalizedPhone}`
+      : normalizedPhone;
+  }
+
+  return {
+    ...workflowFields,
     contactId: contact.id,
     webForm: form.name,
     webFormId: form.id,

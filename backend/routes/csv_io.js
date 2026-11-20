@@ -517,7 +517,8 @@ const GENERIC_IMPORT_NATIVE_FIELDS = new Set([
 ]);
 const GENERIC_IMPORT_STORED_TARGETS = new Set([
   "name", "firstName", "lastName", "email", "phone", "company", "title",
-  "status", "source", "lifecycleStageKey", "tags", ...GENERIC_IMPORT_NATIVE_FIELDS,
+  "status", "source", "lifecycleStageKey", "assignedTo", "assignedToId", "tags",
+  ...GENERIC_IMPORT_NATIVE_FIELDS,
 ]);
 const IMPORT_FIELD_TYPES = new Set(["text", "textarea", "number", "dropdown", "radio", "date", "url", "checkbox", "multiselect"]);
 
@@ -621,6 +622,26 @@ function buildGenericNativeImportData(row) {
     if (recentNote) data.description = sanitizeCellForExport(recentNote);
   }
   return data;
+}
+
+async function resolveImportedAssigneeId(rawValue, tenantId) {
+  const value = String(rawValue ?? "").trim();
+  if (!value) return null;
+  const numericId = /^\d+$/.test(value) ? Number(value) : null;
+  const where = {
+    tenantId,
+    deactivatedAt: null,
+    OR: [
+      ...(numericId ? [{ id: numericId }] : []),
+      { email: value },
+      { name: value },
+    ],
+  };
+  const user = await prisma.user.findFirst({
+    where,
+    select: { id: true },
+  });
+  return user?.id || null;
 }
 
 function buildImportedActivityRecords(row) {
@@ -957,6 +978,31 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
         };
         if (lifecycleStageKey) createData.lifecycleStageKey = lifecycleStageKey;
         const nativeImportData = isGeneric ? buildGenericNativeImportData(row) : {};
+        if (isGeneric) {
+          // Ownership must come only from an explicit mapping to the native
+          // Assigned To field. Do not inspect the original spreadsheet headers
+          // here, otherwise columns such as "Sales owner" get auto-imported
+          // even when the user intentionally left them unmapped.
+          const assigneeRaw = getSpreadsheetValue(mappedRow, [
+            "assignedToId",
+            "assignedTo",
+          ]);
+          if (String(assigneeRaw ?? "").trim()) {
+            const assignedToId = await resolveImportedAssigneeId(
+              assigneeRaw,
+              req.user.tenantId,
+            );
+            if (!assignedToId) {
+              recordImportError(
+                "assignedTo",
+                `sales owner not found: ${String(assigneeRaw).trim()}`,
+                assigneeRaw,
+              );
+              continue;
+            }
+            nativeImportData.assignedToId = assignedToId;
+          }
+        }
         Object.assign(createData, nativeImportData);
         // When the source only provides the original creation date, a newly
         // imported lead should not appear as updated at import time.
@@ -965,6 +1011,10 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
         }
         const customFields = {};
         for (const definition of customDefinitions) {
+          // assignedTo/assignedToId are native Contact ownership fields. A
+          // legacy custom field with the same key must not capture an import
+          // that is now correctly mapped to the real owner relation.
+          if (definition.fieldKey === "assignedTo" || definition.fieldKey === "assignedToId") continue;
           const mappedKey = `cf_${definition.fieldKey}`;
           if (Object.prototype.hasOwnProperty.call(row, mappedKey)) {
             customFields[definition.fieldKey] = row[mappedKey];

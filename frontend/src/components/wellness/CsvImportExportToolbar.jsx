@@ -25,9 +25,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Upload, Download, X, FileText, AlertTriangle, CheckCircle2, ChevronDown, Eye } from "lucide-react";
+import { Upload, Download, X, FileText, AlertTriangle, CheckCircle2, ChevronDown, Eye, EyeOff } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { sanitizeGenericCrmPhoneInput, validateGenericCrmPhone } from "../../utils/genericCrmPhoneValidation";
 
 const ENTITY_LABELS = {
   services: "Services",
@@ -877,6 +878,8 @@ function ImportModal({
   const [wizardStep, setWizardStep] = useState(genericLeadWizard ? 1 : 2);
   const [genericImportMode, setGenericImportMode] = useState("leads");
   const [dynamicLeadFields, setDynamicLeadFields] = useState([]);
+  const [staffMembers, setStaffMembers] = useState([]);
+  const [staffLoaded, setStaffLoaded] = useState(false);
   const [showAddField, setShowAddField] = useState(false);
   const [addingFieldFor, setAddingFieldFor] = useState("");
   const [fieldEditorMode, setFieldEditorMode] = useState("add");
@@ -885,6 +888,21 @@ function ImportModal({
   const [newFieldOptions, setNewFieldOptions] = useState("");
   const [newFieldRequired, setNewFieldRequired] = useState(false);
   const [savingNewField, setSavingNewField] = useState(false);
+  const [showOwnerWarning, setShowOwnerWarning] = useState(false);
+  const [showInlineStaffModal, setShowInlineStaffModal] = useState(false);
+  const [showInlineStaffPassword, setShowInlineStaffPassword] = useState(false);
+  const [inlineStaffSaving, setInlineStaffSaving] = useState(false);
+  const [inlineStaffRoles, setInlineStaffRoles] = useState([]);
+  const [inlineStaffDraft, setInlineStaffDraft] = useState({
+    name: "",
+    email: "",
+    password: "",
+    jobTitle: "",
+    workNumber: "",
+    mobileNumber: "",
+    reportingTo: "",
+    rbacRoleId: "",
+  });
 
   const optionFieldTypes = new Set(["dropdown", "radio", "multiselect"]);
   const displayedPreviewHeaders = previewHeaders.length ? previewHeaders : expectedHeaders;
@@ -1014,6 +1032,117 @@ function ImportModal({
       .catch(() => setDynamicLeadFields([]));
     return undefined;
   }, [genericLeadWizard]);
+
+  useEffect(() => {
+    if (!genericLeadWizard) return undefined;
+    setStaffLoaded(false);
+    fetchApi("/api/staff", { silent: true })
+      .then((data) => setStaffMembers(Array.isArray(data) ? data : []))
+      .catch(() => setStaffMembers([]))
+      .finally(() => setStaffLoaded(true));
+    return undefined;
+  }, [genericLeadWizard]);
+
+  const unmatchedSalesOwners = (() => {
+    if (!genericLeadWizard || !previewHeaders.length || !staffLoaded) return [];
+    const ownerHeader = previewHeaders.find((header) => {
+      const target = mappingSelections[header];
+      return target === "assignedTo";
+    });
+    if (!ownerHeader) return [];
+    const knownOwners = new Set(
+      staffMembers.flatMap((member) => [member.id, member.email, member.name]
+        .filter((value) => value !== null && value !== undefined && String(value).trim() !== "")
+        .map((value) => normalizeMappingIdentity(value))),
+    );
+    return [...new Set(importRowsRef.current
+      .map((row) => String(row?.[ownerHeader] ?? "").trim())
+      .filter(Boolean)
+      .filter((value) => !knownOwners.has(normalizeMappingIdentity(value))))];
+  })();
+
+  const openInlineStaffModal = async () => {
+    setShowInlineStaffPassword(false);
+    setInlineStaffDraft({
+      name: unmatchedSalesOwners[0] || "",
+      email: "",
+      password: "",
+      jobTitle: "",
+      workNumber: "",
+      mobileNumber: "",
+      reportingTo: "",
+      rbacRoleId: "",
+    });
+    setShowInlineStaffModal(true);
+    try {
+      const response = await fetchApi("/api/roles", { silent: true });
+      const roles = Array.isArray(response?.roles)
+        ? response.roles.filter((role) => (!role.userType || role.userType === "STAFF") && role.isActive !== false)
+        : [];
+      setInlineStaffRoles(roles);
+    } catch {
+      setInlineStaffRoles([]);
+    }
+  };
+
+  const saveInlineStaff = async () => {
+    const name = inlineStaffDraft.name.trim();
+    const email = inlineStaffDraft.email.trim();
+    if (!name) return notify.error("Please enter the staff member's name.");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return notify.error("Please enter a valid work email address.");
+    if (inlineStaffDraft.password.length < 6) return notify.error("Password must be at least 6 characters.");
+    const workNumberError = validateGenericCrmPhone(inlineStaffDraft.workNumber, "Work number");
+    if (workNumberError) return notify.error(workNumberError);
+    const mobileNumberError = validateGenericCrmPhone(inlineStaffDraft.mobileNumber, "Mobile number");
+    if (mobileNumberError) return notify.error(mobileNumberError);
+    if (!inlineStaffDraft.rbacRoleId) return notify.error("Please choose a role.");
+    const selectedRole = inlineStaffRoles.find((role) => String(role.id) === String(inlineStaffDraft.rbacRoleId));
+    const accessTier = ["ADMIN", "MANAGER", "USER"].includes(String(selectedRole?.key || "").toUpperCase())
+      ? String(selectedRole.key).toUpperCase()
+      : "USER";
+    setInlineStaffSaving(true);
+    try {
+      await fetchApi("/api/staff", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          email,
+          password: inlineStaffDraft.password,
+          role: accessTier,
+          jobTitle: inlineStaffDraft.jobTitle,
+          workNumber: inlineStaffDraft.workNumber,
+          mobileNumber: inlineStaffDraft.mobileNumber,
+          reportingToId: inlineStaffDraft.reportingTo || null,
+          rbacRoleId: Number(inlineStaffDraft.rbacRoleId),
+        }),
+      });
+      notify.success(`${name} added to the team.`);
+      setShowInlineStaffModal(false);
+      const staff = await fetchApi("/api/staff", { silent: true });
+      setStaffMembers(Array.isArray(staff) ? staff : []);
+    } catch (error) {
+      if (!error.status) notify.error(error.message || "Failed to add staff member.");
+    } finally {
+      setInlineStaffSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!genericLeadWizard || !showOwnerWarning) return undefined;
+    const refreshStaff = () => {
+      fetchApi("/api/staff", { silent: true })
+        .then((data) => setStaffMembers(Array.isArray(data) ? data : []))
+        .catch(() => {});
+    };
+    const intervalId = setInterval(refreshStaff, 1500);
+    return () => clearInterval(intervalId);
+  }, [genericLeadWizard, showOwnerWarning]);
+
+  useEffect(() => {
+    if (showOwnerWarning && staffLoaded && unmatchedSalesOwners.length === 0) {
+      setShowOwnerWarning(false);
+    }
+  }, [showOwnerWarning, staffLoaded, unmatchedSalesOwners.length]);
 
   // The custom-field request and spreadsheet parsing run independently. If
   // the file is parsed first, rematch its still-unmapped headers as soon as
@@ -1158,6 +1287,11 @@ function ImportModal({
   const goToFinalize = () => {
     if (!file) return;
 
+    if (unmatchedSalesOwners.length) {
+      setShowOwnerWarning(true);
+      return;
+    }
+
     if (genericLeadWizard) {
       const invalidHeaders = previewHeaders
         .filter((header) => {
@@ -1178,6 +1312,11 @@ function ImportModal({
 
   const doImport = async () => {
     if (!file) return;
+
+    if (unmatchedSalesOwners.length) {
+      setShowOwnerWarning(true);
+      return;
+    }
 
     if (genericLeadWizard) {
       const invalidHeaders = previewHeaders
@@ -1541,6 +1680,139 @@ function ImportModal({
       }}
       onClick={onClose}
     >
+      {showOwnerWarning && (
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="missing-sales-owner-title"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1200,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+            background: "rgba(15, 23, 42, 0.35)",
+          }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div
+            style={{
+              width: "min(520px, 100%)",
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 12,
+              padding: "1.25rem 1.35rem",
+              border: "1px solid #f59e0b",
+              borderRadius: 12,
+              background: "#fff7ed",
+              color: "#9a3412",
+              boxShadow: "0 20px 50px rgba(15, 23, 42, 0.28)",
+            }}
+          >
+            <AlertTriangle size={25} aria-hidden="true" style={{ flex: "0 0 auto", color: "#d97706", marginTop: 2 }} />
+            <div style={{ flex: 1, lineHeight: 1.5 }}>
+              <strong id="missing-sales-owner-title" style={{ display: "block", marginBottom: 4 }}>
+                Sales owner(s) not found in Staff
+              </strong>
+              <div>Create these staff accounts before importing:</div>
+              <div style={{ marginTop: 4, fontWeight: 700 }}>{unmatchedSalesOwners.join(", ")}</div>
+              {genericLeadWizard && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    openInlineStaffModal();
+                  }}
+                  style={{
+                    marginTop: 12,
+                    padding: "0.4rem 0.7rem",
+                    border: "1px solid #d97706",
+                    borderRadius: 6,
+                    background: "#ffffff",
+                    color: "#9a3412",
+                    fontSize: "0.8rem",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  Add staff
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              aria-label="Close warning"
+              onClick={() => setShowOwnerWarning(false)}
+              style={{
+                flex: "0 0 auto",
+                border: 0,
+                background: "transparent",
+                color: "#9a3412",
+                fontSize: "1.25rem",
+                lineHeight: 1,
+                cursor: "pointer",
+                padding: "0 0.15rem",
+              }}
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
+      {genericLeadWizard && showInlineStaffModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="inline-add-staff-title"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1300,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+            background: "rgba(15, 23, 42, 0.45)",
+          }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div
+            style={{
+              width: "min(660px, 100%)",
+              maxHeight: "90vh",
+              overflowY: "auto",
+              padding: "1.5rem 1.75rem",
+              borderRadius: 14,
+              background: "#ffffff",
+              color: "var(--text-primary, #172033)",
+              boxShadow: "0 20px 55px rgba(15, 23, 42, 0.3)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <h2 id="inline-add-staff-title" style={{ margin: 0, fontSize: "1.1rem" }}>Add staff member</h2>
+              <button type="button" aria-label="Close" onClick={() => setShowInlineStaffModal(false)} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "1.4rem", color: "var(--text-secondary)" }}>×</button>
+            </div>
+            <p style={{ margin: "0.35rem 0 1rem", color: "var(--text-secondary)", fontSize: "0.82rem" }}>
+              Add the missing staff account without leaving the import page.
+            </p>
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              <label>Working name<input className="input-field" autoFocus value={inlineStaffDraft.name} onChange={(event) => setInlineStaffDraft((current) => ({ ...current, name: event.target.value }))} placeholder="e.g. Jane Smith" /></label>
+              <label>Work email <span style={{ color: "var(--text-secondary)", fontWeight: 400 }}>(not a personal address)</span><input className="input-field" type="email" value={inlineStaffDraft.email} onChange={(event) => setInlineStaffDraft((current) => ({ ...current, email: event.target.value }))} placeholder="name@yourcompany.com" /></label>
+              <label>Temporary password <span style={{ color: "var(--text-secondary)", fontWeight: 400 }}>(min 6 characters)</span><div style={{ position: "relative", marginTop: "0.25rem" }}><input className="input-field" type={showInlineStaffPassword ? "text" : "password"} value={inlineStaffDraft.password} onChange={(event) => setInlineStaffDraft((current) => ({ ...current, password: event.target.value }))} placeholder="Share securely with the new staff member" style={{ width: "100%", paddingRight: "2.5rem" }} /><button type="button" onClick={() => setShowInlineStaffPassword((current) => !current)} aria-label={showInlineStaffPassword ? "Hide password" : "Show password"} title={showInlineStaffPassword ? "Hide password" : "Show password"} style={{ position: "absolute", right: "0.65rem", top: "50%", transform: "translateY(-50%)", display: "inline-flex", alignItems: "center", justifyContent: "center", width: 28, height: 28, border: "none", background: "transparent", color: "var(--text-secondary)", cursor: "pointer", padding: 0 }}>{showInlineStaffPassword ? <EyeOff size={16} /> : <Eye size={16} />}</button></div></label>
+              <label>Job title<input className="input-field" value={inlineStaffDraft.jobTitle} onChange={(event) => setInlineStaffDraft((current) => ({ ...current, jobTitle: event.target.value }))} placeholder="e.g. SDR" /></label>
+              <label>Work number<input className="input-field" inputMode="tel" pattern="[+0-9\s().-]+" aria-label="Work number" value={inlineStaffDraft.workNumber} onChange={(event) => setInlineStaffDraft((current) => ({ ...current, workNumber: sanitizeGenericCrmPhoneInput(event.target.value) }))} onBlur={() => { const error = validateGenericCrmPhone(inlineStaffDraft.workNumber, "Work number"); if (error) notify.error(error); }} placeholder="Staff official contact number" /></label>
+              <label>Mobile number<input className="input-field" inputMode="tel" pattern="[+0-9\s().-]+" aria-label="Mobile number" value={inlineStaffDraft.mobileNumber} onChange={(event) => setInlineStaffDraft((current) => ({ ...current, mobileNumber: sanitizeGenericCrmPhoneInput(event.target.value) }))} onBlur={() => { const error = validateGenericCrmPhone(inlineStaffDraft.mobileNumber, "Mobile number"); if (error) notify.error(error); }} placeholder="Staff personal mobile number" /></label>
+              <label>Reporting to<select className="input-field" value={inlineStaffDraft.reportingTo} onChange={(event) => setInlineStaffDraft((current) => ({ ...current, reportingTo: event.target.value }))}><option value="">Click to select</option>{staffMembers.filter((member) => member.role === "MANAGER" || member.role === "ADMIN").map((member) => <option key={member.id} value={member.id}>{member.name || member.email}</option>)}</select></label>
+              <label>Role<select className="input-field" value={inlineStaffDraft.rbacRoleId} onChange={(event) => setInlineStaffDraft((current) => ({ ...current, rbacRoleId: event.target.value }))}><option value="">— Select a role —</option>{inlineStaffRoles.map((role) => <option key={role.id} value={role.id}>{role.name || role.key}</option>)}</select></label>
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem", marginTop: "1.25rem" }}>
+              <button type="button" onClick={() => setShowInlineStaffModal(false)} disabled={inlineStaffSaving} style={secondaryBtnStyle}>Cancel</button>
+              <button type="button" onClick={saveInlineStaff} disabled={inlineStaffSaving} style={primaryBtnStyle}>{inlineStaffSaving ? "Adding…" : "Add staff member"}</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div
         className={`glass${genericLeadWizard ? " generic-import-wizard" : ""}`}
         style={{
@@ -1588,15 +1860,16 @@ function ImportModal({
           </div>
         )}
         {genericLeadWizard && wizardStep === 3 && (
-          <div className="generic-import-step-overlay" style={{ position: "absolute", inset: 0, zIndex: 5, background: "#ffffff", padding: "1.5rem 2rem 1.5rem", borderRadius: "inherit", boxSizing: "border-box", overflowY: "auto", overflowX: "hidden" }}>
+          <div className="generic-import-step-overlay" style={{ position: "absolute", inset: 0, zIndex: 5, background: "#ffffff", padding: "1.5rem 2rem 1.5rem", borderRadius: "inherit", boxSizing: "border-box", overflow: "hidden", display: "flex", flexDirection: "column" }}>
             <h2 style={{ margin: 0, textAlign: "center" }}>Review the mapping of your fields</h2>
             <p style={{ textAlign: "center", color: "var(--text-secondary)", marginBottom: "1.5rem" }}>We've mapped the columns in your file to CRM fields — take a look</p>
-            <div style={{ border: "1px solid var(--border-color)", borderRadius: 10, overflow: "hidden" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "70px minmax(120px, 1fr) 100px minmax(180px, 1.3fr) minmax(100px, 1fr)", gap: 10, padding: "0.8rem", background: "var(--table-header-bg, #eef2f7)", fontWeight: 700, fontSize: "0.8rem", minWidth: 620 }}><span>Import</span><span>CSV column</span><span>Mapped</span><span>CRM field</span><span>Field type</span></div>
+            <div style={{ border: "1px solid var(--border-color)", borderRadius: 10, overflowY: "auto", overflowX: "hidden", flex: "1 1 auto", minHeight: 0 }}>
+              <div style={{ position: "sticky", top: 0, zIndex: 2, display: "grid", gridTemplateColumns: "70px minmax(120px, 1fr) 100px minmax(180px, 1.3fr) minmax(100px, 1fr)", gap: 10, padding: "0.8rem", background: "#eef2f7", opacity: 1, fontWeight: 700, fontSize: "0.8rem", minWidth: 620, borderBottom: "1px solid var(--border-color)", boxShadow: "0 1px 0 #eef2f7" }}><span>Import</span><span>CSV column</span><span>Mapped</span><span>CRM field</span><span>Field type</span></div>
               {displayedPreviewHeaders.map((header) => {
                 const sampleValue = previewRows[0]?.[header];
                 const hasSampleValue = sampleValue !== undefined && sampleValue !== null && String(sampleValue) !== "";
                 const displayedSampleValue = hasSampleValue ? expandScientificNotation(sampleValue) : "";
+                const isSalesOwnerColumn = mappingSelections[header] === "assignedTo";
                 return (
                 <div key={header} style={{ display: "grid", gridTemplateColumns: "70px minmax(120px, 1fr) 100px minmax(180px, 1.3fr) minmax(100px, 1fr)", gap: 10, alignItems: "center", padding: "0.8rem", borderTop: "1px solid var(--border-color)", fontSize: "0.85rem", minWidth: 620 }}>
                   <input
@@ -1618,6 +1891,15 @@ function ImportModal({
                         style={{ display: "block", marginTop: 4, color: "var(--text-secondary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                       >
                         {displayedSampleValue}
+                      </span>
+                    )}
+                    {isSalesOwnerColumn && unmatchedSalesOwners.length > 0 && (
+                      <span
+                        role="alert"
+                        style={{ display: "block", marginTop: 5, color: "#b45309", fontSize: "0.75rem", lineHeight: 1.35 }}
+                      >
+                        <AlertTriangle size={13} aria-hidden="true" style={{ verticalAlign: "-2px", marginRight: 4 }} />
+                        Not in Staff: {unmatchedSalesOwners.join(", ")}
                       </span>
                     )}
                   </div>

@@ -34,6 +34,7 @@ const { getSetting, KEYS } = require("../lib/tenantSettings");
 const { evaluateAutoCampaignRules } = require("../lib/callifiedAutoCampaignRules");
 const { normalizeMetaLeadPayload } = require("../lib/inboundLeadVerification");
 const { hardDeleteContact } = require("../lib/contactHardDelete");
+const { normalizeGenericCrmPhone } = require("../lib/phoneFormatting");
 
 const router = express.Router();
 
@@ -473,6 +474,12 @@ router.post("/leads", async (req, res) => {
       console.error("[external] tenant config lookup failed:", e.message);
     }
     const isGenericLeadAwaitingCall = (tenantCfg?.vertical || "generic") === "generic";
+    const normalizedExternalPhone = isGenericLeadAwaitingCall && phone
+      ? normalizeGenericCrmPhone(
+        phone,
+        req.body.phoneCountry || (String(phone).replace(/\D/g, "").length === 10 ? "91" : ""),
+      )
+      : phone;
     const partnerOrigin = resolveRequestOrigin(req);
 
     // Origin is optional for this API because X-API-Key is the trust boundary
@@ -536,7 +543,7 @@ router.post("/leads", async (req, res) => {
     const contactData = {
       name: name || (phone ? `Caller ${phone}` : "Unknown caller"),
       email: resolvedEmail,
-      phone: phone || null,
+      phone: normalizedExternalPhone || null,
       company: req.body.company || null,
       title: req.body.title || null,
       industry: req.body.industry || null,

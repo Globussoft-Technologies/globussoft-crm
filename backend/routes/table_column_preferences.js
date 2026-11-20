@@ -235,6 +235,8 @@ async function getAvailableColumns(tableKey, tenantId, vertical) {
   const custom = customDefs.map((f) => ({
     key: `${CUSTOM_FIELD_KEY_PREFIX}${f.fieldKey}`,
     label: f.label,
+    // Workflow webhook payloads use the definition fieldKey directly.
+    webhookField: f.fieldKey,
     // Filtering addresses custom fields by their tenant-scoped definition
     // id. Returning that key with the column catalog keeps Customize Table
     // and Filter By in lockstep without relying on a second request.

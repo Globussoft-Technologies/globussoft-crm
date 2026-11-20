@@ -32,6 +32,7 @@ Module._cache[callifiedClientPath] = {
 
 // Patch callifiedLeadStatus so we control classification + assignment.
 const leadStatusPath = requireCJS.resolve('../../lib/callifiedLeadStatus.js');
+const leadStatus = requireCJS(leadStatusPath);
 const classifyLeadStatusMock = vi.fn();
 const assignQualifiedLeadRoundRobinMock = vi.fn();
 Module._cache[leadStatusPath] = {
@@ -39,14 +40,7 @@ Module._cache[leadStatusPath] = {
   filename: leadStatusPath,
   loaded: true,
   exports: {
-    CALL_STATUS: {
-      YET_TO_CALL: 'yet_to_call',
-      CONNECTED: 'connected',
-      DNP: 'dnp',
-      PENDING: 'pending',
-      QUALIFIED: 'qualified',
-      JUNK: 'junk',
-    },
+    ...leadStatus,
     classifyLeadStatus: classifyLeadStatusMock,
     assignQualifiedLeadRoundRobin: assignQualifiedLeadRoundRobinMock,
   },
@@ -55,24 +49,28 @@ Module._cache[leadStatusPath] = {
 // Patch DNP retry engine BEFORE the queue module lazy-loads it.
 const dnpEnginePath = requireCJS.resolve('../../lib/callifiedDnpRetryEngine.js');
 const scheduleDnpRetryMock = vi.fn().mockResolvedValue({ id: 11 });
-const clearDnpRetryStateMock = vi.fn().mockResolvedValue({ id: 11 });
 const schedulePendingRetryMock = vi.fn().mockResolvedValue({ id: 11 });
+const nextRetryAt = new Date('2026-11-19T11:52:28.501Z');
 Module._cache[dnpEnginePath] = {
   id: dnpEnginePath,
   filename: dnpEnginePath,
   loaded: true,
   exports: {
     scheduleDnpRetry: scheduleDnpRetryMock,
-    clearDnpRetryState: clearDnpRetryStateMock,
     schedulePendingRetry: schedulePendingRetryMock,
+    getPendingRetrySettings: vi.fn().mockResolvedValue({ enabled: true, maxRetries: 2, intervalMinutes: 5 }),
+    computeNextRetryAt: vi.fn().mockReturnValue(nextRetryAt),
   },
 };
 
+const audit = requireCJS('../../lib/audit');
+const writeAuditMock = vi.spyOn(audit, 'writeAudit').mockResolvedValue(undefined);
 const queueModule = requireCJS('../../lib/callifiedAutoDialQueue');
 const { enqueue, stopProcessor, startProcessor, getQueueLength, isDialable } = queueModule;
 
 describe('callifiedAutoDialQueue', () => {
   beforeEach(() => {
+    writeAuditMock.mockClear();
     vi.useFakeTimers({ shouldAdvanceTime: true });
     stopProcessor();
     initiateCallForContactMock.mockReset().mockResolvedValue({ callifiedLeadId: 9001 });
@@ -83,10 +81,10 @@ describe('callifiedAutoDialQueue', () => {
     });
     assignQualifiedLeadRoundRobinMock.mockReset().mockResolvedValue(101);
     scheduleDnpRetryMock.mockReset().mockResolvedValue({ id: 11 });
-    clearDnpRetryStateMock.mockReset().mockResolvedValue({ id: 11 });
     schedulePendingRetryMock.mockReset().mockResolvedValue({ id: 11 });
 
     prisma.contact = prisma.contact || {};
+    prisma.contact.updateMany = vi.fn().mockResolvedValue({ count: 1 });
     prisma.contact.findUnique = vi.fn().mockResolvedValue({
       id: 11,
       tenantId: 1,
@@ -144,11 +142,13 @@ describe('callifiedAutoDialQueue', () => {
       campaignId: 42,
       userId: 7,
       interest: 'Auto-dial on lead creation',
+      historyType: 'auto',
+      requestedAt: expect.any(Number),
     });
 
     // Immediately after the dial succeeds the contact should be "connecting".
-    expect(prisma.contact.update).toHaveBeenCalledWith({
-      where: { id: 11, tenantId: 1 },
+    expect(prisma.contact.updateMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({ id: 11, tenantId: 1, callifiedLeadStatus: 'yet_to_call' }),
       data: {
         callifiedLeadStatus: 'connected',
         callifiedLeadStatusSource: 'auto_dial',
@@ -164,17 +164,18 @@ describe('callifiedAutoDialQueue', () => {
     await vi.advanceTimersByTimeAsync(50_000);
 
     expect(classifyLeadStatusMock).toHaveBeenCalledWith(1, 11, { userId: 7 });
-    expect(prisma.contact.update).toHaveBeenLastCalledWith({
-      where: { id: 11, tenantId: 1 },
+    expect(prisma.contact.updateMany).toHaveBeenLastCalledWith({
+      where: expect.objectContaining({ id: 11, tenantId: 1 }),
       data: {
         callifiedLeadStatus: 'qualified',
         callifiedLeadStatusSource: 'score',
         callifiedLeadStatusReason: 'High score',
         callifiedLeadStatusUpdatedAt: expect.any(Date),
+        callifiedDnpRetryCount: 0,
+        callifiedDnpNextRetryAt: null,
       },
     });
     expect(assignQualifiedLeadRoundRobinMock).toHaveBeenCalledWith(1, 11, 'qualified');
-    expect(clearDnpRetryStateMock).toHaveBeenCalledWith(11);
   });
 
   test('classification schedules DNP retry when call ends as DNP', async () => {
@@ -192,7 +193,21 @@ describe('callifiedAutoDialQueue', () => {
 
     expect(classifyLeadStatusMock).toHaveBeenCalledWith(1, 11, { userId: 7 });
     expect(scheduleDnpRetryMock).toHaveBeenCalledWith(1, 11);
-    expect(clearDnpRetryStateMock).not.toHaveBeenCalled();
+  });
+
+  test('preserves a manual status saved before delayed classification runs', async () => {
+    prisma.contact.findUnique.mockResolvedValueOnce({
+      id: 11, tenantId: 1, status: 'Lead', callifiedLeadStatus: 'yet_to_call',
+      phone: '+919876543210', callifiedCampaignId: 42,
+    }).mockResolvedValue({ id: 11, tenantId: 1, callifiedLeadStatus: 'junk', callifiedLeadStatusSource: 'manual' });
+
+    startProcessor();
+    enqueue({ tenantId: 1, contactId: 11, campaignId: 42, userId: 7 });
+    await vi.advanceTimersByTimeAsync(55_000);
+
+    expect(initiateCallForContactMock).toHaveBeenCalledOnce();
+    expect(classifyLeadStatusMock).not.toHaveBeenCalled();
+    expect(prisma.contact.updateMany).toHaveBeenCalledOnce();
   });
 
   test('classification keeps polling while review data is still pending', async () => {
@@ -220,16 +235,17 @@ describe('callifiedAutoDialQueue', () => {
     await vi.advanceTimersByTimeAsync(35_000);
 
     expect(classifyLeadStatusMock).toHaveBeenCalledTimes(2);
-    expect(prisma.contact.update).toHaveBeenLastCalledWith({
-      where: { id: 11, tenantId: 1 },
+    expect(prisma.contact.updateMany).toHaveBeenLastCalledWith({
+      where: expect.objectContaining({ id: 11, tenantId: 1 }),
       data: {
         callifiedLeadStatus: 'junk',
         callifiedLeadStatusSource: 'score',
         callifiedLeadStatusReason: 'Low score',
         callifiedLeadStatusUpdatedAt: expect.any(Date),
+        callifiedDnpRetryCount: 0,
+        callifiedDnpNextRetryAt: null,
       },
     });
-    expect(clearDnpRetryStateMock).toHaveBeenCalledWith(11);
   });
 
   test('enqueue skips a lead that is no longer dialable at process time', async () => {
@@ -287,10 +303,10 @@ describe('callifiedAutoDialQueue', () => {
 
     await vi.advanceTimersByTimeAsync(1000);
 
-    expect(prisma.contact.update).toHaveBeenCalledWith({
-      where: { id: 11, tenantId: 1 },
-      data: { callifiedDnpRetryCount: { increment: 1 } },
-    });
+    expect(prisma.contact.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: 11, tenantId: 1 }),
+      data: expect.objectContaining({ callifiedDnpRetryCount: { increment: 1 } }),
+    }));
     expect(initiateCallForContactMock).toHaveBeenCalledOnce();
   });
 
@@ -301,10 +317,56 @@ describe('callifiedAutoDialQueue', () => {
 
     await vi.advanceTimersByTimeAsync(1000);
 
-    expect(prisma.contact.update).not.toHaveBeenCalledWith(expect.objectContaining({
-      data: { callifiedDnpRetryCount: { increment: 1 } },
+    expect(prisma.contact.updateMany).not.toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ callifiedDnpRetryCount: { increment: 1 } }),
     }));
     expect(initiateCallForContactMock).not.toHaveBeenCalled();
+  });
+
+  test('does not consume a scheduled retry when Callified rejects the submission', async () => {
+    initiateCallForContactMock.mockRejectedValueOnce(Object.assign(new Error('Dialing paused'), { code: 'DIALING_PAUSED' }));
+    startProcessor();
+    enqueue({ tenantId: 1, contactId: 11, campaignId: 42, userId: 7, retryAttempt: true });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(initiateCallForContactMock).toHaveBeenCalledOnce();
+    expect(prisma.contact.updateMany).not.toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ callifiedDnpRetryCount: { increment: 1 } }),
+    }));
+  });
+
+  test('drops a queued retry when the saved due time changed before submission', async () => {
+    const dueAt = new Date(Date.now() - 1000);
+    prisma.contact.findUnique.mockResolvedValue({
+      id: 11, tenantId: 1, status: 'Lead', callifiedLeadStatus: 'pending',
+      phone: '+919876543210', callifiedCampaignId: 42, callifiedDnpNextRetryAt: null,
+    });
+    startProcessor();
+    enqueue({ tenantId: 1, contactId: 11, campaignId: 42, retryAttempt: true, retrySchedule: { status: 'pending', dueAt } });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(initiateCallForContactMock).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    { failure: { name: 'TimeoutError' }, code: 'CALLIFIED_UNCONFIRMED', message: 'Callified did not confirm the previous submission.' },
+    { failure: { status: 409, code: 'CALLIFIED_API_409', callifiedStage: 'dialing' }, code: 'CALLIFIED_API_409', message: 'Callified rejected the previous submission during dialing (HTTP 409 conflict).' },
+  ])('records $code with its new due time without immediately resubmitting it', async ({ failure, code, message }) => {
+    const dueAt = new Date(Date.now() - 1000);
+    prisma.contact.findUnique.mockResolvedValue({
+      id: 11, tenantId: 1, status: 'Lead', callifiedLeadStatus: 'pending',
+      phone: '+919876543210', callifiedCampaignId: 42, callifiedDnpNextRetryAt: dueAt, callifiedDnpRetryCount: 0,
+    });
+    initiateCallForContactMock.mockRejectedValueOnce(Object.assign(new Error('Provider did not accept submission'), failure));
+    startProcessor();
+    enqueue({ tenantId: 1, contactId: 11, campaignId: 42, retryAttempt: true, retrySchedule: { status: 'pending', dueAt } });
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(initiateCallForContactMock).toHaveBeenCalledOnce();
+    expect(writeAuditMock).toHaveBeenCalledWith('CallifiedRetry', 'DEFERRED', 11, null, 1, {
+      code, status: 'pending', dueAt, nextRetryAt, message,
+    });
+    expect(prisma.contact.updateMany).toHaveBeenCalledExactlyOnceWith({
+      where: { id: 11, tenantId: 1, callifiedLeadStatus: 'pending', callifiedDnpNextRetryAt: dueAt },
+      data: { callifiedDnpNextRetryAt: nextRetryAt },
+    });
   });
 
   test('bounds background classification reasons to the database column length', async () => {
@@ -318,8 +380,8 @@ describe('callifiedAutoDialQueue', () => {
 
     await vi.advanceTimersByTimeAsync(55_000);
 
-    expect(prisma.contact.update).toHaveBeenLastCalledWith({
-      where: { id: 11, tenantId: 1 },
+    expect(prisma.contact.updateMany).toHaveBeenLastCalledWith({
+      where: expect.objectContaining({ id: 11, tenantId: 1 }),
       data: expect.objectContaining({ callifiedLeadStatusReason: 'x'.repeat(190) }),
     });
   });

@@ -14,7 +14,8 @@ vi.mock('../utils/money', () => ({
   tenantCurrency: () => 'USD',
 }));
 
-vi.mock('../utils/date', () => ({
+vi.mock('../utils/date', async (importOriginal) => ({
+  ...await importOriginal(),
   formatDate: (d) => (d ? 'DATE' : '—'),
   formatDateTime: (d) => (d ? 'DATETIME' : '—'),
 }));

@@ -359,7 +359,6 @@
   }
 }
 @container (min-width: 1000px) { @layer settings-readability { .gs-invite { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; } } }
-.gs-tooltip { position: fixed; z-index: 10000; width: 320px; max-width: calc(100vw - 32px); max-height: calc(100dvh - 32px); overflow: auto; padding: 12px 16px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--modal-bg); color: var(--text-primary); font-size: 14px; line-height: 1.6; box-shadow: 0 8px 24px #0002; }
 .gs-dialog { inset: 0 !important; width: 100vw !important; height: 100dvh !important; max-width: none !important; max-height: none !important; transform: none !important; }
 .gs-dialog > :is(div, form) { max-height: calc(100dvh - 32px); overflow: auto; }
 .gs-dialog > .card { transform: none !important; }

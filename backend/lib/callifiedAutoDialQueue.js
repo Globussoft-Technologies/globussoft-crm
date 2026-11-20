@@ -13,10 +13,16 @@
 
 const prisma = require("./prisma");
 const callifiedClient = require("../services/callifiedClient");
+const { writeAudit } = require("./audit");
+const { friendlyProviderMessage, mapCallifiedError } = require("./callifiedErrors");
 const {
   CALL_STATUS,
   classifyLeadStatus,
   assignQualifiedLeadRoundRobin,
+  isManualLeadStatus,
+  leadStatusVersion,
+  preserveRetryStatus,
+  automaticLeadStatusData,
 } = require("./callifiedLeadStatus");
 
 /**
@@ -32,6 +38,7 @@ const inFlight = new Set();
 let isProcessing = false;
 let processorInterval = null;
 let wakeTimeout = null;
+let submitting = null;
 
 const PROCESS_INTERVAL_MS = Number(process.env.CALLIFIED_AUTO_DIAL_INTERVAL_MS) || 3000;
 const INTER_CALL_DELAY_MS = Number(process.env.CALLIFIED_AUTO_DIAL_DELAY_MS) || 800;
@@ -80,7 +87,7 @@ async function wasRecentlyDialed(tenantId, contactId, sinceMs = 60 * 1000) {
   return Boolean(recent);
 }
 
-function enqueue({ tenantId, contactId, campaignId, userId, retryAttempt = false }) {
+function enqueue({ tenantId, contactId, campaignId, userId, retryAttempt = false, retrySchedule = null }) {
   if (!tenantId || !contactId || !campaignId) {
     console.log("[callifiedAutoDial] enqueue skipped: missing tenantId/contactId/campaignId", {
       tenantId,
@@ -106,6 +113,7 @@ function enqueue({ tenantId, contactId, campaignId, userId, retryAttempt = false
     campaignId: Number(campaignId),
     userId: userId ? Number(userId) : null,
     retryAttempt: Boolean(retryAttempt),
+    retrySchedule,
     enqueuedAt: Date.now(),
     attempts: 0,
   });
@@ -124,22 +132,26 @@ function enqueue({ tenantId, contactId, campaignId, userId, retryAttempt = false
  * or the call reaches a terminal state. This prevents Gemini from classifying
  * an in-progress call as Junk before the person even answers.
  */
-async function runDelayedClassification(tenantId, contactId, userId, attempt = 1) {
+async function runDelayedClassification(tenantId, contactId, userId, attempt = 1, callLogId) {
   try {
+    const where = { id: contactId, tenantId };
+    const contact = await prisma.contact.findUnique({ where });
+    if (!contact || isManualLeadStatus(contact)) return;
     const classification = await classifyLeadStatus(tenantId, contactId, { userId });
 
     // If there is still no review/transcript data, keep polling unless we've
     // exhausted the retry budget.
     const stillPending =
-      classification.status === CALL_STATUS.YET_TO_CALL &&
+      classification.status === CALL_STATUS.CONNECTED ||
+      (classification.status === CALL_STATUS.YET_TO_CALL &&
       classification.source === "score" &&
       /No Callified review data available yet|No Callified call has been made/i.test(
         classification.reason || "",
-      );
+      ));
 
     if (stillPending && attempt < CLASSIFY_MAX_ATTEMPTS) {
       setTimeout(
-        () => runDelayedClassification(tenantId, contactId, userId, attempt + 1),
+        () => runDelayedClassification(tenantId, contactId, userId, attempt + 1, callLogId),
         CLASSIFY_POLL_INTERVAL_MS,
       );
       console.log(
@@ -148,22 +160,16 @@ async function runDelayedClassification(tenantId, contactId, userId, attempt = 1
       return;
     }
 
-    const boundedReason = String(classification.reason || "").slice(0, 190);
-    await prisma.contact.update({
-      where: { id: contactId, tenantId },
-      data: {
-        callifiedLeadStatus: classification.status,
-        callifiedLeadStatusSource: classification.source,
-        callifiedLeadStatusReason: boundedReason,
-        callifiedLeadStatusUpdatedAt: new Date(),
-      },
+    if (preserveRetryStatus(contact.callifiedLeadStatus, classification.status)) return;
+    const changed = await prisma.contact.updateMany({
+      where: { ...where, ...leadStatusVersion(contact) },
+      data: automaticLeadStatusData(contact, classification),
     });
+    if (!changed.count) return;
+    if (callLogId) await require('./callifiedAttemptStatus').recordStandaloneOutcome(tenantId, contactId, classification.status, userId, new Date(), callLogId);
 
     if (classification.status === CALL_STATUS.QUALIFIED) {
       await assignQualifiedLeadRoundRobin(tenantId, contactId, classification.status);
-      await getDnpRetryEngine().clearDnpRetryState(contactId).catch(() => {});
-    } else if (classification.status === CALL_STATUS.JUNK) {
-      await getDnpRetryEngine().clearDnpRetryState(contactId).catch(() => {});
     } else if (classification.status === CALL_STATUS.DNP) {
       await getDnpRetryEngine().scheduleDnpRetry(tenantId, contactId).catch((e) => {
         console.error(`[callifiedAutoDial] scheduleDnpRetry failed for contact ${contactId}:`, e.message);
@@ -185,8 +191,8 @@ async function runDelayedClassification(tenantId, contactId, userId, attempt = 1
   }
 }
 
-function scheduleDelayedClassification(tenantId, contactId, userId) {
-  setTimeout(() => runDelayedClassification(tenantId, contactId, userId, 1), CLASSIFY_INITIAL_DELAY_MS);
+function scheduleDelayedClassification(tenantId, contactId, userId, callLogId) {
+  setTimeout(() => runDelayedClassification(tenantId, contactId, userId, 1, callLogId), CLASSIFY_INITIAL_DELAY_MS);
 }
 
 async function processNext() {
@@ -194,9 +200,11 @@ async function processNext() {
   isProcessing = true;
 
   const item = queue.shift();
+  submitting = item;
   const { tenantId, contactId, campaignId, userId } = item;
   const key = dialKey(tenantId, contactId);
   inFlight.add(key);
+  let retryPolicy;
 
   try {
     item.attempts += 1;
@@ -212,12 +220,29 @@ async function processNext() {
         phone: true,
         callifiedCampaignId: true,
         callifiedLeadStatus: true,
+        callifiedLeadStatusSource: true,
+        callifiedLeadStatusUpdatedAt: true,
+        callifiedDnpNextRetryAt: true,
+        callifiedDnpRetryCount: true,
         assignedToId: true,
       },
     });
     if (!isDialable(contact)) {
       console.log(`[callifiedAutoDial] contact ${contactId} no longer dialable; skipping`);
       return;
+    }
+    if (!item.retryAttempt && contact.callifiedDnpNextRetryAt) return;
+
+    if (item.retrySchedule) {
+      const { status, dueAt } = item.retrySchedule;
+      if (contact.tenantId !== tenantId || contact.callifiedLeadStatus !== status ||
+          contact.callifiedCampaignId !== campaignId || !contact.callifiedDnpNextRetryAt ||
+          new Date(contact.callifiedDnpNextRetryAt).getTime() !== new Date(dueAt).getTime()) return;
+      const engine = getDnpRetryEngine();
+      retryPolicy = status === CALL_STATUS.PENDING
+        ? await engine.getPendingRetrySettings(tenantId)
+        : await engine.getDnpRetrySettings(tenantId);
+      if (!retryPolicy.enabled || contact.callifiedDnpRetryCount >= retryPolicy.maxRetries) return;
     }
 
     // Cooldown guard: don't redial a lead that was just called (e.g. imported
@@ -227,75 +252,79 @@ async function processNext() {
       return;
     }
 
-    // Mark the lead as "connecting" before dialing so the UI doesn't show a
-    // stale "Yet to call" or a premature classification while Callified is
-    // still ringing the callee.
-    const priorStatus = contact.callifiedLeadStatus || CALL_STATUS.YET_TO_CALL;
-    item.priorStatus = priorStatus;
-    // A scheduled retry is charged only after it reaches the actual dial path.
-    // Queue duplicates and cooldown/no-longer-dialable skips therefore do not
-    // exhaust the tenant's configured retry budget.
-    if (item.retryAttempt) {
-      await prisma.contact.update({
-        where: { id: contactId, tenantId },
-        data: { callifiedDnpRetryCount: { increment: 1 } },
-      });
-    }
-    await prisma.contact.update({
-      where: { id: contactId, tenantId },
-      data: {
-        callifiedLeadStatus: CALL_STATUS.CONNECTED,
-        callifiedLeadStatusSource: "auto_dial",
-        callifiedLeadStatusReason: "Auto-dial in progress.",
-        callifiedLeadStatusUpdatedAt: new Date(),
-      },
-    });
-
     console.log(
       `[callifiedAutoDial] dialing contact ${contactId} (campaign ${campaignId}, attempt ${item.attempts})`,
     );
-    await callifiedClient.initiateCallForContact({
+    const submission = await callifiedClient.initiateCallForContact({
+      historyType: item.retrySchedule?.status || (item.retryAttempt ? 'dnp' : 'auto'),
       tenantId,
       contactId,
       campaignId,
       userId,
-      interest: "Auto-dial on lead creation",
+      interest: item.retrySchedule ? `${item.retrySchedule.status === CALL_STATUS.PENDING ? "Pending" : "DNP"} retry` : "Auto-dial on lead creation",
+      requestedAt: item.retrySchedule ? contact.callifiedLeadStatusUpdatedAt : item.enqueuedAt,
+    });
+    const changed = await prisma.contact.updateMany({
+      where: { id: contactId, tenantId, ...leadStatusVersion(contact) },
+      data: {
+        // Rejected submissions and safety skips do not use a retry.
+        ...(item.retryAttempt ? { callifiedDnpRetryCount: { increment: 1 }, callifiedDnpNextRetryAt: null } : {}),
+        callifiedLeadStatus: CALL_STATUS.CONNECTED,
+        callifiedLeadStatusSource: 'auto_dial',
+        callifiedLeadStatusReason: 'Auto-dial in progress.',
+        callifiedLeadStatusUpdatedAt: new Date(),
+      },
     });
     console.log(`[callifiedAutoDial] dialed contact ${contactId} successfully`);
 
     // Calls complete asynchronously. Poll for transcripts/reviews instead of
     // classifying immediately, which avoids Gemini scoring an empty transcript
     // as Junk before the person answers.
-    scheduleDelayedClassification(tenantId, contactId, userId);
+    if (changed.count) scheduleDelayedClassification(tenantId, contactId, userId, submission?.callLogId);
   } catch (e) {
     console.error(`[callifiedAutoDial] failed to dial contact ${contactId}:`, e.message);
 
     // Retry transient failures a few times within the first 10 minutes.
     // Remove from inFlight so the retried item can be re-enqueued cleanly.
+    const blocked = ['DIALING_PAUSED', 'LEAD_ALREADY_QUALIFIED', 'LEAD_CALL_LOCKED', 'LEAD_CALL_ACTIVE', 'CONTACT_NOT_FOUND'].includes(e.code);
+    const unconfirmed = ['TimeoutError', 'AbortError'].includes(e.name);
+    const providerConflict = e.status === 409 || e.code === 'CALLIFIED_API_409';
     if (
+      !blocked && !unconfirmed && !providerConflict &&
       item.attempts < MAX_RETRY_ATTEMPTS &&
       Date.now() - item.enqueuedAt < MAX_RETRY_AGE_MS
     ) {
       inFlight.delete(key);
-      // Restore the previous dialable status so the retry is not rejected by
-      // isDialable (which refuses to redial connected/qualified/junk leads).
-      try {
-        await prisma.contact.update({
-          where: { id: contactId },
-          data: {
-            callifiedLeadStatus: item.priorStatus || CALL_STATUS.YET_TO_CALL,
-            callifiedLeadStatusSource: "auto_dial",
-            callifiedLeadStatusReason: "Transient dial failure; will retry.",
-            callifiedLeadStatusUpdatedAt: new Date(),
-          },
-        });
-      } catch (restoreErr) {
-        console.error(`[callifiedAutoDial] failed to restore status for retry contact ${contactId}:`, restoreErr.message);
-      }
       queue.push(item);
+    } else if (!blocked && retryPolicy) {
+      // Back off after exhausting queue attempts without using a call retry.
+      const { status, dueAt } = item.retrySchedule;
+      const refusal = friendlyProviderMessage(e.message);
+      const stage = ['lead creation', 'campaign enrollment', 'dialing'].includes(e.callifiedStage) ? ` during ${e.callifiedStage}` : '';
+      const diagnostic = unconfirmed
+        ? { code: 'CALLIFIED_UNCONFIRMED', error: 'Callified did not confirm the previous submission.' }
+        : refusal || (providerConflict
+          ? { code: 'CALLIFIED_API_409', error: `Callified rejected the previous submission${stage} (HTTP 409 conflict).` }
+          : mapCallifiedError(e, 'The previous retry could not be submitted to Callified.').body);
+      const plannedRetryAt = getDnpRetryEngine().computeNextRetryAt(retryPolicy);
+      const backoff = refusal?.code === 'CALLING_LEAD_ON_DND' ? 24 * 60 * 60_000 :
+        refusal?.code === 'CALLING_OUTSIDE_HOURS' ? 30 * 60_000 : 0;
+      const nextRetryAt = backoff ? new Date(Math.max(Date.now() + backoff, plannedRetryAt.getTime())) : plannedRetryAt;
+      const deferred = await prisma.contact.updateMany({
+        where: { id: contactId, tenantId, callifiedLeadStatus: status, callifiedDnpNextRetryAt: dueAt },
+        data: { callifiedDnpNextRetryAt: nextRetryAt },
+      }).catch((error) => console.error(`[callifiedAutoDial] failed to defer retry for contact ${contactId}:`, error.message));
+      if (deferred?.count) {
+        // Store known copy or an HTTP-status summary, never a provider response body.
+        await writeAudit('CallifiedRetry', 'DEFERRED', contactId, null, tenantId, {
+          code: diagnostic.code, status, dueAt, nextRetryAt,
+          message: refusal || providerConflict || unconfirmed ? diagnostic.error : undefined,
+        });
+      }
     }
   } finally {
     isProcessing = false;
+    submitting = null;
     inFlight.delete(key);
     // Drain the next item after a short pause so calls stay sequential.
     if (wakeTimeout) clearTimeout(wakeTimeout);
@@ -343,10 +372,24 @@ function getQueueLength() {
   return queue.length;
 }
 
+function getNewLeadQueueCounts(tenantId, userId = null) {
+  const matches = (item) => item && !item.retryAttempt && item.tenantId === tenantId &&
+    (userId === null || item.userId === userId);
+  return { queued: queue.filter(matches).length, submitting: Number(matches(submitting) || false) };
+}
+
+function cancelTenant(tenantId) {
+  for (let index = queue.length - 1; index >= 0; index--) {
+    if (queue[index].tenantId === Number(tenantId)) queue.splice(index, 1);
+  }
+}
+
 module.exports = {
   enqueue,
   startProcessor,
   stopProcessor,
   getQueueLength,
+  getNewLeadQueueCounts,
   isDialable,
+  cancelTenant,
 };

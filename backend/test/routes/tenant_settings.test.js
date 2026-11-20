@@ -444,6 +444,21 @@ describe('PUT /api/tenant-settings/:key', () => {
 });
 
 describe('PUT /api/tenant-settings/callified', () => {
+  test('recalculates existing Pending retry times when the timing policy changes', async () => {
+    const key = KEYS.CALLIFIED_PENDING_RETRY_INTERVAL_MINUTES;
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: '60' });
+    prisma.tenantSetting.upsert.mockResolvedValue({ id: 201, key, value: '5' });
+    prisma.contact.updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const res = await request(makeApp())
+      .put('/api/tenant-settings/callified')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ settings: [{ key, value: '5' }] });
+    expect(res.status).toBe(200);
+    expect(prisma.contact.updateMany).toHaveBeenCalledExactlyOnceWith({
+      where: { tenantId: 1, status: 'Lead', deletedAt: null, callifiedLeadStatus: 'pending', callifiedDnpNextRetryAt: { not: null } },
+      data: { callifiedDnpNextRetryAt: null },
+    });
+  });
   test('validates then saves all Generic Callified settings in one transaction', async () => {
     prisma.tenantSetting.findUnique.mockResolvedValue(null);
     prisma.tenantSetting.upsert

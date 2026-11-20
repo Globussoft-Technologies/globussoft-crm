@@ -1,6 +1,6 @@
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
-import { formatDateMedium as formatDate, formatDateTime } from "../utils/date";
+import { formatDateMedium as formatDate, formatDateTime, formatTimestamp, tenantTimezone } from "../utils/date";
 import {
   Fragment,
   useState,
@@ -35,24 +35,25 @@ import {
   FileText,
   Filter,
   SlidersHorizontal,
-  Info,
   Settings,
+  Zap,
   ChevronLeft,
   ChevronRight,
   ChevronDown,
+  Activity as CallStatusIcon,
   ChevronUp,
   Copy,
   Check,
   MapPin,
-  Table2,
-  Rows3,
-  AlignJustify,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import ColumnPicker from "../components/ColumnPicker";
 import FilterPanel from "../components/FilterPanel";
 import InlineCellEditor from "../components/InlineCellEditor";
 import ScrollableSelect from "../components/ScrollableSelect";
+import AutomationSelect from "../components/AutomationSelect";
+import LeadScheduleDialog from "../components/LeadScheduleDialog";
+import AutomationStepper from "../components/AutomationStepper";
 import SearchableSelect from "../components/ui/SearchableSelect";
 import TopScrollSync from "../components/TopScrollSync";
 import {
@@ -70,9 +71,15 @@ import {
 } from "../components/wellness/LeadCallAction";
 import CallifiedCallDetailsDrawer from "../components/CallifiedCallDetailsDrawer";
 import CallifiedCallStatusDrawer from "../components/CallifiedCallStatusDrawer";
+import CampaignRuleValue from "../components/CampaignRuleValue";
+import SettingsHelp from "../components/settings/SettingsHelp";
 import CsvImportExportToolbar from "../components/wellness/CsvImportExportToolbar";
 import DuplicateContactModal from "../components/DuplicateContactModal";
 import GenericLeadsAssistant from "../components/GenericLeadsAssistant";
+import { LeadCampaignDial, LeadSelectionBar } from '../components/LeadWorkspaceControls';
+import { CallifiedConnection, CrmDialClock, DialToolbar, LeadDialRuns } from '../components/LeadDialWorkspace';
+import { runLeadBatches } from '../utils/leadBulkWork';
+import { useLeadCheckboxDrag } from '../utils/useLeadCheckboxDrag';
 import { buildAssistantFilterState } from "../utils/leadAssistantFilters";
 import { richTextToPlainText } from "../utils/richText";
 import PickupCustomerStatusDialog from "../components/PickupCustomerStatusDialog";
@@ -537,15 +544,6 @@ const LEADS_ACTIONS_COLUMN_WIDTH = 176;
 const LEADS_TRAVEL_ACTIONS_COLUMN_WIDTH = 224;
 const LEADS_SOURCE_COLUMN_MIN_WIDTH = 190;
 const LEADS_ASSIGNED_COLUMN_MIN_WIDTH = 190;
-const LEAD_CHECKBOX_STYLE = {
-  width: "16px",
-  height: "16px",
-  minWidth: "16px",
-  margin: 0,
-  cursor: "pointer",
-  flexShrink: 0,
-  verticalAlign: "middle",
-};
 const LEADS_HEADER_MENU_WIDTH = 300;
 const LEADS_HEADER_MENU_SUBMENU_WIDTH = 320;
 const LEADS_HEADER_MENU_GAP = 6;
@@ -1650,17 +1648,19 @@ function detectGenericPhoneCountryCode() {
     .catch(() => null);
 }
 
-function buildLeadStatusTooltip(lead, { maxRetries = 3 } = {}) {
+function LeadCallStatusHelp({ lead, maxRetries = 3, retryEnabled = true }) {
   const source = lead.callifiedLeadStatusSource;
   const reason = lead.callifiedLeadStatusReason;
   const updatedAt = lead.callifiedLeadStatusUpdatedAt;
   const sourceLabel =
     source === "gemini"
       ? "Gemini AI"
-      : source === "score"
+      : source === "transcripts_api"
+        ? "callified_Transcripts"
+        : source === "score"
         ? "Callified score / appointment"
         : source === "manual"
-          ? "Manual override"
+          ? (reason === "Manual call in progress." ? "Manual call" : "Manual override")
           : source === "auto_dial"
             ? "Auto-dial"
             : source || "Unknown";
@@ -1673,20 +1673,25 @@ function buildLeadStatusTooltip(lead, { maxRetries = 3 } = {}) {
     typeof lead.callifiedDnpRetryCount === "number"
   ) {
     parts.push(`Retry: ${lead.callifiedDnpRetryCount}/${maxRetries}`);
+    if (retryEnabled && lead.callifiedDnpRetryCount < maxRetries && lead.callifiedDnpNextRetryAt) {
+      parts.push(`Next retry: ${formatTimestamp(lead.callifiedDnpNextRetryAt, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" })}`);
+    }
   }
   if (updatedAt) {
     try {
       const d = new Date(updatedAt);
       if (!Number.isNaN(d.getTime())) {
         parts.push(
-          `Updated: ${d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`,
+          `Updated: ${formatTimestamp(d, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`,
         );
       }
     } catch (_) {
       /* ignore */
     }
   }
-  return parts.join("\n");
+  return <SettingsHelp label={`Call status for ${lead.name || "lead"}`}>
+    {parts.map((part) => <div key={part}>{part}</div>)}
+  </SettingsHelp>;
 }
 
 // Canonical call-status values for the generic CRM "Call Status" column.
@@ -1757,19 +1762,6 @@ function getCallStatusMeta(raw) {
   );
 }
 
-const RETRY_TIMEZONES = [
-  "UTC",
-  "Asia/Kolkata",
-  "Asia/Dubai",
-  "Asia/Singapore",
-  "Europe/London",
-  "America/New_York",
-  "America/Chicago",
-  "America/Denver",
-  "America/Los_Angeles",
-  "Australia/Sydney",
-];
-
 function RetryTimingControls({
   prefix,
   mode,
@@ -1781,7 +1773,6 @@ function RetryTimingControls({
   timeLocal,
   onTimeLocalChange,
   timezone,
-  onTimezoneChange,
   disabled,
 }) {
   const days = Math.floor(intervalMinutes / 1440);
@@ -1792,9 +1783,6 @@ function RetryTimingControls({
       5,
       Math.min(30 * 1440, nextDays * 1440 + nextHours * 60 + nextMinutes),
     );
-  const timezones = RETRY_TIMEZONES.includes(timezone)
-    ? RETRY_TIMEZONES
-    : [timezone, ...RETRY_TIMEZONES];
   const fieldStyle = {
     width: "100%",
     padding: "0.5rem 0.6rem",
@@ -2011,24 +1999,7 @@ function RetryTimingControls({
               />
             </div>
           </div>
-          <div style={{ marginTop: "0.5rem" }}>
-            <label htmlFor={`${prefix}-timezone`} style={labelStyle}>
-              Timezone
-            </label>
-            <select
-              id={`${prefix}-timezone`}
-              value={timezone}
-              disabled={disabled}
-              onChange={(e) => onTimezoneChange(e.target.value)}
-              style={fieldStyle}
-            >
-              {timezones.map((zone) => (
-                <option key={zone} value={zone}>
-                  {zone}
-                </option>
-              ))}
-            </select>
-          </div>
+          <p style={labelStyle}>Workspace timezone: {timezone}</p>
         </>
       )}
     </div>
@@ -2903,8 +2874,6 @@ const Leads = ({ initialListState = null } = {}) => {
       return "comfortable";
     }
   });
-  const [leadTableDensityMenuOpen, setLeadTableDensityMenuOpen] =
-    useState(false);
   // Generic and Travel share tenant-scoped lead custom fields and column
   // preferences. Wellness keeps its separate patient field surfaces.
   const supportsLeadCustomFields = isGeneric || isTravel;
@@ -3040,9 +3009,9 @@ const Leads = ({ initialListState = null } = {}) => {
   }, [loadPlotAssignmentInventory]);
   const [genericActionsToolbarHost, setGenericActionsToolbarHost] =
     useState(null);
-  const [genericBulkActionsHost, setGenericBulkActionsHost] = useState(null);
   const [travelActionsToolbarHost, setTravelActionsToolbarHost] = useState(null);
   const [mobileLeadActionsOpen, setMobileLeadActionsOpen] = useState(false);
+  const [genericTransferHost, setGenericTransferHost] = useState(null);
   const [leadTagCatalog, setLeadTagCatalog] = useState([]);
   const [staff, setStaff] = useState([]);
   const staffRequestId = useRef(0);
@@ -3054,6 +3023,8 @@ const Leads = ({ initialListState = null } = {}) => {
   const genericPhoneCountryUserChangedRef = useRef(false);
   const genericPhoneCountryDetectionRunRef = useRef(false);
   const fetchLeadsRef = useRef(null);
+  const refreshLeadsRef = useRef(null);
+  const refreshInFlight = useRef(null);
   const classifyVisibleLeadsRef = useRef(null);
   const storedLeadsListState = readLeadsPaginationState(
     leadsPaginationStorageKey,
@@ -3102,9 +3073,11 @@ const Leads = ({ initialListState = null } = {}) => {
   const genericPageEffectInitializedRef = useRef(false);
   const genericQueryEffectInitializedRef = useRef(false);
   const [pageInput, setPageInput] = useState(String(initialLeadsPage + 1));
+  const [scheduleSelection, setScheduleSelection] = useState(null);
   const [selectedLeads, setSelectedLeads] = useState([]);
   const [bulkDeleting, setBulkDeleting] = useState(false);
-  const [selectingAllPresent, setSelectingAllPresent] = useState(false);
+  const dragCheckboxProps = useLeadCheckboxDrag(setSelectedLeads, isGeneric);
+  const selectedLeadIds = useMemo(() => new Set(selectedLeads), [selectedLeads]);
 
   // Keep router pagination authoritative when the list is remounted after a
   // detail view. This also repairs a transient page-one state if another
@@ -3249,16 +3222,16 @@ const Leads = ({ initialListState = null } = {}) => {
       return [];
     }
   });
-  const [campaignDropdownOpen, setCampaignDropdownOpen] = useState(false);
   // Generic CRM Leads page — auto-campaign assignment rules (replaces the
   // single auto-campaign dropdown). Toolbar dropdown shows a rule grid.
   const [autoCampaignRulesOpen, setAutoCampaignRulesOpen] = useState(false);
   const [autoCampaignRulesEnabled, setAutoCampaignRulesEnabled] =
     useState(false);
   const [autoCampaignRules, setAutoCampaignRules] = useState([]);
-  const [savedAutoCampaignRuleIds, setSavedAutoCampaignRuleIds] = useState(
-    new Set(),
-  );
+  const [savedCampaignPayload, setSavedCampaignPayload] = useState(null);
+  const [campaignSaveError, setCampaignSaveError] = useState(null);
+  const campaignEditRevision = useRef(0);
+  const campaignEditsPending = useRef(false);
   const [autoCampaignRulesLoading, setAutoCampaignRulesLoading] =
     useState(false);
   const [autoCampaignRulesSaving, setAutoCampaignRulesSaving] = useState(false);
@@ -3418,9 +3391,18 @@ const Leads = ({ initialListState = null } = {}) => {
   // Sequential one-by-one call queue
   const [callQueue, setCallQueue] = useState([]);
   const [callQueueActive, setCallQueueActive] = useState(false);
+  const [dialRunsVersion, setDialRunsVersion] = useState(0);
+  const [bulkProgress, setBulkProgress] = useState(null);
+  const bulkWorking = useRef(false);
   const [callStatusDrawerOpen, setCallStatusDrawerOpen] = useState(false);
+  const [confirmDrawerStop, setConfirmDrawerStop] = useState(false);
   const [classifyingLeads, setClassifyingLeads] = useState(new Set());
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false);
+  const [automationSection, setAutomationSection] = useState("dialing");
+  const [automationDirty, setAutomationDirty] = useState(false);
+  const [automationSaveStatus, setAutomationSaveStatus] = useState('Changes save automatically.');
+  const automationDirtyRef = useRef(false);
+  const automationSaveRef = useRef(null);
   const [callSettingsSaving, setCallSettingsSaving] = useState(false);
   // Generic CRM Leads page — DNP retry settings (max retries + interval).
   const [dnpRetryEnabled, setDnpRetryEnabled] = useState(true);
@@ -3438,7 +3420,7 @@ const Leads = ({ initialListState = null } = {}) => {
   const [pendingRetryMode, setPendingRetryMode] = useState("delay");
   const [pendingDayInterval, setPendingDayInterval] = useState(1);
   const [pendingTimeLocal, setPendingTimeLocal] = useState("10:00");
-  const [retryTimezone, setRetryTimezone] = useState("UTC");
+  const retryTimezone = tenantTimezone(auth?.tenant) || "UTC";
   const [pendingSettingsLoading, setPendingSettingsLoading] = useState(false);
   // Generic CRM Leads page — auto-dial new leads toggle.
   const [autoDialNewLeadsEnabled, setAutoDialNewLeadsEnabled] = useState(true);
@@ -4178,57 +4160,78 @@ const Leads = ({ initialListState = null } = {}) => {
     phone: "",
   });
 
+  const getLeadFiltersQuery = (filterOverrides) => {
+    const effectiveAdvancedFilters =
+      filterOverrides?.advancedFilters ?? advancedFilters;
+    const effectiveSearchTerm = filterOverrides?.searchTerm ?? searchTerm;
+    const effectiveNameStartsWith =
+      filterOverrides?.nameStartsWith ?? nameStartsWith;
+    const effectiveSourceFilter =
+      filterOverrides?.sourceFilter ?? sourceFilter;
+    const effectiveCampaignFilter =
+      filterOverrides?.campaignFilter ?? campaignFilter;
+    const effectiveLeadStatusFilter =
+      filterOverrides?.leadStatusFilter ?? leadStatusFilter;
+    const effectiveAssigneeFilter =
+      filterOverrides?.assigneeFilter ?? assigneeFilter;
+    const effectiveScoreMin = filterOverrides?.scoreMin ?? scoreMin;
+    const effectiveScoreMax = filterOverrides?.scoreMax ?? scoreMax;
+    const filtersQs =
+      effectiveAdvancedFilters.length > 0
+        ? `&filters=${encodeURIComponent(JSON.stringify(effectiveAdvancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))))}`
+        : "";
+    const genericSearchQs =
+      isGeneric && effectiveSearchTerm.trim()
+        ? `&q=${encodeURIComponent(effectiveSearchTerm.trim())}`
+        : "";
+    const matchingCampaignIds =
+      isGeneric && effectiveSearchTerm.trim()
+        ? callifiedCampaigns
+            .filter((campaign) =>
+              String(campaign?.name || "")
+                .toLowerCase()
+                .includes(effectiveSearchTerm.trim().toLowerCase()),
+            )
+            .map((campaign) => Number(campaign.id))
+            .filter(
+              (campaignId) => Number.isInteger(campaignId) && campaignId > 0,
+            )
+            .slice(0, 100)
+        : [];
+    const campaignSearchQs = matchingCampaignIds.length
+      ? `&callifiedCampaignIds=${matchingCampaignIds.join(",")}`
+      : "";
+    const genericFilterQs = isGeneric
+      ? `${effectiveNameStartsWith ? `&nameStartsWith=${encodeURIComponent(effectiveNameStartsWith)}` : ""}${effectiveSourceFilter ? `&leadSource=${encodeURIComponent(effectiveSourceFilter)}` : ""}${effectiveCampaignFilter ? `&callifiedCampaignId=${encodeURIComponent(effectiveCampaignFilter)}` : ""}${effectiveLeadStatusFilter ? `&callifiedLeadStatus=${encodeURIComponent(effectiveLeadStatusFilter)}` : ""}${effectiveAssigneeFilter === "unassigned" ? "&unassigned=true" : effectiveAssigneeFilter ? `&assignedToId=${encodeURIComponent(effectiveAssigneeFilter)}` : ""}${effectiveScoreMin !== "" ? `&scoreMin=${encodeURIComponent(effectiveScoreMin)}` : ""}${effectiveScoreMax !== "" ? `&scoreMax=${encodeURIComponent(effectiveScoreMax)}` : ""}`
+      : "";
+    // Keep Generic CRM rows visible after an inline CRM Status change.
+    const crmStatusQs = isGeneric ? "&includeCrmStatuses=true" : "";
+    return `${genericSearchQs}${campaignSearchQs}${genericFilterQs}${filtersQs}${crmStatusQs}`;
+  };
+
+  const leadFiltersQuery = getLeadFiltersQuery();
+  const [selectingAllResults, setSelectingAllResults] = useState(false);
+  const allResultsRequest = useRef(null);
+  useEffect(() => {
+    if (!isGeneric) return;
+    setSelectedLeads((previous) => previous.length ? [] : previous);
+    setSelectingAllResults(false);
+    return () => {
+      allResultsRequest.current?.abort();
+      allResultsRequest.current = null;
+    };
+  }, [isGeneric, leadFiltersQuery]);
+
   const fetchLeads = async ({
     background = false,
+    reportRefreshFailure = false,
     pageOverride,
     filterOverrides = null,
   } = {}) => {
     const requestSequence = ++leadRequestSequenceRef.current;
     if (!background) setLoading(true);
     try {
-      const effectiveAdvancedFilters =
-        filterOverrides?.advancedFilters ?? advancedFilters;
-      const effectiveSearchTerm = filterOverrides?.searchTerm ?? searchTerm;
-      const effectiveNameStartsWith =
-        filterOverrides?.nameStartsWith ?? nameStartsWith;
-      const effectiveSourceFilter =
-        filterOverrides?.sourceFilter ?? sourceFilter;
-      const effectiveCampaignFilter =
-        filterOverrides?.campaignFilter ?? campaignFilter;
-      const effectiveLeadStatusFilter =
-        filterOverrides?.leadStatusFilter ?? leadStatusFilter;
-      const effectiveAssigneeFilter =
-        filterOverrides?.assigneeFilter ?? assigneeFilter;
-      const effectiveScoreMin = filterOverrides?.scoreMin ?? scoreMin;
-      const effectiveScoreMax = filterOverrides?.scoreMax ?? scoreMax;
-      const filtersQs =
-        effectiveAdvancedFilters.length > 0
-          ? `&filters=${encodeURIComponent(JSON.stringify(effectiveAdvancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))))}`
-          : "";
-      const genericSearchQs =
-        isGeneric && effectiveSearchTerm.trim()
-          ? `&q=${encodeURIComponent(effectiveSearchTerm.trim())}`
-          : "";
-      const matchingCampaignIds =
-        isGeneric && effectiveSearchTerm.trim()
-          ? callifiedCampaigns
-              .filter((campaign) =>
-                String(campaign?.name || "")
-                  .toLowerCase()
-                  .includes(effectiveSearchTerm.trim().toLowerCase()),
-              )
-              .map((campaign) => Number(campaign.id))
-              .filter(
-                (campaignId) => Number.isInteger(campaignId) && campaignId > 0,
-              )
-              .slice(0, 100)
-          : [];
-      const campaignSearchQs = matchingCampaignIds.length
-        ? `&callifiedCampaignIds=${matchingCampaignIds.join(",")}`
-        : "";
-      const genericFilterQs = isGeneric
-        ? `${effectiveNameStartsWith ? `&nameStartsWith=${encodeURIComponent(effectiveNameStartsWith)}` : ""}${effectiveSourceFilter ? `&leadSource=${encodeURIComponent(effectiveSourceFilter)}` : ""}${effectiveCampaignFilter ? `&callifiedCampaignId=${encodeURIComponent(effectiveCampaignFilter)}` : ""}${effectiveLeadStatusFilter ? `&callifiedLeadStatus=${encodeURIComponent(effectiveLeadStatusFilter)}` : ""}${effectiveAssigneeFilter === "unassigned" ? "&unassigned=true" : effectiveAssigneeFilter ? `&assignedToId=${encodeURIComponent(effectiveAssigneeFilter)}` : ""}${effectiveScoreMin !== "" ? `&scoreMin=${encodeURIComponent(effectiveScoreMin)}` : ""}${effectiveScoreMax !== "" ? `&scoreMax=${encodeURIComponent(effectiveScoreMax)}` : ""}`
-        : "";
+      const filtersQuery = getLeadFiltersQuery(filterOverrides);
       const genericSortQs =
         isGeneric &&
         GENERIC_LEAD_SERVER_SORT_KEYS.has(sortConfig.key) &&
@@ -4238,11 +4241,8 @@ const Leads = ({ initialListState = null } = {}) => {
       const paginationQs = isGeneric
         ? `&page=${pageOverride ?? leadsPage + 1}&limit=${genericLeadsPageSize}`
         : "&page=1&limit=500";
-      // Keep Generic CRM rows visible after an inline CRM Status change.
-      // Lifecycle Stage (the pipeline status) remains a separate field.
-      const crmStatusQs = isGeneric ? "&includeCrmStatuses=true" : "";
       const data = await fetchApi(
-        `/api/contacts?status=Lead${paginationQs}${genericSearchQs}${campaignSearchQs}${genericFilterQs}${genericSortQs}${filtersQs}${crmStatusQs}`,
+        `/api/contacts?status=Lead${paginationQs}${genericSortQs}${filtersQuery}`,
       );
       let rows = Array.isArray(data)
         ? data
@@ -4263,7 +4263,7 @@ const Leads = ({ initialListState = null } = {}) => {
           const pageResults = await Promise.all(
             pageNumbers.map((page) =>
               fetchApi(
-                `/api/contacts?status=Lead&page=${page}&limit=500${genericSearchQs}${campaignSearchQs}${genericFilterQs}${genericSortQs}${filtersQs}${crmStatusQs}`,
+                `/api/contacts?status=Lead&page=${page}&limit=500${genericSortQs}${filtersQuery}`,
                 { silent: true },
               ),
             ),
@@ -4322,6 +4322,7 @@ const Leads = ({ initialListState = null } = {}) => {
       }
       if (isGeneric) {
         setLeadPagination({
+          filtersQuery,
           total: Number.isFinite(Number(data?.total))
             ? Number(data.total)
             : rows.length,
@@ -4360,6 +4361,7 @@ const Leads = ({ initialListState = null } = {}) => {
       });
       return mergedRows;
     } catch {
+      if (reportRefreshFailure) throw new Error("Failed to refresh leads");
       if (requestSequence === leadRequestSequenceRef.current && !background) {
         notify.error("Failed to load leads");
       }
@@ -4440,83 +4442,83 @@ const Leads = ({ initialListState = null } = {}) => {
     );
   };
 
+  const serializeCampaignRules = useCallback((enabled, rules, savedRules = []) => {
+    const savedById = new Map(savedRules.map((rule) => [rule.id, rule]));
+    const completeRules = rules.flatMap((rule) => {
+      const column = String(rule.column || "").trim();
+      const value = String(rule.value || "").trim();
+      const campaignId = Number(rule.campaignId);
+      if (!column || !value || !(campaignId > 0)) {
+        const saved = savedById.get(rule.id);
+        return saved ? [{ ...saved, enabled: !!rule.enabled }] : [];
+      }
+      return [{ id: String(rule.id), enabled: !!rule.enabled, column, value, campaignId }];
+    });
+    return JSON.stringify({ enabled, rules: completeRules });
+  }, []);
+
   const loadAutoCampaignRules = useCallback(async () => {
-    if (!isGeneric || !canLeadRead) return;
+    if (!isGeneric || !canLeadRead || campaignEditsPending.current) return;
+    const revision = campaignEditRevision.current;
     setAutoCampaignRulesLoading(true);
     try {
-      const d = await fetchApi("/api/callified/auto-campaign-rules", {
-        silent: true,
-      });
-      const enabled = !!d?.enabled;
-      const rules = Array.isArray(d?.rules)
-        ? d.rules.map((r, idx) => ({
-            ...r,
-            id: r.id || `rule-${idx}-${Date.now()}`,
-          }))
+      const data = await fetchApi("/api/callified/auto-campaign-rules", { silent: true });
+      if (revision !== campaignEditRevision.current) return;
+      const enabled = !!data?.enabled;
+      const rules = Array.isArray(data?.rules)
+        ? data.rules.map((rule, index) => ({ ...rule, id: String(rule.id || `rule-${index}-${Date.now()}`) }))
         : [];
       setAutoCampaignRulesEnabled(enabled);
       setAutoCampaignRules(rules);
-      setSavedAutoCampaignRuleIds(
-        new Set(rules.map((r) => r.id).filter(Boolean)),
-      );
+      setSavedCampaignPayload(serializeCampaignRules(enabled, rules));
     } catch {
-      // leave existing state intact on error
+      // Keep the last loaded rules if refresh fails.
     } finally {
       setAutoCampaignRulesLoading(false);
     }
-  }, [isGeneric, canLeadRead]);
+  }, [isGeneric, canLeadRead, serializeCampaignRules]);
 
-  const saveAutoCampaignRules = useCallback(
-    async ({ enabled, rules, markSavedId } = {}) => {
-      if (!isGeneric || !canLeadWrite) return;
+  const campaignPayload = serializeCampaignRules(
+    autoCampaignRulesEnabled,
+    autoCampaignRules,
+    savedCampaignPayload ? JSON.parse(savedCampaignPayload).rules : [],
+  );
+
+  useEffect(() => {
+    if (!isGeneric || !canLeadWrite || savedCampaignPayload === null || autoCampaignRulesSaving) return;
+    if (campaignPayload === savedCampaignPayload) {
+      campaignEditsPending.current = autoCampaignRules.some((rule) =>
+        !rule.column || !String(rule.value || "").trim() || !Number(rule.campaignId),
+      );
+      return;
+    }
+    if (campaignSaveError?.payload === campaignPayload) return;
+    const timer = setTimeout(async () => {
       setAutoCampaignRulesSaving(true);
-      const nextEnabled =
-        enabled !== undefined ? enabled : autoCampaignRulesEnabled;
-      const nextRules = rules !== undefined ? rules : autoCampaignRules;
-      const cleanRules = nextRules
-        .map((r) => ({
-          ...(r.id ? { id: String(r.id) } : {}),
-          enabled: !!r.enabled,
-          column: String(r.column || "").trim(),
-          value: String(r.value || "").trim(),
-          campaignId: Number(r.campaignId) || 0,
-        }))
-        .filter((r) => r.column && r.campaignId > 0);
       try {
-        const d = await fetchApi("/api/callified/auto-campaign-rules", {
+        await fetchApi("/api/callified/auto-campaign-rules", {
           method: "PUT",
+          silent: true,
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled: nextEnabled, rules: cleanRules }),
+          body: campaignPayload,
         });
-        const returnedRules = Array.isArray(d?.rules) ? d.rules : cleanRules;
-        setAutoCampaignRulesEnabled(!!d?.enabled);
-        setAutoCampaignRules(returnedRules);
-        if (markSavedId) {
-          setSavedAutoCampaignRuleIds((prev) => {
-            const next = new Set(prev);
-            next.add(markSavedId);
-            return next;
-          });
-        }
-        notify.success("Auto-assign Callified Campaigns rules saved");
-      } catch (err) {
-        notify.error(
-          err?.body?.error ||
-            err?.message ||
-            "Failed to save auto-assign rules",
-        );
+        setSavedCampaignPayload(campaignPayload);
+        setCampaignSaveError(null);
+
+      } catch (error) {
+        setCampaignSaveError({ payload: campaignPayload, message: error?.body?.error || error?.message || "Unable to save campaign rules." });
       } finally {
         setAutoCampaignRulesSaving(false);
       }
-    },
-    [
-      isGeneric,
-      canLeadWrite,
-      autoCampaignRulesEnabled,
-      autoCampaignRules,
-      notify,
-    ],
-  );
+    }, 650);
+    return () => clearTimeout(timer);
+  }, [isGeneric, canLeadWrite, savedCampaignPayload, campaignPayload, autoCampaignRulesSaving, campaignSaveError, autoCampaignRules]);
+
+  const markCampaignEdit = () => {
+    campaignEditRevision.current += 1;
+    campaignEditsPending.current = true;
+    setCampaignSaveError(null);
+  };
 
   const saveLeadPickupLocation = async (lead, pickupStatus, locationId) => {
     if (!isGeneric) return;
@@ -4943,153 +4945,119 @@ const Leads = ({ initialListState = null } = {}) => {
     }
   };
 
-  // Refresh everything visible on the Leads page without a full reload.
-  // Recomputes AI scores and re-classifies Qualified/Junk/DNP only for leads
-  // that were actually called, so a real call that just completed updates both
-  // the Lead Score and the Call Status without a browser reload.
-  const refreshAll = async () => {
-    if (isGeneric && canLeadUpdate) {
+  // Both refresh entry points share the same work, including the latest Callified outcomes.
+  const refreshLeads = async (background) => {
+    if (isGeneric && callifiedConfigured && canLeadUpdate) {
       await fetchApi("/api/callified/leads/sync-call-statuses", {
         method: "POST",
         silent: true,
-      }).catch((e) => {
-        console.error("[leads] call-status sync failed:", e?.message);
-      });
+      }).catch((error) => console.error("[leads] call-status sync failed:", error?.message));
     }
     const [freshLeads, , , , freshCustomFields] = await Promise.all([
-      fetchLeads(),
+      fetchLeadsRef.current({ background, reportRefreshFailure: true }),
       fetchStaff(),
       loadCallifiedCampaigns(),
       loadAutoCampaignRules(),
       supportsLeadCustomFields
-        ? fetchApi("/api/lead-custom-fields", { silent: true }).catch(() => [])
-        : Promise.resolve([]),
+        ? fetchApi("/api/lead-custom-fields", { silent: true }).catch(() => null)
+        : Promise.resolve(null),
     ]);
-    if (supportsLeadCustomFields && Array.isArray(freshCustomFields)) {
+    if (Array.isArray(freshCustomFields)) {
       setCustomFieldDefs(freshCustomFields);
       setVisibleColumns((current) => {
         if (!Array.isArray(current)) return current;
         const existing = new Set(current);
+        const knownFields = new Set(customFieldDefs.map(field => field.fieldKey));
         const additions = freshCustomFields
+          .filter(field => !knownFields.has(field.fieldKey))
           .map((field) => `cf_${field.fieldKey}`)
           .filter((key) => !existing.has(key));
         return additions.length ? [...current, ...additions] : current;
       });
     }
-    if (isGeneric && Array.isArray(freshLeads) && freshLeads.length > 0) {
-      // Classify only leads that were actually called. Classification consumes
-      // Callified's conclusion first and its score as the fallback; it does not
-      // require a separate Gemini scoring pass.
-      const visibleIds = freshLeads.map((l) => l.id);
-      try {
-        const summaryRes = await fetchApi(
-          `/api/callified/leads/call-summary?contactIds=${visibleIds.join(",")}`,
+    if (!isGeneric || !callifiedConfigured || !freshLeads?.length) return;
+    try {
+      const visibleIds = freshLeads.map((lead) => lead.id).slice(0, 100);
+      const response = await fetchApi(
+        `/api/callified/leads/call-summary?contactIds=${visibleIds.join(",")}`,
+        { silent: true },
+      );
+      const summaries = response?.summaries || {};
+      setCallifiedSummaries(summaries);
+      if (canLeadUpdate) {
+        const called = freshLeads.filter((lead) =>
+          (summaries[lead.id]?.callCount || 0) > 0 ||
+          normalizeCallStatus(lead.callifiedLeadStatus) === CALL_STATUS.CONNECTED,
         );
-        const summaries = summaryRes?.summaries || {};
-        const calledLeadIds = freshLeads
-          .filter(
-            (l) =>
-              (summaries[l.id]?.callCount || 0) > 0 ||
-              normalizeCallStatus(l.callifiedLeadStatus) ===
-                CALL_STATUS.CONNECTED,
-          )
-          .map((l) => l.id);
-
-        if (calledLeadIds.length > 0) {
-          const syncedLeads = await fetchLeads({ background: true });
-          if (Array.isArray(syncedLeads) && syncedLeads.length > 0) {
-            const calledSet = new Set(calledLeadIds);
-            await classifyVisibleLeadsRef.current?.(
-              syncedLeads.filter((l) => calledSet.has(l.id)),
-              { force: true, silent: true },
-            );
-          }
-        }
-      } catch (e) {
-        console.error("[leads] Callified classify refresh failed:", e?.message);
+        await classifyVisibleLeadsRef.current?.(called, { force: true, silent: true, summaries });
       }
+    } catch (error) {
+      console.error("[leads] Callified classify refresh failed:", error?.message);
     }
-    notify.success("Refreshed");
   };
-  fetchLeadsRef.current = fetchLeads;
 
-  // Keep generic Callified outcomes current without requiring the operator to
-  // press Refresh. Poll quickly while a call is active, then back off. The
-  // backend owns transcript classification/retries; this loop syncs provider
-  // state, classifies active rows, and pauses when the tab is not visible.
+  fetchLeadsRef.current = fetchLeads;
+  refreshLeadsRef.current = {
+    run: (background) => {
+      if (!refreshInFlight.current) {
+        refreshInFlight.current = refreshLeads(background).finally(() => {
+          refreshInFlight.current = null;
+        });
+      }
+      return refreshInFlight.current;
+    },
+    delay: callQueueActive || leads.some((lead) =>
+      normalizeCallStatus(lead.callifiedLeadStatus) === CALL_STATUS.CONNECTED,
+    ) ? 10_000 : 30_000,
+  };
+
+  const refreshAll = async () => {
+    try {
+      await refreshLeadsRef.current.run(false);
+      notify.success("Refreshed");
+    } catch (error) {
+      notify.error(error?.message || "Failed to refresh leads");
+    }
+  };
+
   useEffect(() => {
-    if (!isGeneric || !savedAutoRefreshEnabled) return undefined;
+    if (!isGeneric || !canLeadRead || !savedAutoRefreshEnabled) return undefined;
     let cancelled = false;
-    let inFlight = false;
+    let refreshing = false;
     let timer;
 
     const schedule = () => {
-      if (cancelled) return;
-      const hasActiveCall =
-        callQueueActive ||
-        leads.some(
-          (lead) =>
-            normalizeCallStatus(lead.callifiedLeadStatus) ===
-            CALL_STATUS.CONNECTED,
-        );
-      timer = window.setTimeout(tick, hasActiveCall ? 10_000 : 30_000);
+      if (!cancelled) timer = window.setTimeout(tick, refreshLeadsRef.current.delay);
     };
     const tick = async () => {
-      if (cancelled) return;
-      if (document.visibilityState !== "visible" || inFlight) {
+      if (cancelled || refreshing) return;
+      if (document.visibilityState !== "visible") {
         schedule();
         return;
       }
-      inFlight = true;
+      refreshing = true;
       try {
-        if (canLeadUpdate) {
-          await fetchApi("/api/callified/leads/sync-call-statuses", {
-            method: "POST",
-            silent: true,
-          }).catch(() => null);
-        }
-        const freshLeads = await fetchLeadsRef.current?.({ background: true });
-        const connectedLeads = Array.isArray(freshLeads)
-          ? freshLeads.filter(
-              (lead) =>
-                normalizeCallStatus(lead.callifiedLeadStatus) ===
-                CALL_STATUS.CONNECTED,
-            )
-          : [];
-        if (connectedLeads.length > 0) {
-          await classifyVisibleLeadsRef.current?.(connectedLeads, {
-            force: true,
-            silent: true,
-          });
-        }
-      } catch (e) {
-        console.error(
-          "[leads] automatic call-status refresh failed:",
-          e?.message,
-        );
+        await refreshLeadsRef.current.run(true);
+      } catch (error) {
+        console.error("[leads] automatic refresh failed:", error?.message);
       } finally {
-        inFlight = false;
+        refreshing = false;
         schedule();
       }
     };
-
-    schedule();
     const onVisible = () => {
-      if (document.visibilityState === "visible" && !inFlight) tick();
+      if (document.visibilityState !== "visible") return;
+      window.clearTimeout(timer);
+      void tick();
     };
+    schedule();
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [
-    isGeneric,
-    savedAutoRefreshEnabled,
-    callQueueActive,
-    canLeadUpdate,
-    leads,
-  ]);
+  }, [isGeneric, canLeadRead, savedAutoRefreshEnabled]);
 
   // Backfill assignment for qualified leads that slipped through without an owner.
   // Handles existing leads created before auto-assignment, transient backend
@@ -5120,27 +5088,24 @@ const Leads = ({ initialListState = null } = {}) => {
   // that have a Callified campaign assigned or any existing status, so refresh
   // and post-call flows pick up the latest transcript/score.
   const classifyVisibleLeads = async (leadRows, options = {}) => {
-    if (!isGeneric || !Array.isArray(leadRows)) return;
-    const { force = false, silent = false } = options;
+    if (!isGeneric || !callifiedConfigured || !Array.isArray(leadRows)) return;
+    const { force = false, silent = false, summaries = callifiedSummaries } = options;
     const candidates = leadRows.filter((l) => {
       if (!l?.id) return false;
+      if (l.callifiedLeadStatusSource === "manual" && l.callifiedLeadStatusReason !== "Manual call in progress.") return false;
       if (force) {
         // Re-classify leads that have a campaign, have any prior status, or
         // have at least one Callified call recorded.
         return (
           Boolean(l.callifiedCampaignId) ||
           Boolean(l.callifiedLeadStatus) ||
-          (callifiedSummaries[l.id]?.callCount || 0) > 0
+          (summaries[l.id]?.callCount || 0) > 0
         );
       }
       return !l.callifiedLeadStatus;
     });
     if (candidates.length === 0) return;
-    const next = new Set(classifyingLeads);
-    for (const lead of candidates) {
-      next.add(lead.id);
-    }
-    setClassifyingLeads(next);
+    if (!silent) setClassifyingLeads((current) => new Set([...current, ...candidates.map((lead) => lead.id)]));
     try {
       // Classify one lead at a time. Bulk dials can produce hundreds of completed
       // calls; firing that many classify requests in parallel hammers the backend
@@ -5164,6 +5129,8 @@ const Leads = ({ initialListState = null } = {}) => {
           prev.map((l) => {
             const r = resultById.get(l.id);
             if (!r) return l;
+            if (l.callifiedLeadStatusUpdatedAt &&
+                (!r.callifiedLeadStatusUpdatedAt || Date.parse(l.callifiedLeadStatusUpdatedAt) > Date.parse(r.callifiedLeadStatusUpdatedAt))) return l;
             return {
               ...l,
               callifiedLeadStatus:
@@ -5197,7 +5164,7 @@ const Leads = ({ initialListState = null } = {}) => {
         console.error("[leads] summary refresh failed:", e?.message);
       }
     } finally {
-      setClassifyingLeads((prev) => {
+      if (!silent) setClassifyingLeads((prev) => {
         const updated = new Set(prev);
         candidates.forEach((l) => updated.delete(l.id));
         return updated;
@@ -5319,19 +5286,14 @@ const Leads = ({ initialListState = null } = {}) => {
       }
     }, 250);
     return () => clearTimeout(timer);
+  // The page effect owns pagination, and this effect owns query changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     isGeneric,
-    searchTerm,
-    sourceFilter,
-    stageFilter,
-    subBrandFilter,
-    campaignFilter,
-    leadStatusFilter,
-    assigneeFilter,
-    advancedFilters,
+    leadFiltersQuery,
     sortConfig.key,
     sortConfig.direction,
-  ]); // eslint-disable-line react-hooks/exhaustive-deps
+  ]);
 
   // #600  load wellness service catalogue + clinic locations only when the
   // current tenant is the wellness vertical. Avoids 401 / empty-response
@@ -5369,7 +5331,7 @@ const Leads = ({ initialListState = null } = {}) => {
       setCallifiedConfigured(false);
       return;
     }
-    fetchApi("/api/callified/status")
+    fetchApi("/api/callified/status", { silent: true })
       .then(async (d) => {
         if (typeof d?.isActive === "boolean") {
           setCallifiedConfigured(d.isActive);
@@ -5379,12 +5341,12 @@ const Leads = ({ initialListState = null } = {}) => {
         // integration status through the settings route. The status endpoint
         // is preferred because it only needs leads.read; this fallback keeps
         // the Leads surface usable during a rolling backend deployment.
-        const legacy = await fetchApi("/api/integrations/callified/config");
+        const legacy = await fetchApi("/api/integrations/callified/config", { silent: true });
         setCallifiedConfigured(!!legacy?.isActive);
       })
       .catch(async () => {
         try {
-          const legacy = await fetchApi("/api/integrations/callified/config");
+          const legacy = await fetchApi("/api/integrations/callified/config", { silent: true });
           setCallifiedConfigured(!!legacy?.isActive);
         } catch {
           setCallifiedConfigured(false);
@@ -5396,7 +5358,7 @@ const Leads = ({ initialListState = null } = {}) => {
   const loadCallifiedCampaigns = useCallback(async () => {
     if (!isGeneric || !callifiedConfigured || !canLeadWrite) return;
     try {
-      const d = await fetchApi("/api/callified/campaigns/with-lead-counts");
+      const d = await fetchApi("/api/callified/campaigns/with-lead-counts", { silent: true });
       const list = Array.isArray(d?.campaigns) ? d.campaigns : [];
       setCallifiedCampaigns(list);
     } catch {
@@ -5433,7 +5395,6 @@ const Leads = ({ initialListState = null } = {}) => {
         modeRes,
         dayRes,
         timeRes,
-        timezoneRes,
       ] = await Promise.all([
         fetchApi("/api/tenant-settings/feature.callified.dnp_retry.enabled"),
         fetchApi(
@@ -5447,7 +5408,6 @@ const Leads = ({ initialListState = null } = {}) => {
           "/api/tenant-settings/feature.callified.dnp_retry.day_interval",
         ),
         fetchApi("/api/tenant-settings/feature.callified.dnp_retry.time_local"),
-        fetchApi("/api/tenant-settings/feature.callified.retry.timezone"),
       ]);
       setDnpRetryEnabled(String(enabledRes?.value).toLowerCase() !== "false");
       setDnpMaxRetries(Number(maxRes?.value) || 3);
@@ -5455,7 +5415,6 @@ const Leads = ({ initialListState = null } = {}) => {
       setDnpRetryMode(modeRes?.value === "scheduled" ? "scheduled" : "delay");
       setDnpDayInterval(Number(dayRes?.value) || 1);
       setDnpTimeLocal(String(timeRes?.value || "10:00"));
-      setRetryTimezone(String(timezoneRes?.value || "UTC"));
     } catch (_e) {
       setDnpRetryEnabled(true);
       setDnpMaxRetries(3);
@@ -5505,7 +5464,6 @@ const Leads = ({ initialListState = null } = {}) => {
     if (part === "dayInterval")
       setDnpDayInterval(Math.max(1, Math.min(Number(rawValue) || 1, 30)));
     if (part === "timeLocal") setDnpTimeLocal(String(rawValue || "10:00"));
-    if (part === "timezone") setRetryTimezone(String(rawValue || "UTC"));
   };
   const loadPendingRetrySettings = useCallback(async () => {
     if (!isGeneric) return;
@@ -5568,7 +5526,6 @@ const Leads = ({ initialListState = null } = {}) => {
     if (part === "dayInterval")
       setPendingDayInterval(Math.max(1, Math.min(Number(value) || 1, 30)));
     if (part === "timeLocal") setPendingTimeLocal(String(value || "10:00"));
-    if (part === "timezone") setRetryTimezone(String(value || "UTC"));
   };
 
   const saveAutoDialNewLeadsEnabled = async (next) => {
@@ -5647,12 +5604,13 @@ const Leads = ({ initialListState = null } = {}) => {
   ]);
 
   const closeCallSettings = useCallback(() => {
+    if (automationDirtyRef.current) { void automationSaveRef.current?.({ close: true }); return; }
     setAiSettingsOpen(false);
     // Discard unsaved draft values and restore the last server state.
     loadCallSettings();
   }, [loadCallSettings]);
 
-  const saveAllCallSettings = async () => {
+  const saveAllCallSettings = async ({ close = true, quiet = false } = {}) => {
     if (!canManageCallSettings || callSettingsSaving) return;
     const normalized = {
       dnpMaxRetries: Math.max(1, Math.min(Number(dnpMaxRetries) || 3, 10)),
@@ -5708,7 +5666,6 @@ const Leads = ({ initialListState = null } = {}) => {
         normalized.pendingDayInterval,
       ],
       ["feature.callified.pending_retry.time_local", pendingTimeLocal],
-      ["feature.callified.retry.timezone", retryTimezone],
       ["feature.callified.assign_staff.enabled", assignStaffEnabled],
       ["feature.callified.assign_staff.logic", assignStaffLogic],
       [
@@ -5718,6 +5675,8 @@ const Leads = ({ initialListState = null } = {}) => {
     ];
 
     setCallSettingsSaving(true);
+    automationDirtyRef.current = false; setAutomationDirty(false);
+    setAutomationSaveStatus('Saving…');
     try {
       await fetchApi("/api/tenant-settings/callified", {
         method: "PUT",
@@ -5737,19 +5696,29 @@ const Leads = ({ initialListState = null } = {}) => {
       setAssignStaffLeadsPerUser(normalized.assignStaffLeadsPerUser);
       setSavedAutoRefreshEnabled(autoRefreshEnabled);
       setSavedPendingRetryEnabled(pendingRetryEnabled);
-      setAiSettingsOpen(false);
-      notify.success(
+      setAutomationSaveStatus('All changes saved.');
+      if (close) setAiSettingsOpen(false);
+      if (!quiet) notify.success(
         !savedPendingRetryEnabled && pendingRetryEnabled
           ? "Call settings saved. Existing eligible Pending leads will be scheduled within one minute using this retry interval."
           : "Call settings saved",
       );
     } catch (e) {
       notify.error(e?.body?.error || "Failed to save call settings");
-      await loadCallSettings();
+      automationDirtyRef.current = true;
+      setAutomationSaveStatus('Could not save. Use Done to try again.');
     } finally {
       setCallSettingsSaving(false);
     }
   };
+
+  automationSaveRef.current = saveAllCallSettings;
+  const automationSettingsKey = JSON.stringify([autoDialNewLeadsEnabled, autoRefreshEnabled, dnpRetryEnabled, dnpMaxRetries, dnpIntervalMinutes, dnpRetryMode, dnpDayInterval, dnpTimeLocal, pendingRetryEnabled, pendingMaxRetries, pendingIntervalMinutes, pendingRetryMode, pendingDayInterval, pendingTimeLocal, assignStaffEnabled, assignStaffLogic, assignStaffLeadsPerUser]);
+  useEffect(() => {
+    if (!aiSettingsOpen || !automationDirty || callSettingsSaving) return undefined;
+    const timer = setTimeout(() => { void automationSaveRef.current?.({ close: false, quiet: true }); }, 650);
+    return () => clearTimeout(timer);
+  }, [aiSettingsOpen, automationDirty, automationSettingsKey, callSettingsSaving]);
 
   useEffect(() => {
     loadCallSettings();
@@ -6328,82 +6297,79 @@ const Leads = ({ initialListState = null } = {}) => {
     }
   };
 
-  const handleBulkAssign = async () => {
-    if (selectedLeads.length === 0) return;
-    await fetchApi("/api/contacts/bulk-assign", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contactIds: selectedLeads,
-        assignedToId: bulkAgent || null,
-      }),
-    });
-    setSelectedLeads([]);
-    setBulkAgent("");
-    fetchLeads({ background: true });
+  const handleBulkAssign = async (override) => {
+    const assignedToId = override === null || typeof override === "string" || typeof override === "number" ? override : bulkAgent;
+    if (selectedLeads.length === 0 || bulkWorking.current) return;
+    bulkWorking.current = true;
+    setBulkProgress({ done: 0, total: selectedLeads.length });
+    try {
+      await runLeadBatches('/api/contacts/bulk-assign', 'PUT', selectedLeads, { assignedToId: assignedToId || null }, setBulkProgress);
+      setSelectedLeads([]);
+      setBulkAgent("");
+      fetchLeads({ background: true });
+    } catch (error) {
+      notify.error(error.message || 'Assignment stopped. Completed batches are saved.');
+      fetchLeads({ background: true });
+    } finally { bulkWorking.current = false; setBulkProgress(null); }
   };
 
   const handleBulkDelete = async () => {
-    if (selectedLeads.length === 0) return;
+    if (selectedLeads.length === 0 || bulkWorking.current) return;
 
+    const ids = [...selectedLeads];
     const ok = await notify.confirm({
       title: "Delete selected leads?",
-      message: `Delete ${selectedLeads.length} selected lead${selectedLeads.length === 1 ? "" : "s"}? This can't be undone.`,
+      message: `Delete ${ids.length} selected lead${ids.length === 1 ? "" : "s"}? This can't be undone.`,
       confirmText: "Delete",
       cancelText: "Cancel",
       destructive: true,
     });
-    if (!ok) return;
+    if (!ok || bulkWorking.current) return;
 
     setLeadBulkActionsOpen(false);
     setBulkDeleting(true);
+    bulkWorking.current = true;
+    setBulkProgress({ done: 0, total: ids.length });
     try {
-      const res = await fetchApi("/api/contacts/bulk-delete", {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contactIds: selectedLeads }),
-      });
-      const deletedCount = Number.isFinite(Number(res?.deleted))
-        ? Number(res.deleted)
-        : selectedLeads.length;
-      notify.success(
-        `Deleted ${deletedCount} lead${deletedCount === 1 ? "" : "s"}`,
-      );
+      const res = await runLeadBatches('/api/contacts/bulk-delete', 'DELETE', ids, {}, setBulkProgress);
+      const deletedCount = res.deleted;
+      if (deletedCount > 0) {
+        notify.success(`Deleted ${deletedCount} lead${deletedCount === 1 ? "" : "s"}`);
+      } else {
+        notify.info("None of the selected leads were deleted.");
+      }
       setSelectedLeads([]);
       setBulkAgent("");
-      fetchLeads({ background: true });
     } catch (err) {
       notify.error(
         err?.body?.error || err?.message || "Failed to delete leads",
       );
     } finally {
       setBulkDeleting(false);
+      bulkWorking.current = false; setBulkProgress(null);
+      fetchLeads({ background: true });
     }
   };
 
   const handleBulkAssignCampaign = async (campaignId) => {
-    if (selectedLeads.length === 0) return;
+    if (selectedLeads.length === 0 || bulkWorking.current) return;
+    bulkWorking.current = true;
+    setBulkProgress({ done: 0, total: selectedLeads.length });
     setBulkCampaignSaving(true);
     const nextId = campaignId ? Number(campaignId) : null;
+    const selectedIds = new Set(selectedLeads);
     // Optimistically update all selected rows so the UI feels instant.
     setLeads((prev) =>
       prev.map((l) =>
-        selectedLeads.includes(l.id)
+        selectedIds.has(l.id)
           ? { ...l, callifiedCampaignId: nextId }
           : l,
       ),
     );
     try {
-      const res = await fetchApi("/api/contacts/bulk-assign-campaign", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contactIds: selectedLeads,
-          callifiedCampaignId: nextId,
-        }),
-      });
+      const res = await runLeadBatches('/api/contacts/bulk-assign-campaign', 'PUT', selectedLeads, { callifiedCampaignId: nextId }, setBulkProgress);
       notify.success(
-        `Campaign assigned to ${res?.updated || selectedLeads.length} lead${selectedLeads.length === 1 ? "" : "s"}`,
+        `Campaign assigned to ${res.updated} lead${selectedLeads.length === 1 ? "" : "s"}`,
       );
       setBulkCampaignId("");
       setSelectedLeads([]);
@@ -6416,6 +6382,7 @@ const Leads = ({ initialListState = null } = {}) => {
       await fetchLeads({ background: true });
     } finally {
       setBulkCampaignSaving(false);
+      bulkWorking.current = false; setBulkProgress(null);
     }
   };
 
@@ -6503,6 +6470,11 @@ const Leads = ({ initialListState = null } = {}) => {
   // Sequential one-by-one call queue. Accepts an array of { lead, campaignId }.
   const runCallQueue = async (items) => {
     if (!Array.isArray(items) || items.length === 0) return;
+    if (isGeneric) {
+      await fetchApi('/api/callified/dial-jobs', { method: 'POST', silent: true, body: JSON.stringify({ contactIds: items.map(item => item.lead.id) }) });
+      setDialRunsVersion(version => version + 1);
+      return;
+    }
     setCallQueue(items.map((it) => ({ ...it, status: "pending" })));
     setCallQueueActive(true);
     const completed = [];
@@ -6567,8 +6539,23 @@ const Leads = ({ initialListState = null } = {}) => {
     if (parts.length) notify.success(`Dial queue done: ${parts.join(", ")}`);
   };
 
+  const genericDialSubmitting = useRef(false);
   const handleDialSelectedLeads = async () => {
     if (selectedLeads.length === 0) return;
+    if (isGeneric) {
+      if (genericDialSubmitting.current) return;
+      genericDialSubmitting.current = true;
+      try {
+        await fetchApi('/api/callified/dial-jobs', { method: 'POST', silent: true, body: JSON.stringify({ contactIds: [...selectedLeads] }) });
+        setDialRunsVersion(version => version + 1);
+        notify.success('Eligible selected leads queued for calling.');
+      } catch (error) {
+        notify.error(error.message || 'Unable to start calling.');
+      } finally {
+        genericDialSubmitting.current = false;
+      }
+      return;
+    }
     const selectedRows = leads.filter((l) => selectedLeads.includes(l.id));
     const missingPhone = selectedRows.filter((l) => !l.phone);
     const missingCampaign = selectedRows.filter((l) => !l.callifiedCampaignId);
@@ -6596,70 +6583,23 @@ const Leads = ({ initialListState = null } = {}) => {
     runCallQueue(items);
   };
 
-  const handleDialSelectedCampaigns = async () => {
-    if (selectedCampaignIds.length === 0) return;
-    const campaigns = callifiedCampaigns.filter((c) =>
-      selectedCampaignIds.includes(String(c.id)),
-    );
-    const allLeadIds = new Set();
-    const items = [];
-    for (const campaign of campaigns) {
-      const campaignLeads = leads.filter(
-        (l) =>
-          String(l.callifiedCampaignId) === String(campaign.id) &&
-          l.phone &&
-          !allLeadIds.has(l.id),
-      );
-      for (const lead of campaignLeads) {
-        allLeadIds.add(lead.id);
-        items.push({ lead, campaignId: campaign.id });
-      }
+  const handleDialSelectedCampaigns = async (statuses, byStatus = false) => {
+    if ((!byStatus && !selectedCampaignIds.length) || !statuses.length || genericDialSubmitting.current) return;
+    genericDialSubmitting.current = true;
+    try {
+      const audience = byStatus ? { byStatus: true } : { campaignIds: selectedCampaignIds.map(Number) };
+      await fetchApi('/api/callified/dial-jobs', { method: 'POST', silent: true, body: JSON.stringify({ ...audience, statuses }) });
+      setDialRunsVersion(version => version + 1);
+      notify.success(byStatus ? 'Leads with the selected statuses queued for calling.' : 'Eligible campaign leads queued for calling.');
+    } catch (error) {
+      notify.error(error.message || 'Unable to start calling.');
+    } finally {
+      genericDialSubmitting.current = false;
     }
-
-    const targetCount = campaigns.reduce(
-      (sum, c) => sum + (c.leadCount || 0),
-      0,
-    );
-    const skippedNoPhone = targetCount - items.length;
-
-    if (items.length === 0) {
-      notify.error(
-        "No dialable leads found in the selected campaigns (missing phone numbers).",
-      );
-      return;
-    }
-
-    const ok = await notify.confirm({
-      title: "Dial selected campaigns?",
-      message: `This will call ${items.length} leads across ${campaigns.length} campaign(s) one by one. ${skippedNoPhone > 0 ? `${skippedNoPhone} lead(s) will be skipped (no phone).` : ""}`,
-      confirmText: "Dial All",
-      cancelText: "Cancel",
-      destructive: false,
-    });
-    if (!ok) return;
-
-    runCallQueue(items);
-  };
-
-  const handleSingleDial = (lead, campaignId) => {
-    if (!lead.phone) {
-      notify.error("Lead has no phone number");
-      return;
-    }
-    if (!campaignId) {
-      notify.error("Please assign a campaign first");
-      return;
-    }
-    runCallQueue([{ lead, campaignId: Number(campaignId) }]);
   };
 
   const handleLeadStatusChange = async (lead, status) => {
     try {
-      setLeads((prev) =>
-        prev.map((l) =>
-          l.id === lead.id ? { ...l, callifiedLeadStatus: status } : l,
-        ),
-      );
       const result = await fetchApi(
         `/api/callified/leads/${lead.id}/lead-status`,
         {
@@ -6800,51 +6740,39 @@ const Leads = ({ initialListState = null } = {}) => {
     selectLeadIds(paginatedLeads.map((lead) => lead.id));
   };
 
-  const selectAllPresentLeads = async () => {
-    if (!isGeneric) {
-      selectLeadIds(filteredLeads.map((lead) => lead.id));
-      return;
-    }
-    setSelectingAllPresent(true);
-    try {
-      const query = new URLSearchParams({ status: "Lead", page: "1", limit: "500", includeCrmStatuses: "true" });
-      if (searchTerm.trim()) {
-        query.set("q", searchTerm.trim());
-        const matchingCampaignIds = callifiedCampaigns
-          .filter((campaign) => String(campaign?.name || "").toLowerCase().includes(searchTerm.trim().toLowerCase()))
-          .map((campaign) => Number(campaign.id))
-          .filter((campaignId) => Number.isInteger(campaignId) && campaignId > 0)
-          .slice(0, 100);
-        if (matchingCampaignIds.length) query.set("callifiedCampaignIds", matchingCampaignIds.join(","));
-      }
-      if (nameStartsWith) query.set("nameStartsWith", nameStartsWith);
-      if (sourceFilter) query.set("leadSource", sourceFilter);
-      if (campaignFilter) query.set("callifiedCampaignId", campaignFilter);
-      if (leadStatusFilter) query.set("callifiedLeadStatus", leadStatusFilter);
-      if (assigneeFilter === "unassigned") query.set("unassigned", "true");
-      else if (assigneeFilter) query.set("assignedToId", assigneeFilter);
-      if (scoreMin !== "") query.set("scoreMin", scoreMin);
-      if (scoreMax !== "") query.set("scoreMax", scoreMax);
-      if (sortConfig.key && GENERIC_LEAD_SERVER_SORT_KEYS.has(sortConfig.key) && sortConfig.direction) {
-        query.set("sortBy", sortConfig.key);
-        query.set("sortDirection", sortConfig.direction);
-      }
-      if (advancedFilters.length > 0) {
-        query.set("filters", JSON.stringify(advancedFilters.map(({ field, operator, values }) => ({ field, operator, values }))));
-      }
+  const selectAllPresentLeads = () => {
+    selectLeadIds(filteredLeads.map((lead) => lead.id));
+  };
 
-      const ids = [];
-      const totalPages = Math.max(1, Number(leadPagination.totalPages) || Math.ceil((Number(leadPagination.total) || 0) / 500));
-      for (let page = 1; page <= totalPages; page += 1) {
-        query.set("page", String(page));
-        const data = await fetchApi(`/api/contacts?${query.toString()}`, { silent: true });
-        const rows = Array.isArray(data) ? data : Array.isArray(data?.data) ? data.data : [];
-        ids.push(...rows.map((lead) => lead.id).filter((id) => id !== undefined && id !== null));
-        if (rows.length < 500) break;
-      }
-      selectLeadIds(ids);
+  const selectAllLeadResults = async () => {
+    if (allResultsRequest.current || leadPagination.filtersQuery !== leadFiltersQuery) return;
+    const controller = new AbortController();
+    allResultsRequest.current = controller;
+    setSelectingAllResults(true);
+    try {
+      const ids = new Set();
+      let afterId = 0;
+      do {
+        const batch = await fetchApi(
+          `/api/contacts?status=Lead&fields=ids&afterId=${afterId}${leadFiltersQuery}`,
+          { signal: controller.signal, silent: true },
+        );
+        if (controller.signal.aborted) return;
+        if (!Array.isArray(batch?.ids) || (batch.nextAfterId !== null && !(batch.nextAfterId > afterId))) {
+          throw new Error("Invalid lead selection response");
+        }
+        batch.ids.forEach((id) => ids.add(id));
+        afterId = batch.nextAfterId;
+      } while (afterId !== null);
+      setSelectedLeads([...ids]);
+      if (ids.size !== leadPagination.total) void fetchLeads({ background: true });
+    } catch {
+      if (!controller.signal.aborted) notify.error("Unable to select all results. Try again.");
     } finally {
-      setSelectingAllPresent(false);
+      if (allResultsRequest.current === controller) {
+        allResultsRequest.current = null;
+        if (!controller.signal.aborted) setSelectingAllResults(false);
+      }
     }
   };
 
@@ -7769,6 +7697,7 @@ const Leads = ({ initialListState = null } = {}) => {
         aria-haspopup="menu"
         aria-expanded={isActive}
         aria-label={`Open ${column.label} column menu`}
+        className="leads-column-menu-trigger"
         title={`Open ${column.label} column menu`}
         style={{
           display: "inline-flex",
@@ -8369,13 +8298,13 @@ const Leads = ({ initialListState = null } = {}) => {
   /* eslint-disable react-hooks/exhaustive-deps */
   // Batch-load Callified call summaries for visible leads (counts + last score).
   useEffect(() => {
-    if (!isGeneric || filteredLeads.length === 0) {
+    if (!isGeneric || !callifiedConfigured || filteredLeads.length === 0) {
       setCallifiedSummaries({});
       return;
     }
     let cancelled = false;
     const ids = filteredLeads.map((l) => l.id).slice(0, 100);
-    fetchApi(`/api/callified/leads/call-summary?contactIds=${ids.join(",")}`)
+    fetchApi(`/api/callified/leads/call-summary?contactIds=${ids.join(",")}`, { silent: true })
       .then((d) => {
         if (cancelled) return;
         setCallifiedSummaries(d?.summaries || {});
@@ -8387,7 +8316,7 @@ const Leads = ({ initialListState = null } = {}) => {
     return () => {
       cancelled = true;
     };
-  }, [isGeneric, filteredLeads.map((l) => l.id).join(",")]);
+  }, [isGeneric, callifiedConfigured, filteredLeads.map((l) => l.id).join(",")]);
   /* eslint-enable react-hooks/exhaustive-deps */
 
   const qualifiedAssignmentLeadKey = filteredLeads
@@ -8577,7 +8506,7 @@ const Leads = ({ initialListState = null } = {}) => {
     }
   }, [focusedCallifiedLeadId, isGeneric, loading, paginatedLeads]);
   const visibleSelectedLeadCount = paginatedLeads.reduce(
-    (count, lead) => count + (selectedLeads.includes(lead.id) ? 1 : 0),
+    (count, lead) => count + (selectedLeadIds.has(lead.id) ? 1 : 0),
     0,
   );
   const allVisibleLeadsSelected =
@@ -9089,7 +9018,7 @@ const Leads = ({ initialListState = null } = {}) => {
             onChange={toggleSelectAll}
             onClick={(e) => e.stopPropagation()}
             aria-label="Select all leads"
-            style={LEAD_CHECKBOX_STYLE}
+            className="leads-selection-checkbox"
           />
         ) : null,
       );
@@ -9398,6 +9327,17 @@ const Leads = ({ initialListState = null } = {}) => {
           >
             {canAssignLead && (isAdmin || isTravel || isGeneric) ? (
               <div className="leads-assignee-control">
+                {isGeneric && (
+                  <span className="leads-assignee-display" aria-hidden="true">
+                    <span>{lead.assignedToId
+                      ? staffOptionLabel(assignableStaff(lead).find((member) => String(member.id) === String(lead.assignedToId)) || {
+                          ...lead.assignedTo,
+                          name: lead.assignedTo?.name || lead.assignedTo?.email || `Staff #${lead.assignedToId}`,
+                        })
+                      : "Unassigned"}</span>
+                    <ChevronDown size={14} />
+                  </span>
+                )}
                 <select
                   className="input-field"
                   value={lead.assignedToId || ""}
@@ -9786,7 +9726,7 @@ const Leads = ({ initialListState = null } = {}) => {
           value: toDateInputValue(dateValue),
           type: "date",
           extraStyle: { color: "var(--text-secondary)" },
-          renderValue: () => (dateValue ? formatDate(dateValue) : ""),
+          renderValue: () => (dateValue ? formatDate(toDateInputValue(dateValue)) : ""),
           // Clearing a date must write null — "" would 500 on the DateTime column.
           onSave: (row, _field, nextValue) =>
             updateLeadInlineValue(row, column.key, nextValue || null),
@@ -9827,11 +9767,12 @@ const Leads = ({ initialListState = null } = {}) => {
         {canLeadBulkActions && (
           <input
             type="checkbox"
-            checked={selectedLeads.includes(lead.id)}
+            {...(isGeneric && dragCheckboxProps(lead.id))}
+            checked={selectedLeadIds.has(lead.id)}
             onChange={() => toggleSelect(lead.id)}
             onClick={(e) => e.stopPropagation()}
             aria-label={`Select ${lead.name || "lead"}`}
-            style={LEAD_CHECKBOX_STYLE}
+            className="leads-selection-checkbox"
           />
         )}
         <div style={{ minWidth: 0, flex: 1 }}>
@@ -10014,19 +9955,28 @@ const Leads = ({ initialListState = null } = {}) => {
     if (key === "callStatus") {
       const queueItem = callQueue.find((q) => q.lead.id === lead.id);
       const isConnected = queueItem && (queueItem.status === "calling" || queueItem.status === "waiting_for_completion");
-      const meta = getCallStatusMeta(lead.callifiedLeadStatus);
       return (
         <td style={getBodyCellStyle(key)} onClick={(e) => e.stopPropagation()}>
           {isConnected ? (
-            <span style={{ display: "inline-flex", alignItems: "center", gap: ".35rem", padding: ".25rem .75rem", borderRadius: "999px", fontSize: ".75rem", fontWeight: 600, background: "rgba(16, 185, 129, 0.15)", color: "#10b981" }}><RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} /> Connected</span>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: ".35rem", padding: ".25rem .75rem", borderRadius: "999px", fontSize: ".75rem", fontWeight: 600, background: "var(--status-warning-bg)", color: "var(--status-warning-text)" }}><RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} /> Connecting</span>
           ) : classifyingLeads.has(lead.id) ? (
             <span style={{ display: "inline-flex", alignItems: "center", gap: ".35rem", padding: ".25rem .75rem", borderRadius: "999px", fontSize: ".75rem", fontWeight: 600, background: "var(--surface-hover)", color: "var(--text-secondary)" }}><RefreshCw size={12} style={{ animation: "spin 1s linear infinite" }} /> Classifying…</span>
           ) : (
             <span style={{ display: "inline-flex", alignItems: "center", gap: ".35rem" }}>
-              <select className="input-field leads-call-status-select" value={normalizeCallStatus(lead.callifiedLeadStatus)} onChange={(e) => handleLeadStatusChange(lead, e.target.value)} disabled={!callifiedConfigured || !canLeadUpdate} style={{ padding: ".25rem .6rem", borderRadius: "999px", fontSize: ".75rem", fontWeight: 600, border: "none", cursor: "pointer", minWidth: "125px", color: meta.color, backgroundColor: meta.bg }} aria-label={`Call status for ${lead.name || "lead"}`}>
-                {CALL_STATUS_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
-              {lead.callifiedLeadStatus && normalizeCallStatus(lead.callifiedLeadStatus) !== CALL_STATUS.YET_TO_CALL && <span title={buildLeadStatusTooltip(lead, { maxRetries: dnpMaxRetries })} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)", cursor: "help", marginLeft: ".25rem", flexShrink: 0 }}><Info size={14} /></span>}
+              <ScrollableSelect
+                className={`leads-status-select leads-status-select--${normalizeCallStatus(lead.callifiedLeadStatus)}`}
+                value={normalizeCallStatus(lead.callifiedLeadStatus)}
+                onChange={(value) => handleLeadStatusChange(lead, value)}
+                options={CALL_STATUS_OPTIONS}
+                disabled={!callifiedConfigured || !canLeadUpdate}
+                ariaLabel={`Call status for ${lead.name || "lead"}`}
+                width="100%"
+              />
+              {lead.callifiedLeadStatus && normalizeCallStatus(lead.callifiedLeadStatus) !== CALL_STATUS.YET_TO_CALL && <LeadCallStatusHelp
+                lead={lead}
+                maxRetries={normalizeCallStatus(lead.callifiedLeadStatus) === CALL_STATUS.PENDING ? pendingMaxRetries : dnpMaxRetries}
+                retryEnabled={normalizeCallStatus(lead.callifiedLeadStatus) === CALL_STATUS.PENDING ? pendingRetryEnabled : dnpRetryEnabled}
+              />}
             </span>
           )}
         </td>
@@ -10289,7 +10239,8 @@ const Leads = ({ initialListState = null } = {}) => {
               flexWrap: "wrap",
             }}
           >
-            <button
+            {isGeneric && <span ref={setGenericTransferHost} className="leads-transfer-host" />}
+            {!isGeneric && (<button
               type="button"
               className="btn-secondary"
               onClick={() => {
@@ -10311,7 +10262,7 @@ const Leads = ({ initialListState = null } = {}) => {
               }}
             >
               <SlidersHorizontal size={16} /> Lead Fields
-            </button>
+            </button>)}
             {canLeadWrite && (
               <button
                 type="button"
@@ -10339,37 +10290,16 @@ const Leads = ({ initialListState = null } = {}) => {
           id={isGeneric ? "leads-secondary-actions" : undefined}
           className={
             isGeneric
-              ? "leads-actions-toolbar"
+              ? `leads-actions-toolbar${mobileLeadActionsOpen ? " is-open" : ""}`
               : isTravel
                 ? "travel-leads-actions-toolbar"
                 : undefined
           }
-          style={{
+          style={isGeneric ? undefined : {
             ...compactToolbarSurfaceStyle,
-            marginBottom:
-              (isGeneric && genericActionsToolbarHost) ||
-              (isTravel && travelActionsToolbarHost)
-                ? 0
-                : "1rem",
+            marginBottom: isTravel && travelActionsToolbarHost ? 0 : "1rem",
             justifyContent: "flex-start",
-            ...(isGeneric
-              ? genericActionsToolbarHost
-                ? {
-                    minHeight: 0,
-                    flex: "1 1 auto",
-                    boxSizing: "border-box",
-                    padding: "0.75rem 0 0",
-                    border: 0,
-                    borderTop: "1px solid var(--border-color)",
-                    borderRadius: 0,
-                    boxShadow: "none",
-                  }
-                : {
-                    minHeight: "62px",
-                    flex: "0 0 auto",
-                    boxSizing: "border-box",
-                  }
-              : isTravel && travelActionsToolbarHost
+            ...(isTravel && travelActionsToolbarHost
                 ? {
                     flex: "0 1 auto",
                     width: "auto",
@@ -10384,7 +10314,7 @@ const Leads = ({ initialListState = null } = {}) => {
         >
           <button
             type="button"
-            className="btn-secondary"
+            className="btn-secondary leads-refresh-trigger"
             onClick={refreshAll}
             style={{
               ...compactToolbarButtonStyle,
@@ -10392,21 +10322,10 @@ const Leads = ({ initialListState = null } = {}) => {
           >
             <RefreshCw size={14} /> Refresh
           </button>
-          {isGeneric && (
-            <span
-              style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}
-              title={
-                savedAutoRefreshEnabled
-                  ? "Every 10 seconds during calls and every 30 seconds otherwise; paused in background tabs"
-                  : "Automatic refresh is disabled in Call Settings"
-              }
-            >
-              Auto-refresh {savedAutoRefreshEnabled ? "on" : "off"}
-            </span>
-          )}
-
           {(isGeneric || isWellness) && (
+            <PortalWhenReady enabled={isGeneric} target={genericTransferHost}>
             <CsvImportExportToolbar
+              combinedMenu={isGeneric}
               entity="contacts"
               label="Leads"
               formats={["csv", "xlsx"]}
@@ -10454,647 +10373,27 @@ const Leads = ({ initialListState = null } = {}) => {
                 import: "/api/csv/contacts/import.csv",
               }}
             />
+            </PortalWhenReady>
           )}
 
           <span aria-hidden="true" style={compactToolbarDividerStyle} />
 
           {isGeneric && callifiedConfigured && canLeadWrite && (
             <>
-              {/* Auto-assign campaign rules: dropdown shows a grid where each
-                  rule maps a lead column + value to a Callified campaign. */}
-              <div
-                className="leads-auto-campaign-control"
-                style={{ position: "relative" }}
-              >
-                <button
-                  type="button"
-                  className="input-field"
-                  onClick={() => setAutoCampaignRulesOpen((o) => !o)}
-                  disabled={autoCampaignRulesLoading || autoCampaignRulesSaving}
-                  aria-haspopup="menu"
-                  aria-expanded={autoCampaignRulesOpen}
-                  style={{
-                    ...compactToolbarButtonStyle,
-                    minWidth: "160px",
-                    padding: "0.42rem 0.7rem",
-                    cursor: "pointer",
-                    position: "relative",
-                  }}
-                  aria-label="Auto-assign Callified Campaigns rules"
-                  title="Configure rules to automatically assign Callified campaigns to new leads"
-                >
-                  <Settings size={14} />
-                  <span
-                    style={{
-                      display: "inline-flex",
-                      flexDirection: "column",
-                      alignItems: "flex-start",
-                      lineHeight: 1.05,
-                    }}
-                  >
-                    <span>Auto-assign</span>
-                    <span
-                      style={{
-                        fontSize: "0.7rem",
-                        color: "var(--text-secondary)",
-                      }}
-                    >
-                      Callified Campaigns
-                    </span>
-                  </span>
-                  {autoCampaignRulesEnabled && (
-                    <span
-                      aria-label={
-                        autoCampaignAssignmentActive
-                          ? `${activeAutoCampaignRuleCount} active auto-assign rule${activeAutoCampaignRuleCount === 1 ? "" : "s"}`
-                          : "Auto-assign enabled with no active rules"
-                      }
-                      style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: "50%",
-                        background: autoCampaignAssignmentActive
-                          ? "var(--success-color, #22c55e)"
-                          : "var(--warning-color, #f59e0b)",
-                        marginLeft: "0.25rem",
-                      }}
-                    />
-                  )}
-                </button>
-
-                {autoCampaignRulesOpen && (
-                  <>
-                    <div
-                      style={{ position: "fixed", inset: 0, zIndex: 50 }}
-                      onClick={() => setAutoCampaignRulesOpen(false)}
-                    />
-                    <div
-                      className="card leads-auto-campaign-menu"
-                      onClick={(e) => e.stopPropagation()}
-                      style={{
-                        position: "absolute",
-                        top: "calc(100% + 4px)",
-                        // Anchor to the toolbar's right edge without allowing
-                        // the popup to be pushed outside the viewport.
-                        left: 0,
-                        zIndex: 51,
-                        width: "min(560px, calc(100vw - 24px))",
-                        minWidth: 0,
-                        maxWidth: "calc(100vw - 24px)",
-                        boxSizing: "border-box",
-                        padding: "1rem",
-                        boxShadow: "0 10px 24px rgba(0,0,0,0.2)",
-                        background: "var(--bg-color)",
-                        border: "1px solid var(--border-color)",
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          marginBottom: "0.75rem",
-                        }}
-                      >
-                        <span
-                          style={{
-                            fontSize: "0.85rem",
-                            fontWeight: 600,
-                            color: "var(--text-primary)",
-                          }}
-                        >
-                          Auto-assign Callified Campaigns rules
-                        </span>
-                        <label
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: "0.4rem",
-                            cursor: canLeadWrite ? "pointer" : "not-allowed",
-                            fontSize: "0.8rem",
-                            color: "var(--text-secondary)",
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={autoCampaignRulesEnabled}
-                            disabled={autoCampaignRulesSaving || !canLeadWrite}
-                            onChange={() => {
-                              const next = !autoCampaignRulesEnabled;
-                              setAutoCampaignRulesEnabled(next);
-                              saveAutoCampaignRules({
-                                enabled: next,
-                                rules: autoCampaignRules,
-                              });
-                            }}
-                          />
-                          {autoCampaignRulesEnabled ? "On" : "Off"}
-                        </label>
-                      </div>
-
-                      <div
-                        style={{
-                          fontSize: "0.75rem",
-                          color: "var(--text-secondary)",
-                          marginBottom: "0.75rem",
-                        }}
-                      >
-                        When a new lead arrives, the first matching rule assigns
-                        the chosen campaign. Values match ignoring case, spaces,
-                        and punctuation.
-                      </div>
-
-                      {autoCampaignRulesEnabled &&
-                        activeAutoCampaignRuleCount === 0 && (
-                          <div
-                            role="status"
-                            style={{
-                              fontSize: "0.75rem",
-                              color: "var(--warning-color, #b45309)",
-                              background: "rgba(245, 158, 11, 0.1)",
-                              border: "1px solid rgba(245, 158, 11, 0.35)",
-                              borderRadius: 6,
-                              padding: "0.5rem 0.6rem",
-                              marginBottom: "0.75rem",
-                            }}
-                          >
-                            Auto-assign is on, but no rule is active. Turn on at
-                            least one completed rule and save it.
-                          </div>
-                        )}
-
-                      {autoCampaignRulesEnabled && (
-                        <div
-                          style={{
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: "0.5rem",
-                          }}
-                        >
-                          <div
-                            className="auto-campaign-rule-heading-row"
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: "34px 1fr 1fr 1fr 80px 32px",
-                              gap: "0.5rem",
-                              alignItems: "center",
-                              fontSize: "0.7rem",
-                              color: "var(--text-secondary)",
-                              textTransform: "uppercase",
-                              letterSpacing: "0.03em",
-                              padding: "0 0.25rem",
-                            }}
-                          >
-                            <span className="auto-campaign-rule-on-heading auto-campaign-rule-heading">
-                              On
-                            </span>
-                            <span>Lead column</span>
-                            <span>Value</span>
-                            <span>Campaign</span>
-                            <span style={{ textAlign: "center" }}>Save</span>
-                            <span />
-                          </div>
-
-                          {autoCampaignRules.map((rule) => {
-                            // Reuse labels from the generic Leads catalog, but
-                            // only for fields available before Contact creation.
-                            // Custom fields are valid create-time inputs too.
-                            const catalogOptions = leadColumnCatalog
-                              .filter(
-                                (col) =>
-                                  AUTO_CAMPAIGN_RULE_COLUMN_KEYS.has(col.key) ||
-                                  col.key.startsWith("cf_"),
-                              )
-                              .map((col) => ({
-                                key: col.key,
-                                label: col.label,
-                              }));
-                            const columnOptions = catalogOptions.length
-                              ? catalogOptions
-                              : [
-                                  ...BUILTIN_RULE_COLUMNS,
-                                  ...customFieldDefs.map((f) => ({
-                                    key: `cf_${f.fieldKey}`,
-                                    label: f.label,
-                                  })),
-                                ];
-                            const ruleIsSaved = savedAutoCampaignRuleIds.has(
-                              rule.id,
-                            );
-                            const ruleIsValid =
-                              rule.column &&
-                              String(rule.value || "").trim() &&
-                              rule.campaignId;
-                            const removeSavedStatus = () => {
-                              setSavedAutoCampaignRuleIds((prev) => {
-                                if (!prev.has(rule.id)) return prev;
-                                const next = new Set(prev);
-                                next.delete(rule.id);
-                                return next;
-                              });
-                            };
-                            return (
-                              <div
-                                key={rule.id}
-                                className="auto-campaign-rule-grid"
-                                style={{
-                                  display: "grid",
-                                  gridTemplateColumns:
-                                    "34px 1fr 1fr 1fr 80px 32px",
-                                  gap: "0.5rem",
-                                  alignItems: "center",
-                                }}
-                              >
-                                <input
-                                  className="auto-campaign-rule-checkbox"
-                                  type="checkbox"
-                                  checked={!!rule.enabled}
-                                  disabled={
-                                    autoCampaignRulesSaving || !canLeadWrite
-                                  }
-                                  onChange={() => {
-                                    const next = autoCampaignRules.map((r) =>
-                                      r.id === rule.id
-                                        ? { ...r, enabled: !r.enabled }
-                                        : r,
-                                    );
-                                    setAutoCampaignRules(next);
-                                    removeSavedStatus();
-                                  }}
-                                  style={{
-                                    cursor: canLeadWrite
-                                      ? "pointer"
-                                      : "not-allowed",
-                                  }}
-                                />
-                                <AutoLeadColumnSelect
-                                  value={rule.column || ""}
-                                  options={columnOptions}
-                                  disabled={autoCampaignRulesSaving || !canLeadWrite}
-                                  onChange={(nextColumn) => {
-                                    const next = autoCampaignRules.map((r) =>
-                                      r.id === rule.id
-                                        ? { ...r, column: nextColumn }
-                                        : r,
-                                    );
-                                    setAutoCampaignRules(next);
-                                    removeSavedStatus();
-                                  }}
-                                />
-                                <input
-                                  type="text"
-                                  value={rule.value || ""}
-                                  disabled={
-                                    autoCampaignRulesSaving || !canLeadWrite
-                                  }
-                                  placeholder="e.g. web-form"
-                                  onChange={(e) => {
-                                    const next = autoCampaignRules.map((r) =>
-                                      r.id === rule.id
-                                        ? { ...r, value: e.target.value }
-                                        : r,
-                                    );
-                                    setAutoCampaignRules(next);
-                                    removeSavedStatus();
-                                  }}
-                                  style={{
-                                    padding: "0.35rem 0.5rem",
-                                    fontSize: "0.8rem",
-                                    borderRadius: 6,
-                                    border: "1px solid var(--border-color)",
-                                    background: "var(--surface)",
-                                    color: "var(--text-primary)",
-                                    minWidth: 0,
-                                  }}
-                                />
-                                <AutoCampaignSelect
-                                  value={rule.campaignId || ""}
-                                  options={callifiedCampaigns}
-                                  disabled={autoCampaignRulesSaving || !canLeadWrite}
-                                  onChange={(nextCampaignId) => {
-                                    const next = autoCampaignRules.map((r) =>
-                                      r.id === rule.id
-                                        ? { ...r, campaignId: nextCampaignId }
-                                        : r,
-                                    );
-                                    setAutoCampaignRules(next);
-                                    removeSavedStatus();
-                                  }}
-                                />
-                                <div
-                                  style={{
-                                    display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    gap: "0.4rem",
-                                  }}
-                                >
-                                  <button
-                                    type="button"
-                                    disabled={
-                                      !ruleIsValid ||
-                                      autoCampaignRulesSaving ||
-                                      !canLeadWrite
-                                    }
-                                    onClick={() => {
-                                      saveAutoCampaignRules({
-                                        enabled: autoCampaignRulesEnabled,
-                                        rules: autoCampaignRules,
-                                        markSavedId: rule.id,
-                                      });
-                                    }}
-                                    style={{
-                                      padding: "0.35rem 0.6rem",
-                                      borderRadius: 6,
-                                      border: "1px solid var(--border-color)",
-                                      background: "var(--surface)",
-                                      color: "var(--text-primary)",
-                                      fontSize: "0.75rem",
-                                      cursor:
-                                        canLeadWrite &&
-                                        ruleIsValid &&
-                                        !autoCampaignRulesSaving
-                                          ? "pointer"
-                                          : "not-allowed",
-                                      opacity: ruleIsValid ? 1 : 0.5,
-                                      whiteSpace: "nowrap",
-                                    }}
-                                  >
-                                    Save
-                                  </button>
-                                  {ruleIsSaved && (
-                                    <span
-                                      title="Saved"
-                                      style={{
-                                        width: 8,
-                                        height: 8,
-                                        borderRadius: "50%",
-                                        background:
-                                          "var(--success-color, #22c55e)",
-                                        flexShrink: 0,
-                                      }}
-                                    />
-                                  )}
-                                </div>
-                                <button
-                                  type="button"
-                                  disabled={
-                                    autoCampaignRulesSaving || !canLeadWrite
-                                  }
-                                  onClick={() => {
-                                    const next = autoCampaignRules.filter(
-                                      (r) => r.id !== rule.id,
-                                    );
-                                    setAutoCampaignRules(next);
-                                    setSavedAutoCampaignRuleIds((prev) => {
-                                      const s = new Set(prev);
-                                      s.delete(rule.id);
-                                      return s;
-                                    });
-                                    saveAutoCampaignRules({
-                                      enabled: autoCampaignRulesEnabled,
-                                      rules: next,
-                                    });
-                                  }}
-                                  style={{
-                                    background: "none",
-                                    border: "none",
-                                    color: "var(--danger-color, #ef4444)",
-                                    cursor: canLeadWrite
-                                      ? "pointer"
-                                      : "not-allowed",
-                                    display: "inline-flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    padding: "0.25rem",
-                                  }}
-                                  title="Remove rule"
-                                >
-                                  <Trash2 size={16} />
-                                </button>
-                              </div>
-                            );
-                          })}
-
-                          <button
-                            type="button"
-                            disabled={autoCampaignRulesSaving || !canLeadWrite}
-                            onClick={() => {
-                              const next = [
-                                ...autoCampaignRules,
-                                {
-                                  id: `rule-${Date.now()}`,
-                                  enabled: true,
-                                  column: "",
-                                  value: "",
-                                  campaignId: "",
-                                },
-                              ];
-                              setAutoCampaignRules(next);
-                            }}
-                            style={{
-                              display: "inline-flex",
-                              alignItems: "center",
-                              justifyContent: "center",
-                              gap: "0.35rem",
-                              marginTop: "0.5rem",
-                              padding: "0.45rem 0.75rem",
-                              borderRadius: 6,
-                              border: "1px dashed var(--border-color)",
-                              background: "transparent",
-                              color: "var(--text-secondary)",
-                              cursor: canLeadWrite ? "pointer" : "not-allowed",
-                              fontSize: "0.8rem",
-                              alignSelf: "flex-start",
-                            }}
-                          >
-                            <Plus size={14} /> Add rule
-                          </button>
-
-                          {!canLeadWrite && (
-                            <div
-                              className="call-settings-admin-note"
-                              style={{
-                                fontSize: "0.75rem",
-                                color: "var(--text-secondary)",
-                                marginTop: "0.5rem",
-                              }}
-                            >
-                              A role with leads.write can change auto-assign
-                              rules.
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {autoCampaignRulesSaving && (
-                        <div
-                          style={{
-                            fontSize: "0.75rem",
-                            color: "var(--text-secondary)",
-                            marginTop: "0.75rem",
-                          }}
-                        >
-                          Saving…
-                        </div>
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Multi-select campaign dropdown for bulk dial. */}
-              <div
-                className="leads-campaign-dropdown-control"
-                style={{ position: "relative" }}
-              >
-                <button
-                  type="button"
-                  className="input-field"
-                  onClick={() => setCampaignDropdownOpen((o) => !o)}
-                  disabled={callQueueActive}
-                  aria-haspopup="menu"
-                  aria-expanded={campaignDropdownOpen}
-                  style={{
-                    ...compactToolbarButtonStyle,
-                    minWidth: "175px",
-                    padding: "0.42rem 0.7rem",
-                    cursor: "pointer",
-                  }}
-                >
-                  <Filter size={14} />
-                  {selectedCampaignIds.length === 0
-                    ? "Select campaigns to dial"
-                    : `${selectedCampaignIds.length} campaign${selectedCampaignIds.length === 1 ? "" : "s"} selected`}
-                  {campaignDropdownOpen ? (
-                    <ChevronUp size={14} />
-                  ) : (
-                    <ChevronDown size={14} />
-                  )}
-                </button>
-                {campaignDropdownOpen && (
-                  <>
-                    <div
-                      style={{ position: "fixed", inset: 0, zIndex: 50 }}
-                      onClick={() => setCampaignDropdownOpen(false)}
-                    />
-                    <div
-                      className="card leads-campaign-dropdown-menu"
-                      style={{
-                        position: "absolute",
-                        top: "calc(100% + 4px)",
-                        right: 0,
-                        zIndex: 51,
-                        minWidth: 260,
-                        maxHeight: 320,
-                        overflowY: "auto",
-                        padding: "0.5rem",
-                        background: "var(--bg-color)",
-                        border: "1px solid var(--border-color)",
-                        boxShadow: "0 10px 24px rgba(0,0,0,0.2)",
-                      }}
-                    >
-                      {callifiedCampaigns.length === 0 ? (
-                        <div
-                          style={{
-                            padding: "0.5rem",
-                            fontSize: "0.85rem",
-                            color: "var(--text-secondary)",
-                          }}
-                        >
-                          No campaigns
-                        </div>
-                      ) : (
-                        callifiedCampaigns.map((c) => (
-                          <label
-                            key={c.id}
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "0.5rem",
-                              padding: "0.4rem 0.5rem",
-                              fontSize: "0.85rem",
-                              cursor: "pointer",
-                              borderRadius: 6,
-                            }}
-                            className="table-row-hover"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={selectedCampaignIds.includes(
-                                String(c.id),
-                              )}
-                              onChange={() => {
-                                setSelectedCampaignIds((prev) =>
-                                  prev.includes(String(c.id))
-                                    ? prev.filter((id) => id !== String(c.id))
-                                    : [...prev, String(c.id)],
-                                );
-                              }}
-                            />
-                            <span
-                              style={{
-                                flex: 1,
-                                minWidth: 0,
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                              }}
-                            >
-                              {c.name || `Campaign ${c.id}`}
-                            </span>
-                            <span
-                              style={{
-                                fontSize: "0.75rem",
-                                color: "var(--text-secondary)",
-                              }}
-                            >
-                              {c.leadCount || 0}
-                            </span>
-                          </label>
-                        ))
-                      )}
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <button
+              <LeadCampaignDial campaigns={callifiedCampaigns} selectedIds={selectedCampaignIds} onSelection={setSelectedCampaignIds} onDial={handleDialSelectedCampaigns} disabled={callQueueActive} />
+              <DialToolbar refreshKey={dialRunsVersion} canManage={['ADMIN','MANAGER'].includes(auth?.user?.role)} onChanged={() => setDialRunsVersion(version => version + 1)} onOpen={() => setCallStatusDrawerOpen(true)} onRequestStop={() => { setConfirmDrawerStop(true); setCallStatusDrawerOpen(true); }}>
+              {upcomingBadge => <button
                 type="button"
-                className="btn-primary"
-                onClick={handleDialSelectedCampaigns}
-                disabled={callQueueActive || selectedCampaignIds.length === 0}
-                style={{
-                  ...compactToolbarButtonStyle,
-                  padding: "0.42rem 0.7rem",
-                }}
-              >
-                {callQueueActive ? (
-                  <>
-                    <RefreshCw
-                      size={14}
-                      style={{ animation: "spin 1s linear infinite" }}
-                    />{" "}
-                    Dialling...
-                  </>
-                ) : (
-                  <>
-                    <Phone size={14} /> Dial Campaigns
-                  </>
-                )}
-              </button>
-
-              <button
-                type="button"
-                className="btn-secondary"
+                className="btn-secondary leads-call-status-trigger"
                 onClick={() => setCallStatusDrawerOpen(true)}
                 style={{
                   ...compactToolbarButtonStyle,
                   padding: "0.42rem 0.7rem",
                 }}
               >
-                <Phone size={14} /> Call Status
-              </button>
+                <CallStatusIcon size={15} /> Call Status {upcomingBadge}
+              </button>}
+              </DialToolbar>
             </>
           )}
 
@@ -11102,8 +10401,7 @@ const Leads = ({ initialListState = null } = {}) => {
             <span aria-hidden="true" style={compactToolbarDividerStyle} />
           )}
 
-          <PortalWhenReady enabled={isGeneric} target={genericBulkActionsHost}>
-            {canLeadBulkActions && (
+          {!isGeneric && canLeadBulkActions && (
             <div
               className="lead-bulk-actions-control"
               style={{ position: "relative" }}
@@ -11219,7 +10517,7 @@ const Leads = ({ initialListState = null } = {}) => {
                       >
                         <div style={{ display: "flex", gap: "0.5rem" }}>
                           <button type="button" className="btn-secondary" onClick={selectCurrentPageLeads} style={{ flex: 1, padding: "0.45rem 0.55rem", fontSize: "0.78rem" }}>Select current page</button>
-                          <button type="button" className="btn-secondary" onClick={selectAllPresentLeads} disabled={selectingAllPresent} style={{ flex: 1, padding: "0.45rem 0.55rem", fontSize: "0.78rem" }}>{selectingAllPresent ? "Selecting…" : "Select all present"}</button>
+                          <button type="button" className="btn-secondary" onClick={selectAllPresentLeads} style={{ flex: 1, padding: "0.45rem 0.55rem", fontSize: "0.78rem" }}>Select all present</button>
                         </div>
                         {isGeneric && canLeadUpdate && (
                           <button
@@ -11385,37 +10683,6 @@ const Leads = ({ initialListState = null } = {}) => {
               )}
             </div>
           )}
-          </PortalWhenReady>
-
-          {isGeneric && canLeadUpdate && selectedLeads.length > 0 && (
-            <button
-              type="button"
-              className="btn-primary"
-              onClick={handleDialSelectedLeads}
-              disabled={callQueueActive}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "0.35rem",
-                fontSize: "0.85rem",
-                padding: "0.42rem 0.7rem",
-              }}
-            >
-              {callQueueActive ? (
-                <>
-                  <RefreshCw
-                    size={14}
-                    style={{ animation: "spin 1s linear infinite" }}
-                  />{" "}
-                  Dialling...
-                </>
-              ) : (
-                <>
-                  <Phone size={14} /> Dial Selected ({selectedLeads.length})
-                </>
-              )}
-            </button>
-          )}
 
           {/* Lead Fields lives in the header for generic (see above); the
             lower-row Create Lead stays for non-generic tenants only. */}
@@ -11439,6 +10706,35 @@ const Leads = ({ initialListState = null } = {}) => {
         </div>
       </PortalWhenReady>
 
+      {scheduleSelection && <LeadScheduleDialog timezone={retryTimezone} contactIds={scheduleSelection} onClose={() => setScheduleSelection(null)} onScheduled={() => setDialRunsVersion(version => version + 1)} />}
+      {isGeneric && selectedLeads.length > 0 && canLeadBulkActions && (
+        <LeadSelectionBar
+          progress={bulkProgress}
+          count={selectedLeads.length}
+          totalResults={leadPagination.filtersQuery === leadFiltersQuery ? leadPagination.total : 0}
+          selectingAll={selectingAllResults}
+          onSelectAll={selectAllLeadResults}
+          canDial={canLeadWrite && callifiedConfigured}
+          canUpdate={canLeadUpdate}
+          canDelete={canLeadDelete}
+          busy={Boolean(bulkProgress) || bulkCampaignSaving}
+          staff={staff}
+          campaigns={callifiedCampaigns}
+          onClear={() => {
+            allResultsRequest.current?.abort();
+            allResultsRequest.current = null;
+            setSelectingAllResults(false);
+            setSelectedLeads([]);
+            setBulkAgent('');
+            setBulkCampaignId('');
+          }}
+          onDial={handleDialSelectedLeads}
+          onSchedule={() => setScheduleSelection([...selectedLeads])}
+          onAssignStaff={handleBulkAssign}
+          onAssignCampaign={handleBulkAssignCampaign}
+          onDelete={handleBulkDelete}
+        />
+      )}
       {callQueueActive && (
         <div
           className="card"
@@ -11551,7 +10847,7 @@ const Leads = ({ initialListState = null } = {}) => {
         <div
           className={
             isGeneric
-              ? "leads-toolbar-shell"
+              ? "leads-toolbar-shell leads-controls-toolbar"
               : isTravel
                 ? "travel-leads-search-toolbar"
                 : undefined
@@ -11581,7 +10877,7 @@ const Leads = ({ initialListState = null } = {}) => {
           }}
         >
           <div
-            className={isTravel ? "travel-leads-search-controls" : undefined}
+            className={isGeneric ? "leads-controls-search" : isTravel ? "travel-leads-search-controls" : undefined}
             style={{
               display: "flex",
               alignItems: "center",
@@ -11690,117 +10986,10 @@ const Leads = ({ initialListState = null } = {}) => {
                 style={{ display: "inline-flex", alignItems: "center", minWidth: 0 }}
               />
             )}
-            {isGeneric && (
-              <div
-                className="leads-density-control"
-                style={{ position: "relative" }}
-              >
-                <button
-                  type="button"
-                  className="btn-secondary leads-density-trigger"
-                  onClick={() => setLeadTableDensityMenuOpen((open) => !open)}
-                  aria-haspopup="menu"
-                  aria-expanded={leadTableDensityMenuOpen}
-                  aria-label={`Table density: ${leadTableDensity}`}
-                  style={{
-                    ...compactToolbarButtonStyle,
-                    height: 38,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "0.4rem",
-                  }}
-                >
-                  <Table2 size={15} />
-                  Table density
-                  {leadTableDensityMenuOpen ? (
-                    <ChevronUp size={13} />
-                  ) : (
-                    <ChevronDown size={13} />
-                  )}
-                </button>
-                {leadTableDensityMenuOpen && (
-                  <>
-                    <div
-                      aria-hidden="true"
-                      onClick={() => setLeadTableDensityMenuOpen(false)}
-                      style={{ position: "fixed", inset: 0, zIndex: 1088 }}
-                    />
-                    <div
-                      role="menu"
-                      className="leads-density-menu"
-                      aria-label="Table density"
-                      style={{
-                        position: "absolute",
-                        top: "calc(100% + 6px)",
-                        left: 0,
-                        zIndex: 1089,
-                        minWidth: 172,
-                        padding: "0.35rem",
-                        border: "1px solid var(--border-color)",
-                        borderRadius: 8,
-                        background: "var(--surface-color)",
-                        boxShadow: "0 12px 28px rgba(0,0,0,0.18)",
-                      }}
-                    >
-                      {[
-                        { value: "compact", label: "Compact", icon: Rows3 },
-                        {
-                          value: "comfortable",
-                          label: "Comfortable",
-                          icon: AlignJustify,
-                        },
-                      ].map(({ value, label, icon: DensityIcon }) => {
-                        const selected = leadTableDensity === value;
-                        return (
-                          <button
-                            key={value}
-                            type="button"
-                            role="menuitemradio"
-                            aria-checked={selected}
-                            onClick={() => {
-                              setLeadTableDensity(value);
-                              setLeadTableDensityMenuOpen(false);
-                            }}
-                            style={{
-                              width: "100%",
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "0.6rem",
-                              padding: "0.55rem 0.65rem",
-                              border: 0,
-                              borderRadius: 6,
-                              background: selected
-                                ? "var(--surface-hover)"
-                                : "transparent",
-                              color: "var(--text-primary)",
-                              font: "inherit",
-                              fontSize: "0.875rem",
-                              textAlign: "left",
-                              cursor: "pointer",
-                            }}
-                          >
-                            <DensityIcon size={15} />
-                            <span style={{ flex: 1 }}>{label}</span>
-                            {selected && <Check size={15} aria-hidden="true" />}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-            {isGeneric && (
-              <div
-                ref={setGenericBulkActionsHost}
-                className="leads-generic-bulk-actions-host"
-                style={{ display: "inline-flex", alignItems: "center" }}
-              />
-            )}
           </div>
 
           <div
-            className={isTravel ? "travel-leads-search-actions" : undefined}
+            className={isGeneric ? "leads-controls-actions" : isTravel ? "travel-leads-search-actions" : undefined}
             style={{
               display: "flex",
               alignItems: "center",
@@ -11808,6 +10997,10 @@ const Leads = ({ initialListState = null } = {}) => {
               flexWrap: "wrap",
             }}
           >
+            {isGeneric && <>
+              <button type="button" className="btn-secondary leads-mobile-actions-toggle" aria-expanded={mobileLeadActionsOpen} aria-controls="leads-secondary-actions" onClick={() => setMobileLeadActionsOpen(open => !open)}>More actions <ChevronDown size={14}/></button>
+              <div ref={setGenericActionsToolbarHost} />
+            </>}
             {hasActiveLeadFilters && (
               <button
                 type="button"
@@ -11822,13 +11015,13 @@ const Leads = ({ initialListState = null } = {}) => {
                 <RefreshCw size={13} /> Reset filters
               </button>
             )}
-            {isGeneric && canManageCallSettings && (
+            {isGeneric && canLeadRead && (
               <>
                 <button
                   type="button"
-                  className="btn-secondary"
-                  aria-label="Call settings"
-                  title="Call settings"
+                  className="btn-secondary leads-automation-trigger"
+                  aria-label="Automation"
+                  title="Automation"
                   onClick={(e) => {
                     e.stopPropagation();
                     if (aiSettingsOpen) closeCallSettings();
@@ -11841,14 +11034,14 @@ const Leads = ({ initialListState = null } = {}) => {
                     gap: "0.35rem",
                   }}
                 >
-                  <Settings size={14} />
-                  Call Settings
+                  <span className="leads-automation-symbol"><Zap size={15} />{(autoDialNewLeadsEnabled || autoCampaignRulesEnabled || dnpRetryEnabled || pendingRetryEnabled) && <span className="leads-automation-symbol-dot" aria-label="Automation enabled" />}</span>
+                  Automation
                 </button>
                 {aiSettingsOpen &&
                   createPortal(
                     <>
                       <div
-                        className="call-settings-backdrop"
+                        className="call-settings-backdrop lead-automation-backdrop"
                         style={{
                           position: "fixed",
                           inset: 0,
@@ -11863,9 +11056,12 @@ const Leads = ({ initialListState = null } = {}) => {
                         aria-hidden="true"
                       />
                       <div
-                        className="call-settings-dialog"
+                        className="call-settings-dialog lead-automation-dialog"
+                        data-active-section={automationSection}
+                        onClickCapture={(event) => { if (event.target.closest('[data-automation-setting], .call-settings-segmented button')) { automationDirtyRef.current = true; setAutomationDirty(true); setAutomationSaveStatus('Unsaved changes'); } }}
+                        onChangeCapture={(event) => { if (event.target.closest('.call-settings-section')) { automationDirtyRef.current = true; setAutomationDirty(true); setAutomationSaveStatus('Unsaved changes…'); } }}
                         role="dialog"
-                        aria-label="Call settings"
+                        aria-label="Automation"
                         aria-modal="true"
                         onClick={(e) => e.stopPropagation()}
                         style={{
@@ -11898,12 +11094,14 @@ const Leads = ({ initialListState = null } = {}) => {
                               <Settings size={18} />
                             </span>
                             <span>
-                              <h3>Call Settings</h3>
+                              <div className="lead-automation-title"><h3>Automation</h3><CallifiedConnection connected={callifiedConfigured} onConnect={() => navigate('/settings?section=integrations&integration=callified')} /></div>
                               <span>
                                 Configure calling automation and lead outcomes
                               </span>
                             </span>
                           </div>
+                          <div className="lead-automation-header-actions">
+                          <CrmDialClock timezone={retryTimezone} sync />
                           <button
                             className="call-settings-close"
                             type="button"
@@ -11920,37 +11118,33 @@ const Leads = ({ initialListState = null } = {}) => {
                           >
                             <X size={18} />
                           </button>
+                          </div>
                         </div>
+
+                        <div className="lead-automation-layout">
+                          <nav className="lead-automation-nav" aria-label="Automation sections">
+                            {[
+                              { id: 'dialing', label: 'Dialing & refresh', hint: `Auto-dial ${autoDialNewLeadsEnabled ? 'on' : 'off'} · Refresh ${autoRefreshEnabled ? 'on' : 'off'}` },
+                              { id: 'campaigns', label: 'Auto-assign campaigns', hint: autoCampaignRulesEnabled ? activeAutoCampaignRuleCount ? `${activeAutoCampaignRuleCount} active rules` : 'Needs a rule' : 'Off' },
+                              { id: 'retries', label: 'Retries', hint: `Unanswered ${dnpRetryEnabled ? 'on' : 'off'} · Pending ${pendingRetryEnabled ? 'on' : 'off'}` },
+                              { id: 'staff', label: 'Staff assignment', hint: assignStaffEnabled ? `On · ${assignStaffLogic === 'random' ? 'Random' : 'Round robin'}` : 'Off' },
+                              { id: 'classification', label: 'Classification', hint: 'Transcript first, score as fallback' },
+                              { id: 'runs', label: 'Dial runs', hint: 'Scheduled calls and queue controls' },
+                            ].map((section) => <button type="button" key={section.id} aria-pressed={automationSection === section.id} onClick={() => setAutomationSection(section.id)}><strong>{section.label}</strong><small>{section.hint}</small><span className="lead-automation-nav-dot" data-status={section.id === 'campaigns' ? !autoCampaignRulesEnabled ? 'off' : !activeAutoCampaignRuleCount ? 'attention' : 'on' : section.id === 'dialing' ? autoDialNewLeadsEnabled || autoRefreshEnabled ? 'on' : 'off' : section.id === 'retries' ? dnpRetryEnabled || pendingRetryEnabled ? 'on' : 'off' : section.id === 'staff' ? assignStaffEnabled ? 'on' : 'off' : section.id === 'runs' ? callifiedConfigured ? 'on' : 'attention' : 'on'} aria-label={section.hint} /></button>)}
+                          </nav>
+                          <div className="lead-automation-content">
 
                         {/* 1. Auto Dial New Leads */}
                         <div
-                          className="call-settings-section"
+                          className="call-settings-section" data-automation-section="dialing" hidden={automationSection !== "dialing"}
                           style={{ marginBottom: "1rem" }}
                         >
                           <div
                             className="call-settings-section-title"
-                            style={{
-                              fontSize: "0.75rem",
-                              fontWeight: 600,
-                              color: "var(--text-secondary)",
-                              textTransform: "uppercase",
-                              letterSpacing: "0.03em",
-                              marginBottom: "0.5rem",
-                            }}
                           >
                             Auto Dial New Leads
                           </div>
                           <label
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "0.5rem",
-                              cursor: canManageCallSettings
-                                ? "pointer"
-                                : "not-allowed",
-                              fontSize: "0.85rem",
-                              color: "var(--text-primary)",
-                            }}
                           >
                             <input
                               type="checkbox"
@@ -11966,110 +11160,325 @@ const Leads = ({ initialListState = null } = {}) => {
                           </label>
                         </div>
 
-                        <div
-                          style={{
-                            height: "1px",
-                            background: "var(--border-color)",
-                            margin: "0.75rem 0",
-                          }}
-                        />
 
-                        {/* Automatic Refresh */}
-                        <div
-                          className="call-settings-section"
-                          style={{ marginBottom: "1rem" }}
+
+                        {canLeadRead && <>              {/* Auto-assign campaign rules: dropdown shows a grid where each
+                  rule maps a lead column + value to a Callified campaign. */}
+              <div
+                className="leads-auto-campaign-control" data-automation-section="campaigns" hidden={automationSection !== "campaigns"}
+                style={{ position: "relative" }}
+              >
+                <button
+                  type="button"
+                  className="input-field"
+                  onClick={() => setAutoCampaignRulesOpen((o) => !o)}
+                  disabled={autoCampaignRulesLoading || autoCampaignRulesSaving}
+                  aria-haspopup="menu"
+                  aria-expanded={autoCampaignRulesOpen}
+                  style={{
+                    ...compactToolbarButtonStyle,
+                    minWidth: "160px",
+                    padding: "0.42rem 0.7rem",
+                    cursor: "pointer",
+                    position: "relative",
+                  }}
+                  aria-label="Auto-assign campaigns"
+                  title="Configure rules to automatically assign Callified campaigns to new leads"
+                >
+                  <Settings size={14} />
+                  <span
+                    style={{
+                      display: "inline-flex",
+                      flexDirection: "column",
+                      alignItems: "flex-start",
+                      lineHeight: 1.05,
+                    }}
+                  >
+                    <span>Auto-assign</span>
+                    <span
+                      style={{
+                        fontSize: "0.7rem",
+                        color: "var(--text-secondary)",
+                      }}
+                    >
+                      Callified Campaigns
+                    </span>
+                  </span>
+                  {autoCampaignRulesEnabled && (
+                    <span
+                      aria-label={
+                        autoCampaignAssignmentActive
+                          ? `${activeAutoCampaignRuleCount} active auto-assign rule${activeAutoCampaignRuleCount === 1 ? "" : "s"}`
+                          : "Auto-assign enabled with no active rules"
+                      }
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: "50%",
+                        background: autoCampaignAssignmentActive
+                          ? "var(--success-color, #22c55e)"
+                          : "var(--warning-color, #f59e0b)",
+                        marginLeft: "0.25rem",
+                      }}
+                    />
+                  )}
+                </button>
+
+                {(autoCampaignRulesOpen || aiSettingsOpen) && (
+                  <>
+
+                    <div
+                      className="card leads-auto-campaign-menu"
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        position: "absolute",
+                        top: "calc(100% + 4px)",
+                        // Anchor to the toolbar's right edge without allowing
+                        // the popup to be pushed outside the viewport.
+                        left: 0,
+                        zIndex: 51,
+                        width: "min(560px, calc(100vw - 24px))",
+                        minWidth: 0,
+                        maxWidth: "calc(100vw - 24px)",
+                        boxSizing: "border-box",
+                        padding: "1rem",
+                        boxShadow: "0 10px 24px rgba(0,0,0,0.2)",
+                        background: "var(--bg-color)",
+                        border: "1px solid var(--border-color)",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          marginBottom: "0.75rem",
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: "0.85rem",
+                            fontWeight: 600,
+                            color: "var(--text-primary)",
+                          }}
                         >
+                          Auto-assign campaigns
+                        </span>
+                        <label className="campaign-enable-switch">
+                          <input
+                            type="checkbox"
+                            aria-label="Enable auto-assign campaigns"
+                            checked={autoCampaignRulesEnabled}
+                            disabled={autoCampaignRulesLoading || !canLeadWrite || savedCampaignPayload === null}
+                            onChange={() => {
+                              const next = !autoCampaignRulesEnabled;
+                              markCampaignEdit();
+                              setAutoCampaignRulesEnabled(next);
+                            }}
+                          />
+                        </label>
+                      </div>
+
+                      <div
+                        style={{
+                          fontSize: "0.75rem",
+                          color: "var(--text-secondary)",
+                          marginBottom: "0.75rem",
+                        }}
+                      >
+                        When a new lead arrives, the first matching rule assigns
+                        the chosen campaign. Values match ignoring case, spaces,
+                        and punctuation.
+                      </div>
+
+                      {autoCampaignRulesEnabled &&
+                        activeAutoCampaignRuleCount === 0 && (
                           <div
-                            className="call-settings-section-title"
+                            role="status"
                             style={{
                               fontSize: "0.75rem",
-                              fontWeight: 600,
-                              color: "var(--text-secondary)",
-                              textTransform: "uppercase",
-                              letterSpacing: "0.03em",
-                              marginBottom: "0.5rem",
-                            }}
-                          >
-                            Automatic Refresh
-                          </div>
-                          <label
-                            style={{
-                              display: "flex",
-                              alignItems: "flex-start",
-                              gap: "0.5rem",
-                              cursor: canManageCallSettings
-                                ? "pointer"
-                                : "not-allowed",
-                              fontSize: "0.85rem",
-                              color: "var(--text-primary)",
-                            }}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={autoRefreshEnabled}
-                              disabled={callSettingsSaving || !isAdmin}
-                              onChange={(e) =>
-                                saveAutoRefreshEnabled(e.target.checked)
-                              }
-                              style={{ marginTop: "0.15rem" }}
-                            />
-                            <span>
-                              Enable automatic lead refresh
-                              <span
-                                style={{
-                                  display: "block",
-                                  marginTop: "0.2rem",
-                                  color: "var(--text-secondary)",
-                                  fontSize: "0.75rem",
-                                  lineHeight: 1.4,
-                                }}
-                              >
-                                Refreshes every 10 seconds during calls and
-                                every 30 seconds otherwise. Manual refresh
-                                remains available.
-                              </span>
-                            </span>
-                          </label>
-                        </div>
-
-                        <div
-                          style={{
-                            height: "1px",
-                            background: "var(--border-color)",
-                            margin: "0.75rem 0",
-                          }}
-                        />
-
-                        {/* 2. DNP Settings */}
-                        <div
-                          className="call-settings-section call-settings-section-expandable"
-                          style={{ marginBottom: "1rem" }}
-                        >
-                          <div
-                            className="call-settings-section-title"
-                            style={{
-                              fontSize: "0.75rem",
-                              fontWeight: 600,
-                              color: "var(--text-secondary)",
-                              textTransform: "uppercase",
-                              letterSpacing: "0.03em",
-                              marginBottom: "0.5rem",
-                            }}
-                          >
-                            DNP Settings
-                          </div>
-                          <label
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "0.5rem",
-                              cursor: canManageCallSettings
-                                ? "pointer"
-                                : "not-allowed",
-                              fontSize: "0.85rem",
-                              color: "var(--text-primary)",
+                              color: "var(--warning-color, #b45309)",
+                              background: "rgba(245, 158, 11, 0.1)",
+                              border: "1px solid rgba(245, 158, 11, 0.35)",
+                              borderRadius: 6,
+                              padding: "0.5rem 0.6rem",
                               marginBottom: "0.75rem",
                             }}
+                          >
+                            Auto-assign is on, but no rule is active. Complete a rule and turn it on.
+                          </div>
+                        )}
+
+                      {autoCampaignRulesEnabled && (
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "0.5rem",
+                          }}
+                        >
+                          {autoCampaignRules.map((rule) => {
+                            // Reuse labels from the generic Leads catalog, but
+                            // only for fields available before Contact creation.
+                            // Custom fields are valid create-time inputs too.
+                            const catalogOptions = leadColumnCatalog
+                              .filter(
+                                (col) =>
+                                  AUTO_CAMPAIGN_RULE_COLUMN_KEYS.has(col.key) ||
+                                  col.key.startsWith("cf_"),
+                              )
+                              .map((col) => ({
+                                key: col.key,
+                                label: col.label,
+                              }));
+                            const columnOptions = catalogOptions.length
+                              ? catalogOptions
+                              : [
+                                  ...BUILTIN_RULE_COLUMNS,
+                                  ...customFieldDefs.map((f) => ({
+                                    key: `cf_${f.fieldKey}`,
+                                    label: f.label,
+                                  })),
+                                ];
+                            const disabled = autoCampaignRulesLoading || !canLeadWrite || savedCampaignPayload === null;
+                            const editRule = (patch) => {
+                              markCampaignEdit();
+                              setAutoCampaignRules((rules) => rules.map((item) =>
+                                item.id === rule.id ? { ...item, ...patch } : item,
+                              ));
+                            };
+                            const removeRule = () => {
+                              markCampaignEdit();
+                              setAutoCampaignRules((rules) => rules.filter((item) => item.id !== rule.id));
+                            };
+                            return (
+                              <div key={rule.id} className="campaign-rule-card">
+                                <div className="campaign-rule-fields">
+                                  <AutomationSelect
+                                    value={rule.column || ""}
+                                    disabled={disabled}
+                                    onChange={(event) => editRule({ column: event.target.value })}
+                                  >
+                                    <option value="">Select column</option>
+                                    {columnOptions.map((col) => (
+                                      <option key={col.key} value={col.key}>{col.label}</option>
+                                    ))}
+                                  </AutomationSelect>
+                                  <CampaignRuleValue key={rule.column} field={getHeaderFilterConfig(leadColumnCatalog.find(col => col.key === rule.column))?.fieldKey || rule.column}
+                                    value={rule.value || ""} disabled={disabled} onChange={value => editRule({ value })} />
+                                  <AutomationSelect
+                                    value={rule.campaignId || ""}
+                                    disabled={disabled}
+                                    onChange={(event) => editRule({ campaignId: event.target.value })}
+                                  >
+                                    <option value="">Select campaign</option>
+                                    {callifiedCampaigns.map((campaign) => (
+                                      <option key={campaign.id} value={String(campaign.id)}>
+                                        {campaign.name || `Campaign ${campaign.id}`}
+                                      </option>
+                                    ))}
+                                  </AutomationSelect>
+                                </div>
+                                <div className="campaign-rule-actions">
+                                  <label className="campaign-rule-active">
+                                    <input
+                                      className="auto-campaign-rule-checkbox"
+                                      type="checkbox"
+                                      checked={!!rule.enabled}
+                                      disabled={disabled}
+                                      onChange={(event) => editRule({ enabled: event.target.checked })}
+                                    />
+                                    Active
+                                  </label>
+                                  <button type="button" className="campaign-rule-remove" aria-label="Remove rule" title="Remove rule" disabled={disabled} onClick={removeRule}>
+                                    <Trash2 size={14} />
+                                  </button>
+
+                                </div>
+                              </div>
+                            );
+                          })}
+
+                          <button
+                            type="button"
+                            disabled={autoCampaignRulesSaving || !canLeadWrite}
+                            onClick={() => {
+                              const next = [
+                                ...autoCampaignRules,
+                                {
+                                  id: `rule-${Date.now()}`,
+                                  enabled: true,
+                                  column: "",
+                                  value: "",
+                                  campaignId: "",
+                                },
+                              ];
+                              markCampaignEdit();
+                              setAutoCampaignRules(next);
+                            }}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              justifyContent: "center",
+                              gap: "0.35rem",
+                              marginTop: "0.5rem",
+                              padding: "0.45rem 0.75rem",
+                              borderRadius: 6,
+                              border: "1px dashed var(--border-color)",
+                              background: "transparent",
+                              color: "var(--text-secondary)",
+                              cursor: canLeadWrite ? "pointer" : "not-allowed",
+                              fontSize: "0.8rem",
+                              alignSelf: "stretch",
+                            }}
+                          >
+                            <Plus size={14} /> Add rule
+                          </button>
+
+                          {!canLeadWrite && (
+                            <div
+                              className="call-settings-admin-note"
+                              style={{
+                                fontSize: "0.75rem",
+                                color: "var(--text-secondary)",
+                                marginTop: "0.5rem",
+                              }}
+                            >
+                              A role with leads.write can change auto-assign
+                              rules.
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {autoCampaignRulesSaving && (
+                        <div
+                          style={{
+                            fontSize: "0.75rem",
+                            color: "var(--text-secondary)",
+                            marginTop: "0.75rem",
+                          }}
+                        >
+                          Saving…
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+
+</>}
+                        {/* 2. DNP Settings */}
+                        <div
+                          className="call-settings-section call-settings-section-expandable" data-automation-section="retries" hidden={automationSection !== "retries"}
+                          style={{ marginBottom: "1rem" }}
+                        >
+                          <div
+                            className="call-settings-section-title"
+                          >
+                            Retry unanswered calls
+                          </div>
+                          <label
                           >
                             <input
                               type="checkbox"
@@ -12106,7 +11515,7 @@ const Leads = ({ initialListState = null } = {}) => {
                                 >
                                   Max retries
                                 </label>
-                                <input
+                                <AutomationStepper
                                   id="dnp-max-retries"
                                   type="number"
                                   min={1}
@@ -12166,13 +11575,6 @@ const Leads = ({ initialListState = null } = {}) => {
                                   )
                                 }
                                 timezone={retryTimezone}
-                                onTimezoneChange={(value) =>
-                                  saveDnpScheduleSetting(
-                                    "timezone",
-                                    "feature.callified.retry.timezone",
-                                    value,
-                                  )
-                                }
                                 disabled={
                                   dnpSettingsLoading ||
                                   callSettingsSaving ||
@@ -12183,44 +11585,19 @@ const Leads = ({ initialListState = null } = {}) => {
                           )}
                         </div>
 
-                        <div
-                          style={{
-                            height: "1px",
-                            background: "var(--border-color)",
-                            margin: "0.75rem 0",
-                          }}
-                        />
 
-                        {/* 3. Pending Settings */}
+
+                        {/* 3. Retry pending leads */}
                         <div
-                          className="call-settings-section call-settings-section-expandable"
+                          className="call-settings-section call-settings-section-expandable" data-automation-section="retries" hidden={automationSection !== "retries"}
                           style={{ marginBottom: "1rem" }}
                         >
                           <div
                             className="call-settings-section-title"
-                            style={{
-                              fontSize: "0.75rem",
-                              fontWeight: 600,
-                              color: "var(--text-secondary)",
-                              textTransform: "uppercase",
-                              letterSpacing: "0.03em",
-                              marginBottom: "0.5rem",
-                            }}
                           >
-                            Pending Settings
+                            Retry pending leads
                           </div>
                           <label
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "0.5rem",
-                              cursor: canManageCallSettings
-                                ? "pointer"
-                                : "not-allowed",
-                              fontSize: "0.85rem",
-                              color: "var(--text-primary)",
-                              marginBottom: "0.75rem",
-                            }}
                           >
                             <input
                               type="checkbox"
@@ -12260,7 +11637,7 @@ const Leads = ({ initialListState = null } = {}) => {
                                 >
                                   Max retries
                                 </label>
-                                <input
+                                <AutomationStepper
                                   id="pending-max-retries"
                                   aria-label="Pending max retries"
                                   type="number"
@@ -12329,13 +11706,6 @@ const Leads = ({ initialListState = null } = {}) => {
                                   )
                                 }
                                 timezone={retryTimezone}
-                                onTimezoneChange={(value) =>
-                                  savePendingSetting(
-                                    "timezone",
-                                    "feature.callified.retry.timezone",
-                                    value,
-                                  )
-                                }
                                 disabled={
                                   pendingSettingsLoading ||
                                   callSettingsSaving ||
@@ -12346,44 +11716,61 @@ const Leads = ({ initialListState = null } = {}) => {
                           )}
                         </div>
 
-                        <div
-                          style={{
-                            height: "1px",
-                            background: "var(--border-color)",
-                            margin: "0.75rem 0",
-                          }}
-                        />
 
-                        {/* 4. Assigning Staff */}
+
+                        {/* Automatic Refresh */}
                         <div
-                          className="call-settings-section call-settings-section-expandable"
+                          className="call-settings-section" data-automation-section="dialing" hidden={automationSection !== "dialing"}
                           style={{ marginBottom: "1rem" }}
                         >
                           <div
                             className="call-settings-section-title"
-                            style={{
-                              fontSize: "0.75rem",
-                              fontWeight: 600,
-                              color: "var(--text-secondary)",
-                              textTransform: "uppercase",
-                              letterSpacing: "0.03em",
-                              marginBottom: "0.5rem",
-                            }}
                           >
-                            Assigning Staff
+                            Automatic Refresh
                           </div>
                           <label
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "0.5rem",
-                              cursor: canManageCallSettings
-                                ? "pointer"
-                                : "not-allowed",
-                              fontSize: "0.85rem",
-                              color: "var(--text-primary)",
-                              marginBottom: "0.75rem",
-                            }}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={autoRefreshEnabled}
+                              disabled={callSettingsSaving || !canManageCallSettings}
+                              onChange={(e) =>
+                                saveAutoRefreshEnabled(e.target.checked)
+                              }
+                              style={{ marginTop: "0.15rem" }}
+                            />
+                            <span>
+                              Enable automatic lead refresh
+                              <span
+                                style={{
+                                  display: "block",
+                                  marginTop: "0.2rem",
+                                  color: "var(--text-secondary)",
+                                  fontSize: "0.75rem",
+                                  lineHeight: 1.4,
+                                }}
+                              >
+                                Refreshes every 10 seconds during calls and
+                                every 30 seconds otherwise. Manual refresh
+                                remains available.
+                              </span>
+                            </span>
+                          </label>
+                        </div>
+
+
+
+                        {/* 4. Staff assignment */}
+                        <div
+                          className="call-settings-section call-settings-section-expandable" data-automation-section="staff" hidden={automationSection !== "staff"}
+                          style={{ marginBottom: "1rem" }}
+                        >
+                          <div
+                            className="call-settings-section-title"
+                          >
+                            Staff assignment
+                          </div>
+                          <label
                           >
                             <input
                               type="checkbox"
@@ -12420,34 +11807,9 @@ const Leads = ({ initialListState = null } = {}) => {
                                 >
                                   Assign logic
                                 </label>
-                                <select
-                                  id="assign-staff-logic"
-                                  className="input-field"
-                                  value={assignStaffLogic}
-                                  disabled={
-                                    assignSettingsLoading ||
-                                    callSettingsSaving ||
-                                    !canManageCallSettings
-                                  }
-                                  onChange={(e) => {
-                                    saveAssignStaffLogic(e.target.value);
-                                  }}
-                                  style={{
-                                    padding: "0.35rem 0.5rem",
-                                    borderRadius: "6px",
-                                    fontSize: "0.85rem",
-                                    minWidth: "160px",
-                                    background: "var(--surface)",
-                                    color: "var(--text-primary)",
-                                  }}
-                                >
-                                  <option value="round_robin">
-                                    Round robin
-                                  </option>
-                                  <option value="random">
-                                    Randomly assign staff
-                                  </option>
-                                </select>
+                                <div className="automation-choice-grid" role="group" aria-label="Assign logic">
+                                  {[['round_robin', 'Round robin', 'Takes turns across your staff.'], ['random', 'Random', 'Randomly assigns staff.']].map(([value, title, description]) => <button key={value} type="button" data-automation-setting aria-pressed={assignStaffLogic === value} disabled={assignSettingsLoading || callSettingsSaving || !canManageCallSettings} onClick={() => saveAssignStaffLogic(value)}><strong>{title}</strong><small>{description}</small></button>)}
+                                </div>
                               </div>
 
                               {assignStaffLogic === "round_robin" && (
@@ -12463,7 +11825,7 @@ const Leads = ({ initialListState = null } = {}) => {
                                   >
                                     Leads per user before moving to next
                                   </label>
-                                  <input
+                                  <AutomationStepper
                                     id="assign-staff-leads-per-user"
                                     type="number"
                                     min={1}
@@ -12499,26 +11861,12 @@ const Leads = ({ initialListState = null } = {}) => {
                           )}
                         </div>
 
-                        <div
-                          style={{
-                            height: "1px",
-                            background: "var(--border-color)",
-                            margin: "0.75rem 0",
-                          }}
-                        />
+
 
                         {/* 5. Classification */}
-                        <div className="call-settings-section">
+                        <div className="call-settings-section" data-automation-section="classification" hidden={automationSection !== "classification"}>
                           <div
                             className="call-settings-section-title"
-                            style={{
-                              fontSize: "0.75rem",
-                              fontWeight: 600,
-                              color: "var(--text-secondary)",
-                              textTransform: "uppercase",
-                              letterSpacing: "0.03em",
-                              marginBottom: "0.5rem",
-                            }}
                           >
                             Classification
                           </div>
@@ -12535,6 +11883,11 @@ const Leads = ({ initialListState = null } = {}) => {
                           </div>
                         </div>
 
+                        <div data-automation-section="runs" hidden={automationSection !== "runs"}>
+                          {automationSection === 'runs' && <LeadDialRuns campaigns={callifiedCampaigns} canWrite={canLeadWrite} canManage={canLeadWrite && ['ADMIN', 'MANAGER'].includes(auth?.user?.role)} refreshKey={dialRunsVersion} onChanged={() => fetchLeads({ background: true })} />}
+                        </div>
+                          </div>
+                        </div>
                         {!canManageCallSettings && (
                           <div
                             style={{
@@ -12543,7 +11896,7 @@ const Leads = ({ initialListState = null } = {}) => {
                               marginTop: "0.75rem",
                             }}
                           >
-                            A role with settings.manage can change these
+                            An authorized administrator can change these
                             settings.
                           </div>
                         )}
@@ -12559,23 +11912,16 @@ const Leads = ({ initialListState = null } = {}) => {
                             paddingTop: "0.9rem",
                           }}
                         >
-                          <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={closeCallSettings}
-                            disabled={callSettingsSaving}
-                          >
-                            Cancel
-                          </button>
+                          <small role="status" style={{ marginRight: 'auto', color: 'var(--text-secondary)', alignSelf: 'center', fontSize: '.72rem' }}>{campaignSaveError ? `Campaign rules could not save: ${campaignSaveError.message}` : autoCampaignRulesSaving || (savedCampaignPayload !== null && campaignPayload !== savedCampaignPayload) ? 'Saving campaign rules?' : automationSaveStatus}</small>
                           <button
                             type="button"
                             className="btn-primary"
-                            onClick={saveAllCallSettings}
+                            onClick={closeCallSettings}
                             disabled={
-                              callSettingsSaving || !canManageCallSettings
+                              callSettingsSaving
                             }
                           >
-                            {callSettingsSaving ? "Saving…" : "Save changes"}
+                            {callSettingsSaving ? "Saving…" : "Done"}
                           </button>
                         </div>
                       </div>
@@ -12586,6 +11932,10 @@ const Leads = ({ initialListState = null } = {}) => {
             )}
             {supportsColumnCustomization && (
               <ColumnPicker
+                triggerLabel={isGeneric ? 'View' : undefined}
+                density={isGeneric ? leadTableDensity : undefined}
+                onDensityChange={setLeadTableDensity}
+                onManageFields={isGeneric && isAdmin ? () => setLeadFieldModalOpen(true) : undefined}
                 tableKey="leads"
                 hiddenColumnKeys={isGeneric ? GENERIC_HIDDEN_COLUMN_PICKER_KEYS : undefined}
                 onColumnsChange={(columns) =>
@@ -12687,32 +12037,6 @@ const Leads = ({ initialListState = null } = {}) => {
               </>
             )}
           </div>
-          {isGeneric && (
-            <div
-              ref={setGenericActionsToolbarHost}
-              className={`leads-generic-actions-host${mobileLeadActionsOpen ? " leads-generic-actions-host--open" : ""}`}
-              style={{
-                order: 3,
-                flex: "1 1 100%",
-                minWidth: 0,
-              }}
-            >
-              <button
-                type="button"
-                className="btn-secondary leads-mobile-actions-toggle"
-                aria-expanded={mobileLeadActionsOpen}
-                aria-controls="leads-secondary-actions"
-                onClick={() => setMobileLeadActionsOpen((open) => !open)}
-              >
-                More actions
-                {mobileLeadActionsOpen ? (
-                  <ChevronUp size={14} />
-                ) : (
-                  <ChevronDown size={14} />
-                )}
-              </button>
-            </div>
-          )}
         </div>
         <div
           className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${!loading && filteredLeads.length > 0 && (filteredLeads.length < 10 || (filteredLeads.length === 10 && leadTableDensity === "compact")) ? " leads-split-table--compact-count" : ""}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : isTravel ? " leads-split-table--no-topbar leads-split-table--density-compact leads-split-table--travel-generic" : ""}`}
@@ -12864,9 +12188,10 @@ const Leads = ({ initialListState = null } = {}) => {
                               input.indeterminate = someVisibleLeadsSelected;
                           }}
                           onChange={toggleSelectAll}
+                          disabled={isGeneric && (selectingAllResults || leadPagination.filtersQuery !== leadFiltersQuery)}
                           onClick={(e) => e.stopPropagation()}
                           aria-label="Select all leads"
-                          style={LEAD_CHECKBOX_STYLE}
+                          className="leads-selection-checkbox"
                         />
                       ) : null,
                     )}
@@ -12884,6 +12209,7 @@ const Leads = ({ initialListState = null } = {}) => {
                       <tr
                         key={lead.id}
                         data-lead-row-id={String(lead.id)}
+                        data-selected={isGeneric && selectedLeadIds.has(lead.id) ? "true" : undefined}
                         style={{
                           cursor: isTravel ? "default" : "pointer",
                         }}
@@ -12910,11 +12236,13 @@ const Leads = ({ initialListState = null } = {}) => {
                             {canLeadBulkActions && (
                               <input
                                 type="checkbox"
-                                checked={selectedLeads.includes(lead.id)}
+                                {...(isGeneric && dragCheckboxProps(lead.id))}
+                                checked={selectedLeadIds.has(lead.id)}
+                                disabled={isGeneric && (selectingAllResults || leadPagination.filtersQuery !== leadFiltersQuery)}
                                 onChange={() => toggleSelect(lead.id)}
                                 onClick={(e) => e.stopPropagation()}
                                 aria-label={`Select ${lead.name || "lead"}`}
-                                style={LEAD_CHECKBOX_STYLE}
+                                className="leads-selection-checkbox"
                               />
                             )}
                             <div style={{ minWidth: 0, flex: 1 }}>
@@ -13052,6 +12380,7 @@ const Leads = ({ initialListState = null } = {}) => {
                       <tr
                         key={lead.id}
                         data-lead-row-id={String(lead.id)}
+                        data-selected={isGeneric && selectedLeadIds.has(lead.id) ? "true" : undefined}
                         style={{
                           cursor: isTravel ? "default" : "pointer",
                         }}
@@ -13086,11 +12415,12 @@ const Leads = ({ initialListState = null } = {}) => {
                               {canLeadBulkActions && (
                                 <input
                                   type="checkbox"
-                                  checked={selectedLeads.includes(lead.id)}
+                                  {...(isGeneric && dragCheckboxProps(lead.id))}
+                                  checked={selectedLeadIds.has(lead.id)}
                                   onChange={() => toggleSelect(lead.id)}
                                   onClick={(e) => e.stopPropagation()}
                                   aria-label={`Select ${lead.name || "lead"}`}
-                                  style={LEAD_CHECKBOX_STYLE}
+                                  className="leads-selection-checkbox"
                                 />
                               )}
                               <div style={{ minWidth: 0, flex: 1 }}>
@@ -13534,22 +12864,7 @@ const Leads = ({ initialListState = null } = {}) => {
                                     normalizeCallStatus(
                                       lead.callifiedLeadStatus,
                                     ) !== CALL_STATUS.YET_TO_CALL && (
-                                      <span
-                                        title={buildLeadStatusTooltip(lead, {
-                                          maxRetries: dnpMaxRetries,
-                                        })}
-                                        style={{
-                                          display: "inline-flex",
-                                          alignItems: "center",
-                                          justifyContent: "center",
-                                          color: "var(--text-secondary)",
-                                          cursor: "help",
-                                          marginLeft: "0.25rem",
-                                          flexShrink: 0,
-                                        }}
-                                      >
-                                        <Info size={14} />
-                                      </span>
+                                      <LeadCallStatusHelp lead={lead} maxRetries={dnpMaxRetries} />
                                     )}
                                 </span>
                               );
@@ -16624,8 +15939,15 @@ const Leads = ({ initialListState = null } = {}) => {
       )}
 
       {isGeneric && callStatusDrawerOpen && (
-        <CallifiedCallStatusDrawer
-          onClose={() => setCallStatusDrawerOpen(false)}
+        <CallifiedCallStatusDrawer campaigns={callifiedCampaigns}
+          initialConfirm={confirmDrawerStop}
+          onManage={canManageCallSettings ? () => { setConfirmDrawerStop(false); setCallStatusDrawerOpen(false); setAutomationSection('retries'); setAiSettingsOpen(true); } : undefined}
+          onQueueChanged={() => setDialRunsVersion(version => version + 1)}
+          connected={callifiedConfigured}
+          canWrite={canLeadWrite}
+          canDelete={canLeadDelete}
+          canManage={['ADMIN', 'MANAGER'].includes(auth?.user?.role)}
+          onClose={() => { setConfirmDrawerStop(false); setCallStatusDrawerOpen(false); }}
         />
       )}
 

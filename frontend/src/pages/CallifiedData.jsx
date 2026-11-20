@@ -1,3 +1,4 @@
+import { formatTimestamp, formatDateMedium } from '../utils/date';
 import React, { useState, useEffect, useContext } from "react";
 import { AuthContext } from "../App";
 import { getAuthToken } from "../utils/api";
@@ -63,7 +64,7 @@ export default function CallifiedData() {
 
       const data = await response.json();
       setCampaigns(data || []);
-      setLastSyncTime(new Date().toLocaleTimeString());
+      setLastSyncTime(formatTimestamp(new Date(), { timeStyle: 'medium' }));
 
       if (isManualSync) {
         notify.success("Callified data synced successfully");
@@ -224,9 +225,7 @@ export default function CallifiedData() {
                                   <div style={styles.callMeta}>
                                     <Clock size={16} />
                                     <span>
-                                      {new Date(
-                                        call.created_at,
-                                      ).toLocaleDateString()}
+                                      {formatDateMedium(call.created_at)}
                                     </span>
                                     <span style={styles.duration}>
                                       {call.duration_s.toFixed(1)}s

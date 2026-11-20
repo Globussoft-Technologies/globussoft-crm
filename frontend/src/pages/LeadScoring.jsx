@@ -1,3 +1,4 @@
+import { formatTimestamp } from '../utils/date';
 import React, { useState, useEffect, useContext } from 'react';
 import { fetchApi } from '../utils/api';
 import { AuthContext } from '../App';
@@ -60,7 +61,7 @@ export default function LeadScoring() {
     try {
       const res = await fetchApi('/api/ai_scoring/trigger', { method: 'POST' });
       if (res?.success) {
-        setLastRun(new Date().toLocaleTimeString());
+        setLastRun(formatTimestamp(new Date(), { timeStyle: 'medium' }));
         await loadContacts();
         const count = typeof res.scored === 'number' ? res.scored : null;
         notify.success(

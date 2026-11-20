@@ -19,6 +19,7 @@
 
 const prisma = require('../lib/prisma');
 const { getBudgetCap, getSetting, evaluateCap, KEYS } = require('../lib/tenantSettings');
+const { friendlyProviderMessage } = require('../lib/callifiedErrors');
 const {
   extractInterestedPlotAreaFromCallifiedDetails,
   extractPickupLocationFromCallifiedDetails,
@@ -148,6 +149,7 @@ async function getCallifiedToken(tenantId) {
     try {
       const res = await fetch(`${config.baseUrl}/api/auth/token?api_key=${encodeURIComponent(config.apiKey)}`, {
         method: 'GET',
+        signal: AbortSignal.timeout(20_000),
         headers: { Accept: 'application/json' },
       });
       if (res.ok) {
@@ -167,6 +169,7 @@ async function getCallifiedToken(tenantId) {
     try {
       const res = await fetch(`${config.baseUrl}/api/auth/login`, {
         method: 'POST',
+        signal: AbortSignal.timeout(20_000),
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: config.email, password: config.password }),
       });
@@ -213,6 +216,7 @@ async function callifiedFetch(tenantId, path, options = {}) {
 
   const res = await fetch(url, {
     ...options,
+    signal: options.signal || AbortSignal.timeout(30_000),
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: 'application/json',
@@ -226,6 +230,7 @@ async function callifiedFetch(tenantId, path, options = {}) {
     const newToken = await module.exports.getCallifiedToken(tenantId);
     const retry = await fetch(url, {
       ...options,
+      signal: options.signal || AbortSignal.timeout(30_000),
       headers: {
         Authorization: `Bearer ${newToken}`,
         Accept: 'application/json',
@@ -246,6 +251,11 @@ async function callifiedJson(tenantId, path, options = {}) {
     const err = new Error(`Callified API error ${res.status}: ${text || 'Unknown error'}`);
     err.status = res.status;
     err.code = `CALLIFIED_API_${res.status}`;
+    if (res.status === 409 && options.method === 'POST') {
+      if (path === '/api/leads') err.callifiedStage = 'lead creation';
+      else if (/^\/api\/campaigns\/\d+\/leads$/.test(path)) err.callifiedStage = 'campaign enrollment';
+      else if (/^\/api\/(?:campaigns\/\d+\/)?dial\/\d+$/.test(path)) err.callifiedStage = 'dialing';
+    }
     throw err;
   }
   try {
@@ -336,7 +346,7 @@ async function clearCallifiedLeadMapping(tenantId, phone) {
  *   2. Most recent CRM CallLog for this phone + provider
  *   3. Callified API search heuristics (undocumented; best-effort)
  */
-async function findCallifiedLeadByPhone(tenantId, phone, campaignId) {
+async function findCallifiedLeadByPhone(tenantId, phone, campaignId, contactId) {
   if (!tenantId || !phone) return null;
   const normalizedPhone = normalizeCallifiedPhone(phone);
 
@@ -365,26 +375,20 @@ async function findCallifiedLeadByPhone(tenantId, phone, campaignId) {
   }
 
   const previousLog = await prisma.callLog.findFirst({
-    where: { tenantId, provider: 'callified' },
-    orderBy: { createdAt: 'desc' },
-    select: { calleeNumber: true, notes: true },
+    where: { tenantId, provider: 'callified', ...(contactId ? { contactId: Number(contactId) } : {}) },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    select: { calleeNumber: true, providerCallId: true, notes: true },
   });
-  if (previousLog && previousLog.notes) {
+  if (previousLog && isPhoneMatch(previousLog.calleeNumber || '', normalizedPhone)) {
+    let callLogLeadId = Number(previousLog.providerCallId);
     try {
-      const notes = JSON.parse(previousLog.notes);
-      if (notes && notes.callifiedLeadId) {
-        // Only reuse the CallLog mapping if the phone digits match.
-        if (isPhoneMatch(previousLog.calleeNumber || '', normalizedPhone)) {
-          const callLogLeadId = Number(notes.callifiedLeadId);
-          const exists = await _verifyLeadExists(tenantId, callLogLeadId, campaignId, normalizedPhone);
-          if (exists) {
-            return { id: callLogLeadId, source: 'crm_calllog' };
-          }
-          console.log(`[callifiedClient] findCallifiedLeadByPhone: callLog lead ${callLogLeadId} is stale, skipping for ${normalizedPhone}`);
-        }
-      }
+      const notes = JSON.parse(previousLog.notes || '{}');
+      if (notes?.callifiedLeadId) callLogLeadId = Number(notes.callifiedLeadId);
     } catch (_e) {
       // ignore parse errors
+    }
+    if (callLogLeadId && await _verifyLeadExists(tenantId, callLogLeadId, campaignId, normalizedPhone)) {
+      return { id: callLogLeadId, source: 'crm_calllog' };
     }
   }
 
@@ -784,7 +788,7 @@ async function createLead(tenantId, { firstName, lastName, phone, email, company
   }
 
   const normalizedPhone = normalizeCallifiedPhone(phone);
-  const existing = await findCallifiedLeadByPhone(tenantId, normalizedPhone, campaignId);
+  const existing = await findCallifiedLeadByPhone(tenantId, normalizedPhone, campaignId, contactId);
   if (existing && existing.id) {
     console.log(`[callifiedClient] createLead: reusing local mapping ${existing.id} for ${normalizedPhone}`);
     return { id: existing.id, reused: true, source: existing.source };
@@ -1293,7 +1297,7 @@ async function enrollLeadTolerant(tenantId, campaignId, leadId) {
  *
  * Returns the Callified leadId and the CRM CallLog id.
  */
-async function initiateCallForContact({ tenantId, contactId, campaignId, userId, interest }) {
+async function initiateCallForContact({ tenantId, contactId, campaignId, userId, interest, historyType }) {
   const { contact, normalizedPhone, buildLead } = await module.exports.prepareContactCall({
     tenantId,
     contactId,
@@ -1324,6 +1328,11 @@ async function initiateCallForContact({ tenantId, contactId, campaignId, userId,
   try {
     dialResult = await tryCampaignDial(callifiedLeadId);
   } catch (campaignErr) {
+    // The provider may have accepted a timed-out dial. Do not issue a second
+    // call through the fallback endpoint when its outcome is unknown.
+    if (['TimeoutError', 'AbortError'].includes(campaignErr.name)) throw campaignErr;
+    const refusal = friendlyProviderMessage(campaignErr.message);
+    if (['CALLING_LEAD_ON_DND', 'CALLING_OUTSIDE_HOURS', 'CALLING_LEAD_BUSY'].includes(refusal?.code)) throw campaignErr;
     try {
       dialResult = await trySingleLeadDial(callifiedLeadId);
     } catch (singleErr) {
@@ -1360,6 +1369,7 @@ async function initiateCallForContact({ tenantId, contactId, campaignId, userId,
       status: 'INITIATED',
       duration: 0,
       notes: JSON.stringify({
+        ...(historyType && { historyType }),
         campaignId: Number(campaignId),
         callifiedLeadId,
         dialResult,
@@ -1368,13 +1378,8 @@ async function initiateCallForContact({ tenantId, contactId, campaignId, userId,
     },
   });
 
-  return {
-    callifiedLeadId,
-    campaignId: Number(campaignId),
-    contactId: contact.id,
-    callLogId: callLog.id,
-    dialResult,
-  };
+  if (historyType) await require('../lib/audit').writeAudit('LeadDialOrigin', historyType, callLog.id, userId, tenantId, { name: contact.name, contactId: contact.id });
+  return { callifiedLeadId, campaignId: Number(campaignId), contactId: contact.id, callLogId: callLog.id, dialResult };
 }
 
 /**
@@ -1643,8 +1648,8 @@ async function fetchAndStoreCallDetails({ tenantId, callifiedLeadId, contactId, 
   const details = await module.exports.getCallDetails(tenantId, callifiedLeadId);
   const sortedTranscripts = Array.isArray(details.transcripts)
     ? [...details.transcripts]
-        .filter((t) => t && t.created_at)
-        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        .filter((t) => t && Number.isFinite(Date.parse(t.created_at || t.createdAt)))
+        .sort((a, b) => Date.parse(b.created_at || b.createdAt) - Date.parse(a.created_at || a.createdAt))
     : [];
   const latestTranscript = sortedTranscripts[0] || details.transcripts[details.transcripts.length - 1] || null;
   const latestReview = details.reviews.find(
@@ -1665,7 +1670,7 @@ async function fetchAndStoreCallDetails({ tenantId, callifiedLeadId, contactId, 
     status: t.status,
     call_duration_s: t.call_duration_s,
     recording_url: t.recording_url,
-    created_at: t.created_at,
+    created_at: t.created_at || t.createdAt,
   }));
   const reviewSummary = details.reviews.map((r) =>
     r && !r.error
@@ -1733,7 +1738,7 @@ async function fetchAndStoreCallDetails({ tenantId, callifiedLeadId, contactId, 
     notes: notesJson,
   };
 
-  if (latestLog) {
+  if (latestLog && latestLog.status !== 'CANCELLED') {
     await prisma.callLog.update({
       where: { id: latestLog.id },
       data: updateData,
@@ -1945,6 +1950,7 @@ async function resolveSubBrandPersona(tenantId, subBrand) {
   }
 }
 
+const { guardedCall } = require('../lib/genericCallSafety');
 module.exports = {
   // Legacy / admin surface
   initiateCall,
@@ -1977,8 +1983,8 @@ module.exports = {
   getTranscriptReview,
   getCallDetails,
   prepareContactCall,
-  initiateCallForContact,
-  initiateBrowserCallForContact,
+  initiateCallForContact: (params) => guardedCall(params, initiateCallForContact),
+  initiateBrowserCallForContact: (params) => guardedCall(params, initiateBrowserCallForContact),
   fetchAndStoreCallDetails,
   syncPendingCallifiedStatuses,
   inferCallStatus,

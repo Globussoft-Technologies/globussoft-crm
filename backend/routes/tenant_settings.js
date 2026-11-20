@@ -361,6 +361,29 @@ router.put("/callified", verifyToken, requirePermission("settings", "manage"), a
         });
         saved.push({ row, priorValue: prior?.value ?? null });
       }
+      const retryTiming = [
+        ["pending", [
+          KEYS.CALLIFIED_PENDING_RETRY_INTERVAL_MINUTES, KEYS.CALLIFIED_PENDING_RETRY_MODE,
+          KEYS.CALLIFIED_PENDING_RETRY_DAY_INTERVAL, KEYS.CALLIFIED_PENDING_RETRY_TIME_LOCAL,
+        ]],
+        ["dnp", [
+          KEYS.CALLIFIED_DNP_RETRY_INTERVAL_MINUTES, KEYS.CALLIFIED_DNP_RETRY_MODE,
+          KEYS.CALLIFIED_DNP_RETRY_DAY_INTERVAL, KEYS.CALLIFIED_DNP_RETRY_TIME_LOCAL,
+        ]],
+      ];
+      for (const [status, keys] of retryTiming) {
+        const changed = saved.some(({ row, priorValue }) =>
+          (keys.includes(row.key) || row.key === KEYS.CALLIFIED_RETRY_TIMEZONE) &&
+          row.value !== String(priorValue ?? DEFAULTS[row.key]),
+        );
+        if (changed) {
+          // The worker recalculates the due time under the newly saved policy.
+          await tx.contact.updateMany({
+            where: { tenantId, status: "Lead", deletedAt: null, callifiedLeadStatus: status, callifiedDnpNextRetryAt: { not: null } },
+            data: { callifiedDnpNextRetryAt: null },
+          });
+        }
+      }
       return saved;
     });
 

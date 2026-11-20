@@ -1,3 +1,4 @@
+import { formatDateTime, tenantTimezone } from '../utils/date';
 import React, { useState, useEffect, useCallback, useMemo, useContext } from 'react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
@@ -362,7 +363,7 @@ function formatScalar(v) {
   // we tend to stamp into details).
   if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)) {
     try {
-      return new Date(v).toLocaleString();
+      return formatDateTime(v);
     } catch {
       /* fall through */
     }
@@ -807,7 +808,7 @@ export default function AuditLog() {
                 }}
               >
                 <ShieldCheck size={14} />
-                {`Integrity verified at ${new Date(integrity.lastVerifiedAt).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' })}`}
+                {`Integrity verified at ${new Date(integrity.lastVerifiedAt).toLocaleTimeString('en-IN', { timeZone: tenantTimezone() || 'Asia/Kolkata' })}`}
                 <span style={{ color: 'var(--text-secondary)', fontWeight: 400, fontSize: '0.78rem' }}>
                   ({integrity.chainLength} rows)
                 </span>
@@ -1019,7 +1020,7 @@ export default function AuditLog() {
                             reads "29/04/2026, 14:30:00 IST" rather than a
                             naive local-time string. */}
                         {new Date(log.createdAt).toLocaleString('en-IN', {
-                          timeZone: 'Asia/Kolkata',
+                          timeZone: tenantTimezone() || 'Asia/Kolkata',
                           timeZoneName: 'short',
                         })}
                       </td>

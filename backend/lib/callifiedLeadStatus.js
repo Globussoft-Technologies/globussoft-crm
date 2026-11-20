@@ -32,6 +32,40 @@ const VALID_LEAD_STATUSES = [
   CALL_STATUS.JUNK,
 ];
 
+function isManualLeadStatus(contact) {
+  return contact.callifiedLeadStatusSource === "manual" &&
+    contact.callifiedLeadStatusReason !== "Manual call in progress.";
+}
+
+function leadStatusVersion(contact) {
+  return {
+    callifiedLeadStatus: contact.callifiedLeadStatus,
+    callifiedLeadStatusSource: contact.callifiedLeadStatusSource,
+    callifiedLeadStatusUpdatedAt: contact.callifiedLeadStatusUpdatedAt,
+  };
+}
+
+function isRetryStatus(status) {
+  return status === CALL_STATUS.DNP || status === CALL_STATUS.PENDING;
+}
+
+function preserveRetryStatus(currentStatus, nextStatus) {
+  return isRetryStatus(normalizeLeadStatus(currentStatus)) &&
+    (nextStatus === CALL_STATUS.CONNECTED || nextStatus === CALL_STATUS.YET_TO_CALL);
+}
+
+function automaticLeadStatusData(contact, { status, source, reason }) {
+  return {
+    callifiedLeadStatus: status,
+    callifiedLeadStatusSource: source,
+    callifiedLeadStatusReason: String(reason || "").slice(0, 190),
+    ...(contact.callifiedLeadStatus !== status ? { callifiedLeadStatusUpdatedAt: new Date() } : {}),
+    ...(!isRetryStatus(status) && status !== CALL_STATUS.CONNECTED
+      ? { callifiedDnpRetryCount: 0, callifiedDnpNextRetryAt: null }
+      : {}),
+  };
+}
+
 function normalizeLeadStatus(raw) {
   if (!raw) return CALL_STATUS.YET_TO_CALL;
   const s = String(raw).toLowerCase().trim().replace(/\s+/g, "_");
@@ -462,6 +496,9 @@ async function assignQualifiedLead(tenantId, contactId, status, options = {}) {
     // tenant update can exceed Prisma's 5s default, causing the assignment to
     // roll back and leaving the hot lead unassigned.
     const result = await prisma.$transaction(async (tx) => {
+      // Serialize the tenant's assignment cursor across concurrent operators.
+      // Lock ordering is tenant -> contact throughout this transaction.
+      await tx.tenant.update({ where: { id: tenantId }, data: { id: tenantId } });
       const contact = await tx.contact.findFirst({
         where: { id: Number(contactId), tenantId },
         select: { id: true, assignedToId: true },
@@ -588,10 +625,65 @@ async function assignQualifiedLead(tenantId, contactId, status, options = {}) {
 // Preserve legacy export name for consumers that already import it.
 const assignQualifiedLeadRoundRobin = assignQualifiedLead;
 
+// Backfill a bounded page with one staff/settings read and grouped writes,
+// rather than one interactive transaction and notification per lead.
+async function assignQualifiedLeadsBatch(tenantId, contactIds) {
+  const enabled = await getSetting(tenantId, KEYS.CALLIFIED_ASSIGN_STAFF_ENABLED, { coerce: (value) => String(value).toLowerCase() !== 'false' });
+  if (!enabled) return { assigned: 0, skipped: contactIds.length, details: [] };
+  const [logic, rawCap] = await Promise.all([
+    getSetting(tenantId, KEYS.CALLIFIED_ASSIGN_STAFF_LOGIC, { fallback: 'round_robin' }),
+    getSetting(tenantId, KEYS.CALLIFIED_ASSIGN_STAFF_LEADS_PER_USER, { fallback: 1 }),
+  ]);
+  const cap = Math.max(1, Math.min(Number(rawCap) || 1, 50));
+  const result = await prisma.$transaction(async (tx) => {
+    const tenant = await tx.tenant.update({ where: { id: tenantId }, data: { id: tenantId }, select: { callifiedLastHotAssignedUserId: true, callifiedLastHotAssignedCount: true } });
+    const staff = await tx.user.findMany({ where: { tenantId, deactivatedAt: null, role: { in: ['ADMIN', 'MANAGER', 'USER'] } }, orderBy: { id: 'asc' }, select: { id: true } });
+    if (!staff.length) return { assigned: 0, skipped: contactIds.length, details: [], owners: [] };
+    const rows = await tx.contact.findMany({ where: { tenantId, id: { in: contactIds.slice(0, 100) }, status: 'Lead', deletedAt: null, callifiedLeadStatus: 'qualified', assignedToId: null }, orderBy: { id: 'asc' }, select: { id: true } });
+    let lastId = tenant.callifiedLastHotAssignedUserId;
+    let count = Number(tenant.callifiedLastHotAssignedCount) || 0;
+    const groups = new Map();
+    for (const row of rows) {
+      let index = staff.findIndex((member) => member.id === lastId);
+      if (logic === 'random') index = Math.floor(Math.random() * staff.length);
+      else if (index < 0 || count >= cap) { index = (index + 1) % staff.length; count = 0; }
+      const owner = staff[index].id;
+      count = owner === lastId ? count + 1 : 1;
+      lastId = owner;
+      if (!groups.has(owner)) groups.set(owner, []);
+      groups.get(owner).push(row.id);
+    }
+    let assigned = 0;
+    const details = [];
+    for (const [owner, ids] of groups) {
+      const changed = await tx.contact.updateMany({ where: { tenantId, id: { in: ids }, assignedToId: null, callifiedLeadStatus: 'qualified' }, data: { assignedToId: owner } });
+      assigned += changed.count;
+      const assignedRows = changed.count === ids.length ? ids.map((id) => ({ id })) : await tx.contact.findMany({ where: { tenantId, id: { in: ids }, assignedToId: owner }, select: { id: true } });
+      details.push(...assignedRows.map((row) => ({ contactId: row.id, assignedToId: owner, reason: 'assigned' })));
+    }
+    if (rows.length) await tx.tenant.update({ where: { id: tenantId }, data: { callifiedLastHotAssignedUserId: lastId, callifiedLastHotAssignedCount: count } });
+    return { assigned, skipped: contactIds.length - assigned, details, owners: [...groups.keys()] };
+  }, { timeout: 15000 });
+  await require('./boundedWork').mapBounded(result.owners, 4, async (owner) => {
+    const count = result.details.filter((entry) => entry.assignedToId === owner).length;
+    if (!count) return;
+    try {
+      await notify({ userId: owner, tenantId, title: 'Qualified leads assigned', message: `${count} qualified lead(s) have been assigned to you.`, type: 'info', category: 'lead', link: '/leads' });
+    } catch (error) { console.error('[callified] batch assignment notification:', error.message); }
+  });
+  const { owners: _owners, ...response } = result;
+  return response;
+}
+
 module.exports = {
   CALL_STATUS,
   VALID_LEAD_STATUSES,
   normalizeLeadStatus,
+  isManualLeadStatus,
+  leadStatusVersion,
+  isRetryStatus,
+  preserveRetryStatus,
+  automaticLeadStatusData,
   isTruthy,
   fallbackClassify,
   classifyConclusion,
@@ -603,4 +695,5 @@ module.exports = {
   classifyLeadStatus,
   assignQualifiedLead,
   assignQualifiedLeadRoundRobin,
+  assignQualifiedLeadsBatch,
 };

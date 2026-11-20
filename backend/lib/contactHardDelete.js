@@ -111,7 +111,8 @@ function jsonOrNull(value) {
   return empty ? null : JSON.stringify(value);
 }
 
-async function removeContactFromAssignmentProfiles(tx, contactId) {
+async function removeContactsFromAssignmentProfiles(tx, ids) {
+  const removed = new Set(ids);
   const profiles = [
     { model: "transportPerson", statusField: "assignmentStatusJson" },
     { model: "plotBroker", statusField: "workflowStatusJson" },
@@ -124,14 +125,16 @@ async function removeContactFromAssignmentProfiles(tx, contactId) {
       const select = { id: true, customerIdsJson: true, assignmentPairsJson: true };
       if (statusField) select[statusField] = true;
       const rows = await delegate.findMany({
-        where: { customerIdsJson: { contains: String(contactId) } },
+        where: { OR: ids.map((id) => ({ customerIdsJson: { contains: String(id) } })) },
         select,
       });
       for (const row of rows) {
-        const customerIds = parseJson(row.customerIdsJson, [])
-          .filter((id) => Number(id) !== Number(contactId));
+        const previousIds = parseJson(row.customerIdsJson, []);
+        const customerIds = previousIds.filter((id) => !removed.has(Number(id)));
+        // The substring prefilter can also match part of a different ID.
+        if (customerIds.length === previousIds.length) continue;
         const assignmentPairs = parseJson(row.assignmentPairsJson, [])
-          .filter((pair) => Number(pair?.customerId) !== Number(contactId));
+          .filter((pair) => !removed.has(Number(pair?.customerId)));
         const data = {
           customerIdsJson: jsonOrNull(customerIds),
           assignmentPairsJson: jsonOrNull(assignmentPairs),
@@ -139,7 +142,8 @@ async function removeContactFromAssignmentProfiles(tx, contactId) {
         if (statusField) {
           const statuses = parseJson(row[statusField], {});
           for (const key of Object.keys(statuses)) {
-            if (key === `customer-${contactId}` || key.startsWith(`customer-${contactId}-plot-`)) {
+            const match = /^customer-(\d+)(?:$|-plot-)/.exec(key);
+            if (match && removed.has(Number(match[1]))) {
               delete statuses[key];
             }
           }
@@ -156,8 +160,9 @@ async function removeContactFromAssignmentProfiles(tx, contactId) {
   }
 }
 
-async function deleteContactDependents(tx, contactId) {
-  await removeContactFromAssignmentProfiles(tx, contactId);
+async function deleteContactsDependents(tx, ids) {
+  const contactId = ids.length === 1 ? ids[0] : { in: ids };
+  await removeContactsFromAssignmentProfiles(tx, ids);
 
   // TMC parent links have two required Contact foreign keys, so they need a
   // compound OR rather than the simple contactId loop below.
@@ -197,20 +202,16 @@ async function hardDeleteContacts(db, contactIds) {
   const ids = [...new Set((contactIds || []).map(Number).filter((id) => Number.isInteger(id) && id > 0))];
   if (ids.length === 0) return 0;
 
-  let deletedCount = 0;
-  await db.$transaction(async (tx) => {
-    for (const contactId of ids) {
-      await deleteContactDependents(tx, contactId);
-      // deleteMany returns only a count and therefore does not ask Prisma to
-      // select every Contact column after the delete. That keeps this cleanup
-      // compatible with deployments where newer nullable Contact columns are
-      // still waiting for their normal schema rollout.
-      const result = await tx.contact.deleteMany({ where: { id: contactId } });
-      deletedCount += result.count;
-    }
+  return db.$transaction(async (tx) => {
+    await deleteContactsDependents(tx, ids);
+    // Only return the count so older schemas can still delete during rollout.
+    const { count } = await tx.contact.deleteMany({ where: { id: ids.length === 1 ? ids[0] : { in: ids } } });
+    return count;
   }, CONTACT_HARD_DELETE_TRANSACTION_OPTIONS);
+}
 
-  return deletedCount;
+async function deleteContactDependents(tx, contactId) {
+  await deleteContactsDependents(tx, [Number(contactId)]);
 }
 
 async function hardDeleteContact(db, contactId) {

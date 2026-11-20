@@ -58,6 +58,17 @@ beforeEach(() => {
 });
 
 describe("ColumnPicker reorder", () => {
+  it('groups row density and field management inside View', async () => {
+    const density = vi.fn(); const manage = vi.fn();
+    render(<ColumnPicker tableKey="leads" triggerLabel="View" density="comfortable" onDensityChange={density} onManageFields={manage} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'View' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+    expect(screen.getByRole('button', { name: 'Comfortable' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Compact' }));
+    expect(density).toHaveBeenCalledWith('compact');
+    fireEvent.click(screen.getByRole('button', { name: 'Manage lead fields' }));
+    expect(manage).toHaveBeenCalledOnce();
+  });
   it("publishes the exact live catalog used by Customize table", async () => {
     const onAvailableColumnsChange = vi.fn();
     render(

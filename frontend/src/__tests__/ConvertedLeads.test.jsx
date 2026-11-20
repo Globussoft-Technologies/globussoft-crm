@@ -78,7 +78,8 @@ vi.mock('../utils/notify', () => ({
 }));
 
 // Deterministic date rendering across ICU builds.
-vi.mock('../utils/date', () => ({
+vi.mock('../utils/date', async (importOriginal) => ({
+  ...await importOriginal(),
   formatDateMedium: (d) => (d ? new Date(d).toISOString().slice(0, 10) : '—'),
 }));
 

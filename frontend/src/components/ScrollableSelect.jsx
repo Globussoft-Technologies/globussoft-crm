@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useId } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Check } from "lucide-react";
 
 // ── ScrollableSelect — single-select dropdown capped to ~5 visible rows ──
 //
@@ -17,6 +17,7 @@ import { ChevronDown } from "lucide-react";
 // (it renders like any other row; callers wanting an "All X" default just
 // include it as the first option, same as they would with <option value="">).
 export default function ScrollableSelect({
+  id,
   value,
   onChange,
   options,
@@ -52,7 +53,7 @@ export default function ScrollableSelect({
     const availableHeight = openUp ? availableAbove : availableBelow;
     const minimumWidth = typeof width === "number" ? width : rect.width;
     const menuWidth = Math.min(
-      Math.max(minimumWidth, rect.width),
+      Math.max(minimumWidth, rect.width, 160),
       Math.max(0, window.innerWidth - (viewportPadding * 2)),
     );
     return {
@@ -97,6 +98,12 @@ export default function ScrollableSelect({
   }, [open]);
 
   const selected = options.find((o) => o.value === value);
+  useEffect(() => {
+    if (!open || !popoverPos || searchable || !popoverRef.current) return;
+    if (!popoverRef.current.contains(document.activeElement)) {
+      (popoverRef.current.querySelector('[aria-selected="true"]') || popoverRef.current.querySelector('[role="option"]'))?.focus({ preventScroll: true });
+    }
+  }, [open, popoverPos, searchable]);
   const normalizedSearch = searchQuery.trim().toLowerCase();
   const visibleOptions = searchable && normalizedSearch
     ? options.filter((option) => option.label.toLowerCase().includes(normalizedSearch))
@@ -132,10 +139,11 @@ export default function ScrollableSelect({
       {open && searchable ? (
         <input
           ref={triggerRef}
+        id={id}
           type="search"
           role="combobox"
           autoFocus
-          className={`input-field ${className}`.trim()}
+          className={`input-field crm-select-trigger ${className}`.trim()}
           aria-label={`Search ${ariaLabel || "options"}`}
           aria-controls={listboxId}
           aria-expanded="true"
@@ -148,12 +156,18 @@ export default function ScrollableSelect({
       ) : (
         <button
           ref={triggerRef}
+        id={id}
           type="button"
           onClick={() => {
             setSearchQuery("");
             setOpen((current) => !current);
           }}
-          className={`input-field ${className}`.trim()}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault(); setOpen(true);
+            }
+          }}
+          className={`input-field crm-select-trigger ${className}`.trim()}
           aria-haspopup="listbox"
           aria-expanded={open}
           aria-controls={open ? listboxId : undefined}
@@ -173,16 +187,27 @@ export default function ScrollableSelect({
           ref={popoverRef}
           id={listboxId}
           role="listbox"
+          className="crm-select-popover"
+          onKeyDown={(event) => {
+            const rows = Array.from(popoverRef.current?.querySelectorAll('[role="option"]') || []);
+            const index = rows.indexOf(document.activeElement);
+            const offsets = { ArrowDown: (index + 1) % rows.length, ArrowUp: (index - 1 + rows.length) % rows.length, Home: 0, End: rows.length - 1 };
+            if (event.key in offsets && rows.length) {
+              event.preventDefault(); rows[offsets[event.key]]?.focus();
+            }
+            if (event.key === 'Tab') setOpen(false);
+          }}
           aria-label={ariaLabel}
           style={{
             position: "fixed",
+            boxSizing: 'border-box',
             left: popoverPos.left,
             top: popoverPos.top,
             bottom: popoverPos.bottom,
             width: popoverPos.width,
             maxHeight: popoverPos.maxHeight,
             overflowY: "auto",
-            zIndex: 1100,
+            zIndex: 1400,
             background: "var(--bg-color, #fff)",
             border: "1px solid var(--border-color, rgba(0,0,0,0.18))",
             borderRadius: 8,
@@ -210,7 +235,8 @@ export default function ScrollableSelect({
                 cursor: "pointer",
               }}
             >
-              {o.label}
+              <span style={{ flex: 1, minWidth: 0 }}>{o.label}</span>
+              {o.value === value && <Check size={14} aria-hidden="true" style={{ flexShrink: 0 }} />}
             </button>
           ))}
           {visibleOptions.length === 0 && (

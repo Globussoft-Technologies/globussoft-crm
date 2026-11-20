@@ -1,0 +1,36 @@
+.gs-info {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: help;
+}
+
+.gs-info:is(:hover, :focus-visible) {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.gs-tooltip {
+  position: fixed;
+  z-index: 10000;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  overflow-wrap: anywhere;
+  padding: 12px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--modal-bg);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.6;
+  box-shadow: 0 8px 24px #0002;
+}

@@ -703,6 +703,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
     renderSettings();
     await screen.findByRole("heading", { name: /Callified Integration/i });
 
+    expect(await screen.findByDisplayValue("https://tenant.callified.example.com")).toBeInTheDocument();
     const email = document.getElementById("callified-fallback-email");
     const password = document.getElementById("callified-fallback-password");
     expect(email).toHaveValue("");
@@ -722,6 +723,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
     const form = screen.getByRole("heading", { name: "Callified Integration" }).closest(".card").querySelector("form");
     const inputs = [...form.querySelectorAll("input")];
     expect(inputs).toHaveLength(5);
+    expect(inputs[1]).toHaveValue("https://app.callified.ai");
     const values = ["ck_example_test_key", "https://calls.example.test", "agent@example.test", "example-password", "example-webhook-secret"];
     inputs.forEach((input, index) => fireEvent.change(input, { target: { value: values[index] } }));
     fireEvent.click(screen.getByRole("button", { name: "General", exact: true }));
@@ -1024,7 +1026,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
   });
 
   // 4 — Organization save PUTs name + ownerEmail (not slug)
-  it("submitting the Organization form PUTs /api/tenants/current with { name, ownerEmail }", async () => {
+  it("saves Generic workspace timezone with the Organization settings", async () => {
     const user = userEvent.setup();
     renderSettings();
     await waitFor(() =>
@@ -1034,6 +1036,9 @@ describe("<Settings /> — page shell + representative card pin", () => {
     const nameInput = screen.getByDisplayValue("Acme Corp");
     await user.clear(nameInput);
     await user.type(nameInput, "Acme Wellness Ltd");
+    const timezone = screen.getByLabelText("Workspace timezone");
+    expect(timezone).toHaveValue("UTC");
+    await user.selectOptions(timezone, "Asia/Kolkata");
 
     const saveBtn = screen.getByRole("button", {
       name: /Save Organization Details/i,
@@ -1051,6 +1056,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
       expect(body).toEqual({
         name: "Acme Wellness Ltd",
         ownerEmail: "admin@acme.com",
+        timezone: "Asia/Kolkata",
       });
       expect("slug" in body).toBe(false);
     });
@@ -1887,14 +1893,7 @@ describe("<Settings /> — error paths + boundary states", () => {
       expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument(),
     );
 
-    // Find the timezone select (the one containing 'America/New_York' option)
-    const allSelects = screen.getAllByRole("combobox");
-    const tzSelect = allSelects.find((sel) =>
-      Array.from(sel.options || []).some(
-        (opt) => opt.value === "America/New_York",
-      ),
-    );
-    expect(tzSelect).toBeTruthy();
+    const tzSelect = screen.getByRole("combobox", { name: "Timezone", exact: true });
     await user.selectOptions(tzSelect, "America/New_York");
 
     await user.click(screen.getByRole("button", { name: /Save Preferences/i }));

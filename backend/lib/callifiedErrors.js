@@ -89,6 +89,18 @@ function friendlyProviderMessage(raw) {
       code: 'CALLING_OUTSIDE_HOURS',
     };
   }
+  if (/already (?:in (?:a call|progress)|on a call|being called|dialing|ringing|queued)|active call (?:already|in progress)|call (?:is )?already active/.test(text)) {
+    return {
+      error: 'Callified reports an active or queued call for this lead. The retry will wait before trying again.',
+      code: 'CALLING_LEAD_BUSY',
+    };
+  }
+  if (/already (?:been )?(?:dialed|dialled|called|contacted)/.test(text)) {
+    return {
+      error: 'Callified rejected the retry because it considers this lead already called.',
+      code: 'CALLING_LEAD_ALREADY_CALLED',
+    };
+  }
 
   return null;
 }
@@ -174,7 +186,7 @@ function mapCallifiedError(e, fallbackMessage = 'Callified request failed') {
     // 503 for "not set up" — the request is fine and will work once someone
     // configures it. 409 for the operational refusals, which no amount of
     // configuration changes right now.
-    const operational = ['CALLING_LEAD_ON_DND', 'CALLING_OUTSIDE_HOURS'].includes(friendly.code);
+    const operational = ['CALLING_LEAD_ON_DND', 'CALLING_OUTSIDE_HOURS', 'CALLING_LEAD_BUSY', 'CALLING_LEAD_ALREADY_CALLED'].includes(friendly.code);
     const noCredits = friendly.code === 'CALLING_NO_CREDITS';
     return {
       status: noCredits ? 402 : operational ? 409 : 503,

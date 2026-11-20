@@ -394,6 +394,23 @@ describe('GET /api/contacts — list', () => {
     expect(args.skip).toBe(4);
   });
 
+  test('IDs-only selection keeps list filters and returns a bounded cursor page', async () => {
+    const matching = Array.from({ length: 501 }, (_, index) => ({ id: index + 11 }));
+    prisma.contact.findMany.mockResolvedValueOnce(matching);
+    const res = await request(makeApp()).get('/api/contacts?status=Lead&fields=ids&afterId=10&q=Match');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ids: matching.slice(0, 500).map(({ id }) => id), nextAfterId: 510 });
+    expect(prisma.contact.findMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        tenantId: TENANT_ID, deletedAt: null, status: 'Lead',
+        OR: expect.arrayContaining([{ name: { contains: 'Match' } }]),
+        AND: expect.arrayContaining([{ id: { gt: 10 } }]),
+      }),
+      select: { id: true }, orderBy: { id: 'asc' }, take: 501,
+    });
+  });
+
   test('?page=2&limit=10 returns { data, total, page, limit, offset, totalPages } envelope', async () => {
     prisma.contact.count.mockResolvedValueOnce(25);
     const res = await request(makeApp()).get('/api/contacts?page=2&limit=10');
@@ -451,6 +468,17 @@ describe('GET /api/contacts — list', () => {
       expect(res.body.code).toBe('INVALID_DATE_RANGE');
     }
     expect(prisma.contact.count).not.toHaveBeenCalled();
+  });
+
+  test('uses Generic workspace midnight for date-only lead filters', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'Asia/Kolkata' });
+    prisma.contact.count.mockResolvedValue(1);
+    const result = await request(makeApp()).get('/api/contacts?status=Lead&count=1&from=2026-11-19&to=2026-11-19');
+    expect(result.status).toBe(200);
+    expect(prisma.contact.count).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({
+      tenantId: TENANT_ID,
+      createdAt: { gte: new Date('2026-11-18T18:30:00Z'), lt: new Date('2026-11-19T18:30:00Z') },
+    }) }));
   });
 
   test('?q searches every Generic Leads row field and composes with Customer count scope', async () => {
@@ -1975,6 +2003,28 @@ describe('Lead custom fields — read/write integration', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
+describe('PUT /api/contacts/bulk-assign', () => {
+  test('uses one update and one notification for a Generic CRM batch of 100 leads', async () => {
+    const contactIds = Array.from({ length: 100 }, (_, index) => 9000 + index);
+    prisma.contact.findMany.mockResolvedValueOnce(contactIds.map((id) => ({ id, assignedToId: null })));
+    prisma.contact.updateMany.mockResolvedValueOnce({ count: 100 });
+
+    const response = await request(makeApp())
+      .put('/api/contacts/bulk-assign')
+      .send({ contactIds, assignedToId: 42 });
+
+    expect(response.status).toBe(200);
+    expect(response.body.updated).toBe(100);
+    expect(prisma.contact.updateMany).toHaveBeenCalledExactlyOnceWith({
+      where: { id: { in: contactIds }, tenantId: TENANT_ID },
+      data: { assignedToId: 42 },
+    });
+    expect(notifyMock).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      userId: 42, title: '100 leads assigned', link: '/leads',
+    }));
+  });
+});
+
 describe('PUT /api/contacts/bulk-assign-campaign', () => {
   test('updates campaign for provided contact ids and returns updated count', async () => {
     prisma.contact.updateMany.mockResolvedValueOnce({ count: 2 });

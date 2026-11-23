@@ -367,6 +367,17 @@ const GENERIC_ACCEPTED_CONTACT_STATUSES = [
   ...GENERIC_CONTACT_STATUSES,
   ...LEGACY_CONTACT_STATUSES,
 ];
+const WELLNESS_CONTACT_LIFECYCLE_STAGES = {
+  new: { label: "New", status: "Lead" },
+  contacted: { label: "Contacted", status: "Prospect" },
+  interested: { label: "Interested", status: "Prospect" },
+  qualified: { label: "Qualified", status: "Prospect" },
+  booked: { label: "Booked", status: "Customer" },
+  active_patient: { label: "Active Patient", status: "Customer" },
+  not_interested: { label: "Not Interested", status: "Churned", negative: true },
+  not_qualified: { label: "Not Qualified", status: "Churned", negative: true },
+  lost_lead: { label: "Lost Lead", status: "Churned", negative: true },
+};
 
 function validateContactInput(
   body,
@@ -1171,7 +1182,7 @@ async function attachComputedWalletBalance(contact, tenantId) {
   }
 }
 
-// Wellness-only contact enrichment for the Patient details appointment flow.
+// Wellness-only contact enrichment for the patient records and appointment flow.
 // Generic and travel contacts retain their existing response shape.
 async function attachWellnessAppointments(contact, tenantId, tenantVertical) {
   if (!contact || typeof contact !== 'object' || !contact.id) return contact;
@@ -1180,13 +1191,14 @@ async function attachWellnessAppointments(contact, tenantId, tenantVertical) {
       ? tenantVertical
       : (await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } }))?.vertical;
     if (vertical !== 'wellness') return contact;
-    const patient = await prisma.patient.findFirst({
+    const patients = await prisma.patient.findMany({
       where: { tenantId, contactId: contact.id, deletedAt: null },
       select: { id: true },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     });
-    if (!patient) return { ...contact, patientId: null, appointments: [] };
+    if (!patients.length) return { ...contact, patientId: null, patientIds: [], appointments: [] };
     const visits = await prisma.visit.findMany({
-      where: { tenantId, patientId: patient.id, status: { notIn: ['cancelled', 'completed', 'no-show'] } },
+      where: { tenantId, patientId: { in: patients.map((patient) => patient.id) }, status: { notIn: ['cancelled', 'completed', 'no-show'] } },
       include: {
         doctor: { select: { id: true, name: true } },
         service: { select: { id: true, name: true } },
@@ -1196,9 +1208,11 @@ async function attachWellnessAppointments(contact, tenantId, tenantVertical) {
     });
     return {
       ...contact,
-      patientId: patient.id,
+      patientId: patients[0].id,
+      patientIds: patients.map((patient) => patient.id),
       appointments: visits.map((visit) => ({
         id: visit.id,
+        patientId: visit.patientId,
         doctorName: visit.doctor?.name || 'Pending assignment',
         serviceName: visit.service?.name || 'General',
         appointmentDate: visit.visitDate,
@@ -3794,7 +3808,22 @@ const updateContactById = async (req, res) => {
     });
     let lifecycleStagesConfig = null;
     if (Object.prototype.hasOwnProperty.call(updateData, "lifecycleStageKey")) {
-      if (tenant?.vertical !== "generic") {
+      if (tenant?.vertical === "wellness") {
+        const lifecycleStageKey = String(updateData.lifecycleStageKey || "").trim();
+        const hasStage = Object.prototype.hasOwnProperty.call(WELLNESS_CONTACT_LIFECYCLE_STAGES, lifecycleStageKey);
+        const stage = hasStage ? WELLNESS_CONTACT_LIFECYCLE_STAGES[lifecycleStageKey] : null;
+        if (!stage) {
+          return res.status(400).json({ error: "Invalid Wellness patient journey stage", code: "INVALID_LIFECYCLE_STAGE" });
+        }
+        if (updateData.status && updateData.status !== stage.status) {
+          return res.status(400).json({ error: "Lifecycle stage does not match the contact status", code: "LIFECYCLE_STATUS_MISMATCH" });
+        }
+        if (stage.negative && !lifecycleTransitionReason) {
+          return res.status(400).json({ error: "A reason is required for a negative patient journey status", code: "NEGATIVE_STAGE_REASON_REQUIRED" });
+        }
+        updateData.status = stage.status;
+        updateData.lifecycleStageKey = lifecycleStageKey;
+      } else if (tenant?.vertical !== "generic") {
         delete updateData.lifecycleStageKey;
       } else {
         const lifecycleStageKey = String(updateData.lifecycleStageKey || "").trim();
@@ -3853,6 +3882,11 @@ const updateContactById = async (req, res) => {
     const statusWillChange =
       Object.prototype.hasOwnProperty.call(updateData, "status") &&
       existing.status !== updateData.status;
+    const wellnessLifecycleStageWillChange =
+      tenant?.vertical === "wellness" &&
+      Object.prototype.hasOwnProperty.call(updateData, "lifecycleStageKey") &&
+      existing.lifecycleStageKey !== updateData.lifecycleStageKey;
+    const lifecycleWillChange = statusWillChange || wellnessLifecycleStageWillChange;
     const terminalStatus = ["churned", "junk"].includes(
       String(updateData.status || "").toLowerCase(),
     );
@@ -3863,16 +3897,24 @@ const updateContactById = async (req, res) => {
       });
     }
     let lifecycleActivity = null;
-    const contact = statusWillChange
+    const contact = lifecycleWillChange
       ? await prisma.$transaction(async (tx) => {
           const updated = await tx.contact.update({
             where: { id: existing.id },
             data: updateData,
           });
+          const fromStage = tenant?.vertical === "wellness"
+            ? WELLNESS_CONTACT_LIFECYCLE_STAGES[existing.lifecycleStageKey]?.label || existing.status || "(empty)"
+            : existing.status || "(empty)";
+          const toStage = tenant?.vertical === "wellness"
+            ? WELLNESS_CONTACT_LIFECYCLE_STAGES[updated.lifecycleStageKey]?.label || updated.status || "(empty)"
+            : updated.status || "(empty)";
           lifecycleActivity = await tx.activity.create({
             data: {
-              type: "Lead Status updated",
-              description: `Updated from ${existing.status || "(empty)"} to ${updated.status || "(empty)"}${lifecycleTransitionReason ? `. Reason: ${lifecycleTransitionReason}` : ""}`,
+              type: tenant?.vertical === "wellness" && wellnessLifecycleStageWillChange
+                ? "Patient journey stage updated"
+                : "Lead Status updated",
+              description: `Updated from ${fromStage} to ${toStage}${lifecycleTransitionReason ? `. Reason: ${lifecycleTransitionReason}` : ""}`,
               contactId: updated.id,
               userId: req.user.userId,
               tenantId: req.user.tenantId,
@@ -3902,7 +3944,9 @@ const updateContactById = async (req, res) => {
       if (changes.status || changes.lifecycleStageKey) {
         const options = (lifecycleStagesConfig || [])
           .flatMap((stage) => Array.isArray(stage?.options) ? stage.options : []);
-        const labelFor = (stageKey) => options.find((option) => option?.id === stageKey)?.label || null;
+        const labelFor = (stageKey) => tenant?.vertical === "wellness"
+          ? WELLNESS_CONTACT_LIFECYCLE_STAGES[stageKey]?.label || null
+          : options.find((option) => option?.id === stageKey)?.label || null;
         lifecycleTransition = {
           fromStage: labelFor(existing.lifecycleStageKey) || existing.status || '(not set)',
           toStage: labelFor(contact.lifecycleStageKey) || contact.status || '(not set)',

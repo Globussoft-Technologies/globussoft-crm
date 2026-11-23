@@ -23,11 +23,12 @@
 // today-highlight + active-tab styling stays on-brand under both wellness
 // (teal) and generic (blue) verticals.
 
-import { useEffect, useMemo, useState, useContext } from 'react';
-import { ChevronLeft, ChevronRight, ExternalLink } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, useContext } from 'react';
+import { ArrowLeft, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, ExternalLink, X } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { fetchApi } from '../../utils/api';
 import { AuthContext } from '../../App';
+import './AttendanceCalendar.css';
 
 function startOfMonth(d) {
   return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -72,6 +73,18 @@ function monthGridDates(monthDate) {
   return days;
 }
 
+function pickerGridDates(date) {
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const leading = new Date(year, month, 1).getDay();
+  return Array.from({ length: 42 }, (_, index) => new Date(year, month, index - leading + 1));
+}
+
+function clampToMonth(date, year, month) {
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  return new Date(year, month, Math.min(date.getDate(), lastDay));
+}
+
 const STATUS_STYLE = {
   PRESENT:  { bg: '#e7f6ed', color: '#0a9050' },
   HALF_DAY: { bg: '#fff5dc', color: '#a36b00' },
@@ -101,6 +114,12 @@ export default function AttendanceCalendar() {
 
   // monthDate's day-of-month is irrelevant; only year+month matter.
   const [monthDate, setMonthDate] = useState(() => startOfMonth(new Date()));
+  const [selectedDate, setSelectedDate] = useState(() => new Date());
+  const [pickerDate, setPickerDate] = useState(() => new Date());
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [datePickerView, setDatePickerView] = useState('days');
+  const [yearPageStart, setYearPageStart] = useState(() => Math.floor(new Date().getFullYear() / 10) * 10 - 1);
+  const datePickerRef = useRef(null);
   // For managers: which staff member's calendar are we viewing? Defaults to
   // self so the calendar opens to the manager's own data and they tab to
   // other staff intentionally.
@@ -167,23 +186,93 @@ export default function AttendanceCalendar() {
   }, [attendance]);
 
   const grid = useMemo(() => monthGridDates(monthDate), [monthDate]);
+  const pickerGrid = useMemo(() => pickerGridDates(pickerDate), [pickerDate]);
   const todayKey = ymd(new Date());
 
-  const goPrev = () => setMonthDate(new Date(monthDate.getFullYear(), monthDate.getMonth() - 1, 1));
-  const goNext = () => setMonthDate(new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 1));
-  const goToday = () => setMonthDate(startOfMonth(new Date()));
+  const goPrev = () => {
+    const nextMonth = new Date(monthDate.getFullYear(), monthDate.getMonth() - 1, 1);
+    setMonthDate(nextMonth);
+    setSelectedDate(clampToMonth(selectedDate, nextMonth.getFullYear(), nextMonth.getMonth()));
+  };
+  const goNext = () => {
+    const nextMonth = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 1);
+    setMonthDate(nextMonth);
+    setSelectedDate(clampToMonth(selectedDate, nextMonth.getFullYear(), nextMonth.getMonth()));
+  };
+  const goToday = () => {
+    const today = new Date();
+    setMonthDate(startOfMonth(today));
+    setSelectedDate(today);
+  };
+
+  const toggleDatePicker = () => {
+    if (datePickerOpen) {
+      setDatePickerOpen(false);
+      return;
+    }
+    setPickerDate(new Date(selectedDate));
+    setYearPageStart(Math.floor(selectedDate.getFullYear() / 10) * 10 - 1);
+    setDatePickerView('days');
+    setDatePickerOpen(true);
+  };
+
+  const selectPickerDate = (date) => {
+    setSelectedDate(date);
+    setMonthDate(startOfMonth(date));
+    setDatePickerOpen(false);
+  };
+
+  const movePicker = (amount) => {
+    if (datePickerView === 'years') {
+      setYearPageStart((current) => current + amount * 10);
+      return;
+    }
+    const year = pickerDate.getFullYear() + (datePickerView === 'months' ? amount : 0);
+    const month = pickerDate.getMonth() + (datePickerView === 'days' ? amount : 0);
+    const nextDate = clampToMonth(pickerDate, year, month);
+    setPickerDate(nextDate);
+    setYearPageStart(Math.floor(nextDate.getFullYear() / 10) * 10 - 1);
+  };
+
+  useEffect(() => {
+    if (!datePickerOpen) return undefined;
+    const handlePointerDown = (event) => {
+      if (!datePickerRef.current?.contains(event.target)) setDatePickerOpen(false);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setDatePickerOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [datePickerOpen]);
 
   // Cross-link target for leave bars: drops the user into the Leave module
   // with the staff member preselected. Falls back to plain /leave for self.
   const leaveLinkFor = (uid) => (uid && uid !== user?.userId ? `/leave?userId=${uid}` : '/leave');
 
   return (
-    <div>
+    <div className="wellness-attendance-calendar-page">
+      <header className="attendance-calendar-page-header">
+        <div>
+          <h1><CalendarDays size={24} aria-hidden /> Attendance Calendar</h1>
+          <p>Review attendance and leave records by month.</p>
+        </div>
+        <Link className="attendance-calendar-back" to="/wellness/attendance-dashboard">
+          <ArrowLeft size={16} aria-hidden />
+          Back to Attendance
+        </Link>
+      </header>
+
       {/* Toolbar: month nav + staff filter */}
       <div style={{
         display: 'flex', alignItems: 'center', flexWrap: 'wrap',
-        gap: 12, marginBottom: 16,
+        gap: 12,
       }}>
+        <div className="attendance-calendar-month-controls">
         <button
           type="button"
           onClick={goPrev}
@@ -196,8 +285,134 @@ export default function AttendanceCalendar() {
         >
           <ChevronLeft size={16} aria-hidden />
         </button>
-        <div style={{ fontSize: 18, fontWeight: 600, minWidth: 180, textAlign: 'center' }}>
-          {monthLabel}
+        <div className="attendance-calendar-picker-anchor" ref={datePickerRef}>
+          <button
+            type="button"
+            className="attendance-calendar-month-button"
+            onClick={toggleDatePicker}
+            aria-haspopup="dialog"
+            aria-expanded={datePickerOpen}
+            title="Choose a date, month, or year"
+          >
+            {monthLabel}
+            <ChevronDown size={15} aria-hidden />
+          </button>
+          {datePickerOpen && (
+            <div className="attendance-calendar-date-picker" role="dialog" aria-label="Choose attendance date">
+              <div className="attendance-calendar-picker-summary">
+                <span>{pickerDate.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' })}</span>
+                <button type="button" onClick={() => setDatePickerOpen(false)} aria-label="Close date picker">
+                  <X size={16} aria-hidden />
+                </button>
+              </div>
+
+              <div className="attendance-calendar-picker-navigation">
+                <button
+                  type="button"
+                  onClick={() => movePicker(-1)}
+                  aria-label={datePickerView === 'years' ? 'Previous decade' : datePickerView === 'months' ? 'Previous year' : 'Previous month'}
+                >
+                  <ChevronLeft size={16} aria-hidden />
+                </button>
+                <div>
+                  {datePickerView === 'days' && (
+                    <>
+                      <button type="button" onClick={() => setDatePickerView('months')}>
+                        {pickerDate.toLocaleDateString(undefined, { month: 'long' })}
+                      </button>
+                      <button type="button" onClick={() => setDatePickerView('years')}>
+                        {pickerDate.getFullYear()}
+                      </button>
+                    </>
+                  )}
+                  {datePickerView === 'months' && (
+                    <button type="button" onClick={() => setDatePickerView('years')}>
+                      {pickerDate.getFullYear()}
+                    </button>
+                  )}
+                  {datePickerView === 'years' && (
+                    <span>{yearPageStart + 1}–{yearPageStart + 10}</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => movePicker(1)}
+                  aria-label={datePickerView === 'years' ? 'Next decade' : datePickerView === 'months' ? 'Next year' : 'Next month'}
+                >
+                  <ChevronRight size={16} aria-hidden />
+                </button>
+              </div>
+
+              {datePickerView === 'days' && (
+                <div className="attendance-calendar-picker-days">
+                  {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((day) => (
+                    <span key={day} className="attendance-calendar-picker-weekday">{day}</span>
+                  ))}
+                  {pickerGrid.map((date) => {
+                    const key = ymd(date);
+                    const classes = [
+                      'attendance-calendar-picker-day',
+                      date.getMonth() === pickerDate.getMonth() ? '' : 'is-outside',
+                      key === ymd(selectedDate) ? 'is-selected' : '',
+                      key === todayKey ? 'is-today' : '',
+                    ].filter(Boolean).join(' ');
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        className={classes}
+                        onClick={() => selectPickerDate(date)}
+                        aria-label={date.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                        aria-pressed={key === ymd(selectedDate)}
+                      >
+                        {date.getDate()}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {datePickerView === 'months' && (
+                <div className="attendance-calendar-picker-options">
+                  {Array.from({ length: 12 }, (_, month) => (
+                    <button
+                      key={month}
+                      type="button"
+                      className={month === pickerDate.getMonth() ? 'is-selected' : ''}
+                      onClick={() => {
+                        setPickerDate(clampToMonth(pickerDate, pickerDate.getFullYear(), month));
+                        setDatePickerView('days');
+                      }}
+                    >
+                      {new Date(2000, month, 1).toLocaleDateString(undefined, { month: 'short' })}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {datePickerView === 'years' && (
+                <div className="attendance-calendar-picker-options">
+                  {Array.from({ length: 12 }, (_, index) => yearPageStart + index).map((year) => (
+                    <button
+                      key={year}
+                      type="button"
+                      className={[
+                        year === pickerDate.getFullYear() ? 'is-selected' : '',
+                        year <= yearPageStart || year > yearPageStart + 10 ? 'is-outside' : '',
+                      ].filter(Boolean).join(' ')}
+                      onClick={() => {
+                        setPickerDate(clampToMonth(pickerDate, year, pickerDate.getMonth()));
+                        setYearPageStart(Math.floor(year / 10) * 10 - 1);
+                        setDatePickerView('months');
+                      }}
+                    >
+                      {year}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         <button
           type="button"
@@ -211,6 +426,7 @@ export default function AttendanceCalendar() {
         >
           <ChevronRight size={16} aria-hidden />
         </button>
+        </div>
         <button
           type="button"
           onClick={goToday}
@@ -226,7 +442,7 @@ export default function AttendanceCalendar() {
 
         {isManager && staffList.length > 0 && (
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <label htmlFor="staff-filter" style={{ fontSize: 12, color: 'var(--text-secondary, #888)' }}>
+            <label className="attendance-calendar-staff-label" htmlFor="staff-filter" style={{ fontSize: 12, color: 'var(--text-secondary, #888)' }}>
               Staff
             </label>
             <select
@@ -309,7 +525,12 @@ export default function AttendanceCalendar() {
                   borderRadius: 8,
                   border: isToday
                     ? '2px solid var(--primary-color, var(--accent-color))'
-                    : '1px solid var(--border-color, #eee)',
+                    : key === ymd(selectedDate)
+                      ? '2px solid var(--primary-color, var(--accent-color))'
+                      : '1px solid var(--border-color, #eee)',
+                  boxShadow: key === ymd(selectedDate) && !isToday
+                    ? 'inset 0 0 0 2px color-mix(in srgb, var(--primary-color, var(--accent-color)) 12%, transparent)'
+                    : undefined,
                   background: inMonth
                     ? 'var(--surface-color, #fff)'
                     : 'var(--subtle-bg, #f7f7f7)',

@@ -348,6 +348,39 @@ describe('GET /tmc-catalogue-responses (ADMIN)', () => {
     expect(prisma.tmcTeacherCatalogueResponse.count).toHaveBeenCalledWith({ where: { tenantId: 1 } });
   });
 
+  test('filters the response list to a teacher for notification deep links', async () => {
+    prisma.tmcTeacherCatalogueResponse.findMany.mockResolvedValue([{
+      id: 61,
+      selectedFilesJson: '[]',
+      submittedAt: new Date('2026-11-10T10:00:00.000Z'),
+      teacher: { id: 55, name: 'Asha Teacher', email: 'asha@example.test' },
+    }]);
+    prisma.tmcTeacherCatalogueResponse.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .get('/api/travel/tmc-catalogue-responses?teacherId=55')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.responses).toHaveLength(1);
+    expect(prisma.tmcTeacherCatalogueResponse.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 1, teacherContactId: 55 },
+    }));
+    expect(prisma.tmcTeacherCatalogueResponse.count).toHaveBeenCalledWith({
+      where: { tenantId: 1, teacherContactId: 55 },
+    });
+  });
+
+  test('rejects invalid teacher ids in response deep links', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/tmc-catalogue-responses?teacherId=abc')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_TEACHER_ID');
+    expect(prisma.tmcTeacherCatalogueResponse.findMany).not.toHaveBeenCalled();
+  });
+
   test('rejects non-admin travel roles before reading teacher responses', async () => {
     prisma.user.findUnique.mockResolvedValue({ role: 'MANAGER', subBrandAccess: null });
 

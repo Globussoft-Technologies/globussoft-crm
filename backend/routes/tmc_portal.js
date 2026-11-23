@@ -1960,6 +1960,36 @@ router.post(
         },
         select: { selectedFilesJson: true, submittedAt: true },
       });
+
+      // A successful teacher submission (including a later update through
+      // this same upsert endpoint) should appear in each tenant admin's bell.
+      // Notification failures must never make the portal submission fail.
+      try {
+        const tenantId = Number(req.portal.tenantId);
+        const adminUserIds = await prisma.user.findMany({
+          where: { tenantId, role: "ADMIN" },
+          select: { id: true },
+        }).then((rows) => rows.map((row) => row.id));
+        if (adminUserIds.length > 0) {
+          const teacherName = req.tmcContact.name || req.tmcContact.email || "A TMC teacher";
+          const catalogueLabel = selectedCatalogues.length === 1 ? "catalogue" : "catalogues";
+          await notifyMany({
+            userIds: adminUserIds,
+            tenantId,
+            title: "TMC catalogue selection received",
+            message: `${teacherName} submitted a selection of ${selectedCatalogues.length} ${catalogueLabel} for review.`,
+            type: "info",
+            priority: "high",
+            link: `/travel/diagnostics?tab=catalogues&teacherId=${encodeURIComponent(String(req.tmcContact.id))}`,
+            channels: ["db", "socket"],
+            io: req.io || null,
+            ignorePreferences: true,
+          });
+        }
+      } catch (notifyErr) {
+        console.warn("[tmc-portal][teacher/catalogues/response] admin notification failed:", notifyErr.message);
+      }
+
       return res.status(201).json({
         ok: true,
         response: {

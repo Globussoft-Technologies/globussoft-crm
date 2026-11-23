@@ -2805,6 +2805,243 @@ button {
   }
 }
 
+/* Wellness Leads uses the fixed Name pane and synchronized bottom
+   scrollbar from Generic CRM, scoped to the Wellness theme. */
+.leads-page-root--wellness .wellness-leads-table-card {
+  padding: 0 !important;
+  overflow: clip !important;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+}
+.leads-page-root--wellness .wellness-leads-controls-toolbar {
+  gap: 0.55rem !important;
+  padding: 0.65rem 0.75rem !important;
+  border-bottom: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--surface-color) 94%, var(--accent-color));
+}
+.leads-page-root--wellness .wellness-leads-controls-toolbar > div:first-child {
+  flex: 1 1 260px !important;
+  background: transparent !important;
+}
+.leads-page-root--wellness .wellness-leads-search-field {
+  flex: 0 1 320px;
+  width: min(100%, 320px) !important;
+  height: 38px;
+  box-sizing: border-box;
+  gap: 8px !important;
+  padding: 0 10px !important;
+  border-radius: 8px !important;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.leads-page-root--wellness .wellness-leads-search-field:focus-within {
+  border-color: var(--accent-color) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 18%, transparent);
+}
+.leads-page-root--wellness .wellness-leads-search-input {
+  min-width: 0;
+  height: 34px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  outline: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--text-primary) !important;
+  font-size: 0.8125rem !important;
+}
+.leads-page-root--wellness .wellness-leads-search-input:focus {
+  border: 0 !important;
+  outline: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.leads-page-root--wellness .wellness-leads-search-input::placeholder {
+  color: var(--text-tertiary);
+}
+.leads-page-root--wellness .wellness-leads-controls-toolbar input[type="search"] {
+  height: 34px !important;
+  font-size: 0.8125rem !important;
+}
+.leads-page-root--wellness .wellness-leads-controls-toolbar :is(button, .btn-primary, .btn-secondary) {
+  min-height: 34px;
+  height: 34px !important;
+  border-radius: 6px;
+  box-shadow: none;
+}
+.leads-page-root--wellness .leads-split-table--wellness-sticky {
+  display: flex;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  align-items: stretch;
+  width: 100%;
+  max-width: 100%;
+  height: clamp(300px, calc(100dvh - 24rem), 640px);
+  min-height: 300px;
+  max-height: 640px !important;
+  box-sizing: border-box;
+  border-radius: 0 !important;
+  overflow-x: clip !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  scrollbar-color: rgba(128, 128, 128, 0.72) transparent;
+  scrollbar-width: thin;
+}
+.leads-page-root--wellness .leads-split-table--wellness-sticky::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+.leads-page-root--wellness .leads-split-table--wellness-sticky::-webkit-scrollbar-track {
+  background: transparent;
+}
+.leads-page-root--wellness .leads-split-table--wellness-sticky::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.72);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 8px;
+}
+.leads-page-root--wellness .leads-split-table--wellness-sticky::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.95);
+  border-width: 2px;
+}
+.leads-page-root--wellness .leads-split-table--wellness-sticky.leads-split-table--compact-count {
+  height: auto;
+  min-height: 0;
+  max-height: none !important;
+  overflow-y: visible !important;
+  overscroll-behavior: auto;
+}
+.leads-page-root--wellness .leads-table-frozen-pane {
+  align-self: stretch;
+  flex: 0 0 auto;
+  width: var(--leads-name-pane-width, 320px) !important;
+  max-width: 80%;
+  overflow-x: clip;
+  overflow-y: visible;
+  position: relative;
+  z-index: 2;
+  background: var(--surface-color);
+  box-shadow: none;
+}
+.leads-page-root--wellness .leads-table-scroll-pane,
+.leads-page-root--wellness .leads-table-scroll-pane > .top-scroll-sync {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.leads-page-root--wellness .leads-table-scroll-pane {
+  position: relative;
+  z-index: 1;
+  overflow-x: clip;
+  overflow-y: visible;
+  isolation: isolate;
+}
+.leads-page-root--wellness .leads-table-scroll-pane .top-scroll-sync__bottom {
+  flex: 1 0 auto;
+  overflow-x: visible !important;
+  overflow-y: visible !important;
+  clip-path: none !important;
+}
+.leads-page-root--wellness .leads-table-scroll-pane .top-scroll-sync__sticky-bottom {
+  display: block;
+  flex: 0 0 16px;
+  scrollbar-width: auto;
+  scrollbar-color: rgba(128, 128, 128, 0.78) rgba(128, 128, 128, 0.14);
+}
+.leads-page-root--wellness .leads-table-scroll-pane .top-scroll-sync__sticky-bottom::-webkit-scrollbar {
+  height: 16px;
+}
+.leads-page-root--wellness .leads-table-scroll-pane .top-scroll-sync__sticky-bottom::-webkit-scrollbar-track {
+  background: rgba(128, 128, 128, 0.14);
+  border-radius: 8px;
+}
+.leads-page-root--wellness .leads-table-scroll-pane .top-scroll-sync__sticky-bottom::-webkit-scrollbar-thumb {
+  min-width: 48px;
+  background: rgba(128, 128, 128, 0.78);
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background-clip: padding-box;
+}
+.leads-page-root--wellness .leads-table-scroll-pane .top-scroll-sync__sticky-bottom::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.95);
+  border-width: 2px;
+}
+.leads-page-root--wellness .leads-table-frozen-pane table.leads-table thead,
+.leads-page-root--wellness .leads-table-scroll-pane table.leads-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--surface-color);
+  isolation: isolate;
+}
+.leads-page-root--wellness table.leads-table thead tr,
+.leads-page-root--wellness table.leads-table thead th {
+  background-color: var(--surface-color) !important;
+}
+.leads-page-root--wellness table.leads-table thead th {
+  position: relative !important;
+  top: auto !important;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.leads-page-root--wellness .leads-split-table--density-compact table.leads-table thead tr {
+  height: 38px;
+}
+.leads-page-root--wellness .leads-split-table--density-compact table.leads-table tbody tr {
+  height: 40px;
+}
+.leads-page-root--wellness .leads-split-table--density-compact table.leads-table th,
+.leads-page-root--wellness .leads-split-table--density-compact table.leads-table td,
+.leads-page-root--wellness table.leads-table th,
+.leads-page-root--wellness table.leads-table td {
+  height: 40px !important;
+  padding-top: 0.3rem !important;
+  padding-bottom: 0.3rem !important;
+  font-size: 0.8125rem;
+}
+.leads-page-root--wellness .leads-table-frozen-pane table.leads-table tbody td:first-child {
+  overflow: hidden;
+}
+.leads-page-root--wellness .leads-table-frozen-pane table.leads-table tbody td:first-child > div,
+.leads-page-root--wellness .leads-table-frozen-pane table.leads-table tbody td:first-child > div > div {
+  min-width: 0;
+}
+.leads-page-root--wellness .leads-table-frozen-pane table.leads-table tbody td:first-child a {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.leads-page-root--wellness table.leads-table thead th > div > span:first-of-type {
+  min-width: 0;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+.leads-page-root--wellness table.leads-table tbody .input-field {
+  min-height: 30px !important;
+  height: 30px;
+  padding-top: 0.25rem !important;
+  padding-bottom: 0.25rem !important;
+}
+.leads-page-root--wellness table.leads-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--surface-color) 90%, var(--accent-color));
+}
+.leads-page-root--wellness .leads-pagination-footer {
+  padding-top: 0.6rem !important;
+  padding-bottom: 0.6rem !important;
+}
+.leads-page-root--wellness [role="separator"][aria-label^="Resize "] {
+  border-right-color: transparent !important;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.leads-page-root--wellness [role="separator"][aria-label^="Resize "]:hover {
+  border-right-color: var(--primary-color, var(--accent-color)) !important;
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 10%, transparent);
+}
 /* Remove the legacy empty rail column from the Generic Reports detail table. */
 body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic {
   grid-template-columns: minmax(0, 1fr) !important;

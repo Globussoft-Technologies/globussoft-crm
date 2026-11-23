@@ -195,6 +195,7 @@ describe('TMC teacher catalogue selection', () => {
   const drive = { files: { get: vi.fn() } };
 
   beforeEach(() => {
+    notificationService.notifyMany.mockReset().mockResolvedValue(undefined);
     prisma.contact.findFirst.mockResolvedValue(contact('TEACHER'));
     prisma.tenantSetting.findUnique.mockReset().mockResolvedValue({ value: 'root-folder' });
     prisma.travelKnowledgeBaseFile.findMany.mockReset().mockResolvedValue([{
@@ -292,6 +293,52 @@ describe('TMC teacher catalogue selection', () => {
       fileName: 'Nepal School Trip.pdf',
       folderPath: 'TMC',
     })]);
+  });
+
+  test('notifies tenant admins after a teacher submits or updates their catalogue selection', async () => {
+    prisma.user.findMany.mockResolvedValue([{ id: 12 }, { id: 13 }]);
+
+    const submit = () => request(makeApp())
+      .post('/api/portal/tmc/teacher/catalogues/response')
+      .set(bearer())
+      .send({ selectedFileIds: ['tmc-pdf-1'] });
+
+    const firstSubmission = await submit();
+    const updatedSubmission = await submit();
+
+    expect(firstSubmission.status).toBe(201);
+    expect(updatedSubmission.status).toBe(201);
+    expect(prisma.tmcTeacherCatalogueResponse.upsert).toHaveBeenCalledTimes(2);
+    expect(prisma.user.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 7, role: 'ADMIN' },
+      select: { id: true },
+    });
+    expect(notificationService.notifyMany).toHaveBeenCalledTimes(2);
+    expect(notificationService.notifyMany).toHaveBeenCalledWith(expect.objectContaining({
+      userIds: [12, 13],
+      tenantId: 7,
+      title: 'TMC catalogue selection received',
+      message: expect.stringContaining('TEACHER Contact submitted a selection of 1 catalogue for review'),
+      type: 'info',
+      priority: 'high',
+      link: '/travel/diagnostics?tab=catalogues&teacherId=41',
+      channels: ['db', 'socket'],
+      ignorePreferences: true,
+    }));
+  });
+
+  test('keeps a successful catalogue submission when admin notification delivery fails', async () => {
+    prisma.user.findMany.mockRejectedValueOnce(new Error('notification lookup unavailable'));
+
+    const res = await request(makeApp())
+      .post('/api/portal/tmc/teacher/catalogues/response')
+      .set(bearer())
+      .send({ selectedFileIds: ['tmc-pdf-1'] });
+
+    expect(res.status).toBe(201);
+    expect(res.body.ok).toBe(true);
+    expect(prisma.tmcTeacherCatalogueResponse.upsert).toHaveBeenCalledTimes(1);
+    expect(notificationService.notifyMany).not.toHaveBeenCalled();
   });
 
   test('reports a database sync requirement when saving catalogue responses is unavailable', async () => {

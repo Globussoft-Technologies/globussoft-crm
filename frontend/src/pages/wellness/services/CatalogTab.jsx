@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
+import { Search } from 'lucide-react';
 import { usePermissions } from '../../../hooks/usePermissions';
 import { useNotify } from '../../../utils/notify';
 import { currencySymbol } from '../../../utils/money';
@@ -11,7 +12,7 @@ import MultiSelectDropdown from './MultiSelectDropdown';
 import SingleSelectDropdown from './SingleSelectDropdown';
 import ImageUploadField from './ImageUploadField';
 
-export default function CatalogTab({ services, total, loading, loadingMore, hasMore, onLoadMore, sortBy, onSortChange, categories, categoriesLoading, categorySearch, onCategorySearch, onOpenCategories, onLoadMoreCategories, hasMoreCategories, showAdd, form, setForm, submit, onChanged, onOpenService, editRequestId, clearEditRequest }) {
+export default function CatalogTab({ services, total, loading, loadingMore, hasMore, onLoadMore, serviceSearch, onServiceSearch, sortBy, onSortChange, categories, categoriesLoading, categorySearch, onCategorySearch, onOpenCategories, onLoadMoreCategories, hasMoreCategories, showAdd, form, setForm, submit, onChanged, onOpenService, editRequestId, clearEditRequest }) {
   const { hasPermission, isReady: permsReady } = usePermissions();
   const canManageServices = permsReady && hasPermission('services', 'write');
   const notify = useNotify();
@@ -24,7 +25,7 @@ export default function CatalogTab({ services, total, loading, loadingMore, hasM
     if (scrollRef.current) {
       scrollRef.current.scrollTop = 0;
     }
-  }, [sortBy]);
+  }, [serviceSearch, sortBy]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -158,37 +159,73 @@ export default function CatalogTab({ services, total, loading, loadingMore, hasM
         <div
           style={{
             display: 'flex',
-            justifyContent: 'flex-end',
+            justifyContent: 'space-between',
             alignItems: 'center',
-            gap: '0.5rem',
+            gap: '0.75rem',
+            flexWrap: 'wrap',
           }}
         >
           <label
-            htmlFor="services-sort"
-            style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}
-          >
-            Sort by
-          </label>
-          <select
-            id="services-sort"
-            value={sortBy}
-            onChange={(e) => onSortChange(e.target.value)}
-            aria-label="Sort services"
             style={{
-              padding: '0.4rem 0.7rem',
-              background: 'var(--surface-color)',
-              color: 'var(--text-primary)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 8,
-              fontSize: '0.85rem',
-              cursor: 'pointer',
-              outline: 'none',
+              position: 'relative',
+              display: 'flex',
+              alignItems: 'center',
+              width: 'min(100%, 22rem)',
+              minWidth: 'min(100%, 14rem)',
             }}
           >
-            <option value="default" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Default</option>
-            <option value="newest" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Newest first</option>
-            <option value="oldest" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Oldest first</option>
-          </select>
+            <Search
+              size={16}
+              aria-hidden="true"
+              style={{ position: 'absolute', left: '0.7rem', color: 'var(--text-secondary)', pointerEvents: 'none' }}
+            />
+            <input
+              type="search"
+              aria-label="Search services"
+              placeholder="Search services, categories, or descriptions..."
+              value={serviceSearch}
+              onChange={(e) => onServiceSearch(e.target.value)}
+              style={{
+                width: '100%',
+                boxSizing: 'border-box',
+                padding: '0.55rem 0.75rem 0.55rem 2.2rem',
+                background: 'var(--surface-color)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: 8,
+                fontSize: '0.85rem',
+                outline: 'none',
+              }}
+            />
+          </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <label
+              htmlFor="services-sort"
+              style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}
+            >
+              Sort by
+            </label>
+            <select
+              id="services-sort"
+              value={sortBy}
+              onChange={(e) => onSortChange(e.target.value)}
+              aria-label="Sort services"
+              style={{
+                padding: '0.4rem 0.7rem',
+                background: 'var(--surface-color)',
+                color: 'var(--text-primary)',
+                border: '1px solid var(--border-color)',
+                borderRadius: 8,
+                fontSize: '0.85rem',
+                cursor: 'pointer',
+                outline: 'none',
+              }}
+            >
+              <option value="default" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Default</option>
+              <option value="newest" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Newest first</option>
+              <option value="oldest" style={{ background: 'var(--bg-color)', color: 'var(--text-primary)' }}>Oldest first</option>
+            </select>
+          </div>
         </div>
 
         <div
@@ -216,6 +253,14 @@ export default function CatalogTab({ services, total, loading, loadingMore, hasM
               />
             ))}
           </div>
+
+          {!loading && services.length === 0 && (
+            <div style={{ textAlign: 'center', padding: '1.5rem', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+              {serviceSearch.trim()
+                ? `No services match “${serviceSearch.trim()}”.`
+                : 'No services available.'}
+            </div>
+          )}
 
           {!loading && hasMore && (
             <div

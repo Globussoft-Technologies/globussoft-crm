@@ -335,6 +335,35 @@ describe('<Diagnostics /> — RBAC on "New bank" CTA (SUT lines 74-82)', () => {
     expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/tmc-catalogue-responses?limit=20&offset=0');
   });
 
+  it('opens the catalogue response tab and expands the teacher targeted by a notification link', async () => {
+    installFetchMock({
+      catalogueResponses: {
+        total: 1,
+        responses: [{
+          id: 61,
+          submittedAt: '2026-11-10T10:00:00.000Z',
+          teacher: { id: 55, name: 'Asha Teacher', email: 'asha@example.test' },
+          selectedCatalogues: [{
+            driveFileId: 'tmc-pdf-1',
+            fileName: 'Nepal School Trip.pdf',
+            folderPath: 'TMC/CRM Itineraries',
+            driveViewLink: 'https://drive.google.com/file/d/tmc-pdf-1/view',
+          }],
+        }],
+      },
+    });
+
+    renderPage(ADMIN_USER, ['/travel/diagnostics?tab=catalogues&teacherId=55']);
+
+    expect(screen.getByRole('tab', { name: 'TMC Catalogue Responses' })).toHaveAttribute('aria-selected', 'true');
+    expect(await screen.findByText('Asha Teacher')).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /Nepal School Trip\.pdf/i })).toHaveAttribute(
+      'href',
+      'https://drive.google.com/file/d/tmc-pdf-1/view',
+    );
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/tmc-catalogue-responses?limit=20&offset=0&teacherId=55');
+  });
+
   it('USER role cannot access the teacher catalogue response tab', async () => {
     renderPage(REGULAR_USER);
     expect(screen.queryByRole('tab', { name: 'TMC Catalogue Responses' })).not.toBeInTheDocument();

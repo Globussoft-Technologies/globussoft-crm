@@ -55,7 +55,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { render, screen, waitFor, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -435,6 +435,8 @@ describe('<Attendance /> — manager Staff section', () => {
 
     renderAttendance({ user: adminUser });
 
+    fireEvent.click(screen.getByRole('tab', { name: /All Staff/i }));
+
     await waitFor(() =>
       expect(screen.getByText(/All Staff — Selected Period/i)).toBeInTheDocument()
     );
@@ -451,14 +453,15 @@ describe('<Attendance /> — manager Staff section', () => {
     });
 
     // Stat tiles render with the summary numbers.
-    expect(screen.getByText(/^Present$/)).toBeInTheDocument();
-    expect(screen.getByText('4')).toBeInTheDocument();
-    expect(screen.getByText(/^Half-day$/)).toBeInTheDocument();
-    expect(screen.getByText('1380')).toBeInTheDocument();
+    const teamPanel = document.getElementById('attendance-panel-team');
+    expect(within(teamPanel).getByText(/^Present$/)).toBeInTheDocument();
+    expect(within(teamPanel).getByText('4')).toBeInTheDocument();
+    expect(within(teamPanel).getByText(/^Half-day$/)).toBeInTheDocument();
+    expect(within(teamPanel).getByText('1380')).toBeInTheDocument();
 
     // byUser table has a row per entry. The component renders "User #<id>".
-    expect(screen.getByText('User #7')).toBeInTheDocument();
-    expect(screen.getByText('User #8')).toBeInTheDocument();
+    expect(within(teamPanel).getByText('User #7')).toBeInTheDocument();
+    expect(within(teamPanel).getByText('User #8')).toBeInTheDocument();
   });
 
   // #802 Zylu-Gap ATT-001 — pin the six-tile KPI grid layout.
@@ -480,23 +483,26 @@ describe('<Attendance /> — manager Staff section', () => {
 
     renderAttendance({ user: adminUser });
 
+    fireEvent.click(screen.getByRole('tab', { name: /All Staff/i }));
+
     // All six Zylu-spec tile labels must be present.
-    await waitFor(() => expect(screen.getByText(/^Total$/)).toBeInTheDocument());
-    expect(screen.getByText(/^Absent$/)).toBeInTheDocument();
-    expect(screen.getByText(/^Present$/)).toBeInTheDocument();
-    expect(screen.getByText(/^Early$/)).toBeInTheDocument();
-    expect(screen.getByText(/^On-Time$/)).toBeInTheDocument();
-    expect(screen.getByText(/^Late$/)).toBeInTheDocument();
-    expect(screen.getByText(/^Half-day$/)).toBeInTheDocument();
+    const teamPanel = document.getElementById('attendance-panel-team');
+    await waitFor(() => expect(within(teamPanel).getByText(/^Total$/)).toBeInTheDocument());
+    expect(within(teamPanel).getByText(/^Absent$/)).toBeInTheDocument();
+    expect(within(teamPanel).getByText(/^Present$/)).toBeInTheDocument();
+    expect(within(teamPanel).getByText(/^Early$/)).toBeInTheDocument();
+    expect(within(teamPanel).getByText(/^On-Time$/)).toBeInTheDocument();
+    expect(within(teamPanel).getByText(/^Late$/)).toBeInTheDocument();
+    expect(within(teamPanel).getByText(/^Half-day$/)).toBeInTheDocument();
 
     // Total = present + absent + late + halfDay = 4 + 3 + 2 + 1 = 10.
     // The byUser is empty here so the "Nobody clocked in today yet." message
     // shows; that exclusion is incidental to the KPI grid.
-    expect(screen.getByText('10')).toBeInTheDocument(); // Total
+    expect(within(teamPanel).getByText('10')).toBeInTheDocument(); // Total
     // Absent (3) value renders.
-    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(within(teamPanel).getByText('3')).toBeInTheDocument();
     // Late (2) value renders.
-    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(within(teamPanel).getByText('2')).toBeInTheDocument();
   });
 });
 
@@ -516,6 +522,7 @@ describe('<Attendance /> — payroll CSV export (#804)', () => {
     });
 
     renderAttendance({ user: adminUser });
+    fireEvent.click(screen.getByRole('tab', { name: /All Staff/i }));
 
     await waitFor(() => expect(screen.getByText(/All Staff — Selected Period/i)).toBeInTheDocument());
     expect(screen.getByRole('button', { name: /Export Payroll CSV/i })).toBeInTheDocument();
@@ -533,6 +540,8 @@ describe('<Attendance /> — payroll CSV export (#804)', () => {
 
     const user = userEvent.setup();
     renderAttendance({ user: adminUser });
+
+    await user.click(screen.getByRole('tab', { name: /All Staff/i }));
 
     await user.click(await screen.findByRole('button', { name: /Select payroll date range/i }));
     expect(screen.getByRole('dialog', { name: /Select date range/i })).toBeInTheDocument();
@@ -573,6 +582,8 @@ describe('<Attendance /> — payroll CSV export (#804)', () => {
 
     const user = userEvent.setup();
     renderAttendance({ user: adminUser });
+
+    await user.click(screen.getByRole('tab', { name: /All Staff/i }));
 
     const exportBtn = await screen.findByRole('button', { name: /Export Payroll CSV/i });
     await user.click(exportBtn);

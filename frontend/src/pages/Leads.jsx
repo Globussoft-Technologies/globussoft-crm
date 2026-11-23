@@ -360,6 +360,30 @@ const GENERIC_LEAD_SERVER_SORT_KEYS = new Set([
 const LEADS_COLUMN_LAYOUT_STORAGE_KEY = "globuscrm.leads.columnLayout.v1";
 const LEADS_TABLE_DENSITY_STORAGE_KEY = "globuscrm.leads.tableDensity.v1";
 const LEADS_COLUMN_ORDER_STORAGE_PREFIX = "globuscrm.leads.columnOrder.v1";
+const readLeadsColumnLayout = (storageKey) => {
+  const emptyLayout = {
+    widths: {},
+    collapsed: {},
+    genericNameWidthUserSet: false,
+  };
+  if (typeof window === "undefined") return emptyLayout;
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(storageKey) || "null");
+    return {
+      widths:
+        parsed?.widths && typeof parsed.widths === "object"
+          ? parsed.widths
+          : {},
+      collapsed:
+        parsed?.collapsed && typeof parsed.collapsed === "object"
+          ? parsed.collapsed
+          : {},
+      genericNameWidthUserSet: parsed?.genericNameWidthUserSet === true,
+    };
+  } catch {
+    return emptyLayout;
+  }
+};
 const LEADS_PAGINATION_STORAGE_PREFIX = "globuscrm.leads.pagination.v1";
 const LEADS_DIAL_CAMPAIGNS_STORAGE_PREFIX =
   "globuscrm.leads.selectedDialCampaigns.v1";
@@ -2840,7 +2864,7 @@ const Leads = ({ initialListState = null } = {}) => {
   const { activeSubBrand } = useActiveSubBrand();
   // Callified AI calling is only available in the generic CRM vertical.
   const isGeneric = !isWellness && !isTravel;
-  const usesGenericLeadTableLayout = isGeneric || isTravel;
+  const usesSplitLeadTableLayout = isGeneric || isTravel || isWellness;
   const [drillParams, setDrillParams] = useSearchParams();
   const focusedCallifiedLeadId = isGeneric
     ? Number(drillParams.get("callifiedLeadId"))
@@ -2878,8 +2902,8 @@ const Leads = ({ initialListState = null } = {}) => {
   // preferences. Wellness keeps its separate patient field surfaces.
   const supportsLeadCustomFields = isGeneric || isTravel;
   const supportsColumnCustomization = isGeneric || isTravel;
-  // Generic and Travel keep horizontal movement at the bottom of the records.
-  const showLeadsTopScrollbar = !usesGenericLeadTableLayout;
+  // Generic, Travel, and Wellness keep horizontal movement at the bottom of the records.
+  const showLeadsTopScrollbar = !usesSplitLeadTableLayout;
   // Assignment/deletion UI is driven by the effective Leads grants. Travel
   // non-admins can still use the separate owner-scoped assignment flow below.
   const isAdmin = auth?.user?.role === "ADMIN";
@@ -3155,27 +3179,19 @@ const Leads = ({ initialListState = null } = {}) => {
       // Storage can be unavailable in privacy-restricted browser contexts.
     }
   }, [isGeneric, leadTableDensity]);
-  const [columnLayout, setColumnLayout] = useState(() => {
-    try {
-      const saved = window.localStorage.getItem(
-        LEADS_COLUMN_LAYOUT_STORAGE_KEY,
-      );
-      const parsed = saved ? JSON.parse(saved) : null;
-      return {
-        widths:
-          parsed?.widths && typeof parsed.widths === "object"
-            ? parsed.widths
-            : {},
-        collapsed:
-          parsed?.collapsed && typeof parsed.collapsed === "object"
-            ? parsed.collapsed
-            : {},
-        genericNameWidthUserSet: parsed?.genericNameWidthUserSet === true,
-      };
-    } catch (_err) {
-      return { widths: {}, collapsed: {}, genericNameWidthUserSet: false };
-    }
-  });
+  const columnLayoutStorageKey = isWellness
+    ? `${LEADS_COLUMN_LAYOUT_STORAGE_KEY}.wellness.${auth?.tenant?.id || "tenant"}.${auth?.user?.userId || auth?.user?.id || "user"}`
+    : LEADS_COLUMN_LAYOUT_STORAGE_KEY;
+  const [columnLayoutStorageOwnerKey, setColumnLayoutStorageOwnerKey] =
+    useState(columnLayoutStorageKey);
+  const [columnLayout, setColumnLayout] = useState(() =>
+    readLeadsColumnLayout(columnLayoutStorageKey),
+  );
+  useEffect(() => {
+    if (columnLayoutStorageOwnerKey === columnLayoutStorageKey) return;
+    setColumnLayout(readLeadsColumnLayout(columnLayoutStorageKey));
+    setColumnLayoutStorageOwnerKey(columnLayoutStorageKey);
+  }, [columnLayoutStorageKey, columnLayoutStorageOwnerKey]);
   const resizeStateRef = useRef(null);
   const leadsFrozenTableRef = useRef(null);
   const leadsScrollableTableRef = useRef(null);
@@ -3824,15 +3840,16 @@ const Leads = ({ initialListState = null } = {}) => {
   }, [drillParams]);
 
   useEffect(() => {
+    if (columnLayoutStorageOwnerKey !== columnLayoutStorageKey) return;
     try {
       window.localStorage.setItem(
-        LEADS_COLUMN_LAYOUT_STORAGE_KEY,
+        columnLayoutStorageKey,
         JSON.stringify(columnLayout),
       );
     } catch (_err) {
       // Layout persistence is a convenience; table interaction should still work.
     }
-  }, [columnLayout]);
+  }, [columnLayout, columnLayoutStorageKey, columnLayoutStorageOwnerKey]);
   useEffect(() => {
     if (!supportsColumnCustomization) {
       setLeadColumnCatalog([]);
@@ -3920,7 +3937,11 @@ const Leads = ({ initialListState = null } = {}) => {
       let changed = false;
       // Generic CRM starts from the reference-sized percentage pane and only
       // gets a stored pixel width after the user explicitly resizes it.
-      if (!isGeneric && widths.name !== autoFitLeadColumnWidths.name) {
+      if (
+        !isGeneric &&
+        !isWellness &&
+        widths.name !== autoFitLeadColumnWidths.name
+      ) {
         nextWidths.name = autoFitLeadColumnWidths.name;
         changed = true;
       }
@@ -3934,13 +3955,16 @@ const Leads = ({ initialListState = null } = {}) => {
         widths: nextWidths,
       };
     });
-  }, [autoFitLeadColumnWidths, isGeneric]);
+  }, [autoFitLeadColumnWidths, isGeneric, isWellness]);
   const getColumnWidth = (key) => {
     if (columnLayout.collapsed?.[key]) return LEADS_COLUMN_COLLAPSED_WIDTH;
     const configuredWidth =
       Number(columnLayout.widths?.[key]) || getColumnDefaultWidth(key);
     if (key === "name") {
       const manuallySizedWidth = Number(columnLayout.widths?.[key]) || 0;
+      if (isWellness) {
+        return Math.min(Math.max(manuallySizedWidth || 320, 280), 520);
+      }
       return Math.max(
         autoFitLeadColumnWidths[key],
         manuallySizedWidth,
@@ -3987,7 +4011,7 @@ const Leads = ({ initialListState = null } = {}) => {
     // Generic CRM columns keep their reference/default width as the minimum.
     // This prevents saved or dragged widths from reducing fields such as
     // Email to a few characters. Explicitly collapsed columns still return
-    // LEADS_COLUMN_COLLAPSED_WIDTH above; wellness and travel are unchanged.
+    // LEADS_COLUMN_COLLAPSED_WIDTH above; wellness Name uses its own bounded pane.
     return isGeneric
       ? Math.max(configuredWidth, getColumnDefaultWidth(key))
       : configuredWidth;
@@ -3997,7 +4021,9 @@ const Leads = ({ initialListState = null } = {}) => {
       key === "actions"
         ? LEADS_ACTIONS_COLUMN_WIDTH
         : key === "name"
-          ? LEADS_NAME_COLUMN_MIN_WIDTH
+          ? isWellness
+            ? 280
+            : LEADS_NAME_COLUMN_MIN_WIDTH
           : key === "phone"
             ? autoFitLeadColumnWidths[key]
             : key === "source"
@@ -4006,7 +4032,11 @@ const Leads = ({ initialListState = null } = {}) => {
                 ? LEADS_ASSIGNED_COLUMN_MIN_WIDTH
                 : LEADS_COLUMN_MIN_WIDTH;
     const maxWidth =
-      isGeneric && key === "name" ? 1400 : Number.POSITIVE_INFINITY;
+      key === "name" && isWellness
+        ? 520
+        : isGeneric && key === "name"
+          ? 1400
+          : Number.POSITIVE_INFINITY;
     const genericLabelMinWidth = isGeneric
       ? LEADS_GENERIC_LABEL_MIN_WIDTHS[key] || 0
       : 0;
@@ -4030,7 +4060,7 @@ const Leads = ({ initialListState = null } = {}) => {
     event.stopPropagation();
     const startX = event.clientX;
     const renderedNameWidth =
-      isGeneric && key === "name"
+      (isGeneric || isWellness) && key === "name"
         ? event.currentTarget.closest("th")?.getBoundingClientRect().width
         : 0;
     const startWidth = renderedNameWidth || getColumnWidth(key);
@@ -7767,12 +7797,12 @@ const Leads = ({ initialListState = null } = {}) => {
       }),
         { key: "actions", label: "Actions", locked: true },
       ];
-  // Generic and Travel keep the complete lead name visible while the
-  // remaining columns move horizontally.
-  const leadsFrozenColumnDefs = usesGenericLeadTableLayout
+  // Generic, Travel, and Wellness use a fixed Name pane beside the
+  // horizontally scrollable columns.
+  const leadsFrozenColumnDefs = usesSplitLeadTableLayout
     ? tableColumnDefs.filter((column) => column.key === "name")
     : [];
-  const leadsScrollableColumnDefs = usesGenericLeadTableLayout
+  const leadsScrollableColumnDefs = usesSplitLeadTableLayout
     ? tableColumnDefs.filter((column) => column.key !== "name")
     : tableColumnDefs;
   const leadsFrozenTableWidth = leadsFrozenColumnDefs.reduce(
@@ -7796,16 +7826,18 @@ const Leads = ({ initialListState = null } = {}) => {
     leadsScrollableTableBaseWidth,
   )}px`;
   const savedGenericNameWidth = Number(columnLayout.widths?.name);
-  const leadsFrozenTableWidthCss = usesGenericLeadTableLayout
-    ? columnLayout.genericNameWidthUserSet &&
-      Number.isFinite(savedGenericNameWidth) &&
-      savedGenericNameWidth > 0
-      ? `${Math.min(Math.max(savedGenericNameWidth, 320), 1400)}px`
-      : "clamp(320px, 22%, 380px)"
-    : `${leadsFrozenTableWidth}px`;
+  const leadsFrozenTableWidthCss = isWellness
+    ? `${getColumnWidth("name")}px`
+    : usesSplitLeadTableLayout
+      ? columnLayout.genericNameWidthUserSet &&
+        Number.isFinite(savedGenericNameWidth) &&
+        savedGenericNameWidth > 0
+        ? `${Math.min(Math.max(savedGenericNameWidth, 320), 1400)}px`
+        : "clamp(320px, 22%, 380px)"
+      : `${leadsFrozenTableWidth}px`;
   const leadsTableClassName = isTravel
     ? "leads-table leads-table--compact leads-table--travel-generic"
-    : isGeneric
+    : isGeneric || isWellness
       ? "leads-table leads-table--compact"
       : "leads-table";
   const phoneColumnOffset = leadUserColumnDefs.findIndex(
@@ -7814,14 +7846,14 @@ const Leads = ({ initialListState = null } = {}) => {
   const phoneColumnIndex =
     phoneColumnOffset < 0
       ? -1
-      : phoneColumnOffset + (usesGenericLeadTableLayout ? 0 : 1);
+      : phoneColumnOffset + (usesSplitLeadTableLayout ? 0 : 1);
   const emailColumnOffset = leadUserColumnDefs.findIndex(
     (column) => column.key === "email",
   );
   const emailColumnIndex =
     emailColumnOffset < 0
       ? -1
-      : emailColumnOffset + (usesGenericLeadTableLayout ? 0 : 1);
+      : emailColumnOffset + (usesSplitLeadTableLayout ? 0 : 1);
   useLayoutEffect(() => {
     const table = leadsScrollableTableRef.current;
     if (!table || phoneColumnIndex < 0 || columnLayout.collapsed?.phone) return;
@@ -7910,7 +7942,7 @@ const Leads = ({ initialListState = null } = {}) => {
     columnLayout.widths?.email,
     columnLayout.collapsed?.email,
   ]);
-  // Only generic CRM uses the frozen Name pane.
+  // Vertical-specific split-table layouts keep Name frozen beside the scroll pane.
   const leadsRowSyncEnabled = leadsFrozenColumnDefs.length > 0;
   const syncTablePairHeight = useCallback((leftRow, rightRow) => {
     if (!leftRow || !rightRow) return;
@@ -10158,7 +10190,7 @@ const Leads = ({ initialListState = null } = {}) => {
 
   return (
     <div
-      className={`leads-page-root${isGeneric ? " leads-page-root--generic" : ""}${isTravel ? " leads-page-root--travel" : ""}`}
+      className={`leads-page-root${isGeneric ? " leads-page-root--generic" : ""}${isTravel ? " leads-page-root--travel" : ""}${isWellness ? " leads-page-root--wellness" : ""}`}
       style={{
         padding: "2rem",
         animation: "fadeIn 0.3s ease",
@@ -10836,7 +10868,9 @@ const Leads = ({ initialListState = null } = {}) => {
             ? "leads-content-shell"
             : isTravel
               ? "card travel-leads-table-card"
-              : "card"
+              : isWellness
+                ? "card wellness-leads-table-card"
+                : "card"
         }
         style={
           isGeneric
@@ -10850,7 +10884,9 @@ const Leads = ({ initialListState = null } = {}) => {
               ? "leads-toolbar-shell leads-controls-toolbar"
               : isTravel
                 ? "travel-leads-search-toolbar"
-                : undefined
+                : isWellness
+                  ? "wellness-leads-controls-toolbar"
+                  : undefined
           }
           style={{
             display: "flex",
@@ -10888,6 +10924,7 @@ const Leads = ({ initialListState = null } = {}) => {
             }}
           >
             <div
+              className={isWellness ? "wellness-leads-search-field" : undefined}
               style={{
                 width: "min(100%, 300px)",
                 display: "flex",
@@ -10910,7 +10947,7 @@ const Leads = ({ initialListState = null } = {}) => {
               <input
                 data-tour="leads-search"
                 type="search"
-                className="input-field"
+                className={`input-field${isWellness ? " wellness-leads-search-input" : ""}`}
                 placeholder="Search leads..."
                 value={searchTerm}
                 onChange={(e) => {
@@ -12039,9 +12076,9 @@ const Leads = ({ initialListState = null } = {}) => {
           </div>
         </div>
         <div
-          className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${!loading && filteredLeads.length > 0 && (filteredLeads.length < 10 || (filteredLeads.length === 10 && leadTableDensity === "compact")) ? " leads-split-table--compact-count" : ""}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : isTravel ? " leads-split-table--no-topbar leads-split-table--density-compact leads-split-table--travel-generic" : ""}`}
+          className={`leads-split-table${isGeneric ? ` leads-split-table--no-topbar leads-split-table--density-${leadTableDensity}${!loading && filteredLeads.length > 0 && (filteredLeads.length < 10 || (filteredLeads.length === 10 && leadTableDensity === "compact")) ? " leads-split-table--compact-count" : ""}${!loading && filteredLeads.length === 0 ? " leads-split-table--empty" : ""}` : isTravel ? " leads-split-table--no-topbar leads-split-table--density-compact leads-split-table--travel-generic" : isWellness ? `leads-split-table--wellness-sticky leads-split-table--density-compact${!loading && filteredLeads.length > 0 && paginatedLeads.length <= 10 ? " leads-split-table--compact-count" : ""}` : ""}`}
           onWheel={
-            isGeneric || isTravel
+            usesSplitLeadTableLayout
               ? (event) => {
                   const grid = event.currentTarget;
                   const scrollbar = grid.querySelector(
@@ -12073,7 +12110,7 @@ const Leads = ({ initialListState = null } = {}) => {
               : undefined
           }
           onTouchStart={
-            isGeneric || isTravel
+            usesSplitLeadTableLayout
               ? (event) => {
                   const touch = event.touches[0];
                   const scrollbar = event.currentTarget.querySelector(
@@ -12090,7 +12127,7 @@ const Leads = ({ initialListState = null } = {}) => {
               : undefined
           }
           onTouchMove={
-            isGeneric || isTravel
+            usesSplitLeadTableLayout
               ? (event) => {
                   const gesture = leadsHorizontalTouchRef.current;
                   const touch = event.touches[0];
@@ -12108,7 +12145,7 @@ const Leads = ({ initialListState = null } = {}) => {
               : undefined
           }
           onTouchEnd={
-            isGeneric || isTravel
+            usesSplitLeadTableLayout
               ? () => {
                   leadsHorizontalTouchRef.current = null;
                 }
@@ -12126,14 +12163,52 @@ const Leads = ({ initialListState = null } = {}) => {
                   // Generic order: toolbar (1) → table (2) → pagination (3).
                   order: 2,
                 }
-              : undefined
+              : isWellness
+                ? {
+                    display: "flex",
+                    flexDirection: "row",
+                    flexWrap: "nowrap",
+                    alignItems: "stretch",
+                    flex: "0 0 auto",
+                    width: "100%",
+                    minWidth: 0,
+                    maxWidth: "100%",
+                    height:
+                      !loading &&
+                      filteredLeads.length > 0 &&
+                      paginatedLeads.length <= 10
+                        ? "auto"
+                        : "clamp(300px, calc(100dvh - 24rem), 640px)",
+                    minHeight:
+                      !loading &&
+                      filteredLeads.length > 0 &&
+                      paginatedLeads.length <= 10
+                        ? 0
+                        : "300px",
+                    maxHeight:
+                      !loading &&
+                      filteredLeads.length > 0 &&
+                      paginatedLeads.length <= 10
+                        ? "none"
+                        : "640px",
+                    overflowX: "clip",
+                    overflowY:
+                      !loading &&
+                      filteredLeads.length > 0 &&
+                      paginatedLeads.length <= 10
+                        ? "visible"
+                        : "auto",
+                    boxSizing: "border-box",
+                    overscrollBehavior: "contain",
+                  }
+                : undefined
           }
         >
           {leadsFrozenColumnDefs.length > 0 && (
             <div
               className="leads-table-frozen-pane"
               style={
-                usesGenericLeadTableLayout
+                usesSplitLeadTableLayout
                   ? { "--leads-name-pane-width": leadsFrozenTableWidthCss }
                   : { width: leadsFrozenTableWidthCss }
               }
@@ -12159,7 +12234,7 @@ const Leads = ({ initialListState = null } = {}) => {
                     <col
                       key={column.key}
                       style={{
-                        width: isGeneric
+                        width: usesSplitLeadTableLayout
                           ? "100%"
                           : `${getColumnWidth(column.key)}px`,
                       }}
@@ -12304,11 +12379,11 @@ const Leads = ({ initialListState = null } = {}) => {
               topBarLeadingWidth={leadsFrozenTableWidth}
               stickyTop
               stickyTopOffset={0}
-              hideTopBar={usesGenericLeadTableLayout}
-              stickyBottom={usesGenericLeadTableLayout}
-              // Generic and Travel use one synchronized bottom scrollbar so
-              // the frozen and scrollable panes share the outer vertical flow.
-              hideBottomScrollbar={usesGenericLeadTableLayout}
+              hideTopBar={usesSplitLeadTableLayout}
+              stickyBottom={usesSplitLeadTableLayout}
+              // Keep the synchronized scrollbar at the bottom of the records
+              // viewport while the frozen and scrollable panes share one row flow.
+              hideBottomScrollbar={usesSplitLeadTableLayout}
               verticalOverflow="visible"
               contentRole={isTravel ? "region" : undefined}
               contentAriaLabel={isTravel ? "Scrollable lead columns" : undefined}

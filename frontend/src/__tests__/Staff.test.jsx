@@ -136,6 +136,15 @@ function renderStaff(
   );
 }
 
+function clickStaffAction(action, memberId) {
+  const testId = `staff-action-${action}-${memberId}`;
+  if (!screen.queryByTestId(testId)) {
+    const moreButton = screen.queryByTestId(`staff-action-more-${memberId}`);
+    if (moreButton) fireEvent.click(moreButton);
+  }
+  fireEvent.click(screen.getByTestId(testId));
+}
+
 describe('<Staff /> — row action buttons (#618)', () => {
   beforeEach(() => {
     fetchApiMock.mockReset();
@@ -174,6 +183,9 @@ describe('<Staff /> — row action buttons (#618)', () => {
     expect(badges.length).toBe(1);
     expect(badges[0].textContent).toMatch(/Inactive/i);
 
+    // Wellness actions live in the shared row menu.
+    fireEvent.click(screen.getByTestId('staff-action-more-4'));
+
     // Action toggle: row id=4 should show "Reactivate" not "Deactivate".
     const toggle = screen.getByTestId('staff-action-deactivate-4');
     expect(toggle.textContent).toMatch(/Reactivate/i);
@@ -192,12 +204,12 @@ describe('<Staff /> — row action buttons (#618)', () => {
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
 
     expect(screen.queryByTestId('staff-edit-modal')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId('staff-action-edit-2'));
+    clickStaffAction('edit', 2);
     expect(screen.getByTestId('staff-edit-modal')).toBeInTheDocument();
   });
 
-  it('uses one visible shared actions menu for generic staff rows', async () => {
-    renderStaff('ADMIN', {}, 'generic');
+  it.each(['generic', 'wellness'])('uses one visible shared actions menu for %s staff rows', async (vertical) => {
+    renderStaff('ADMIN', {}, vertical);
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
 
     fireEvent.click(screen.getByTestId('staff-action-more-1'));
@@ -529,7 +541,7 @@ describe('<Staff /> — Save edit (PUT /api/staff/:id)', () => {
       expect(urls).toContain('/api/roles');
       expect(urls).toContain('/api/wellness/role-types?activeOnly=1');
     });
-    fireEvent.click(screen.getByTestId('staff-action-edit-2'));
+    clickStaffAction('edit', 2);
     await waitFor(() => expect(screen.getByTestId('staff-edit-modal')).toBeInTheDocument());
 
     // Click Save changes (no edits — pin the baseline shape).
@@ -570,7 +582,7 @@ describe('<Staff /> — Save edit (PUT /api/staff/:id)', () => {
     await waitFor(() =>
       expect(fetchApiMock.mock.calls.some((c) => c[0] === '/api/roles')).toBe(true)
     );
-    fireEvent.click(screen.getByTestId('staff-action-edit-2'));
+    clickStaffAction('edit', 2);
     await waitFor(() => expect(screen.getByTestId('staff-edit-modal')).toBeInTheDocument());
 
     // Open the RoleSelect popover and pick the non-wellness "User" role.
@@ -617,7 +629,7 @@ describe('<Staff /> - Travel sub-brand access in edit modal', () => {
     }, 'travel');
 
     await waitFor(() => expect(screen.getByText('Travel Ops')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('staff-action-edit-2'));
+    clickStaffAction('edit', 2);
     await waitFor(() => expect(screen.getByTestId('staff-edit-modal')).toBeInTheDocument());
 
     const editModal = screen.getByTestId('staff-edit-modal');
@@ -656,7 +668,7 @@ describe('<Staff /> — Reset password (POST /api/staff/:id/reset-password)', ()
     renderStaff('ADMIN');
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByTestId('staff-action-reset-password-2'));
+    clickStaffAction('reset-password', 2);
     await waitFor(() => expect(screen.getByTestId('staff-reset-modal')).toBeInTheDocument());
 
     fireEvent.click(screen.getByText('Send reset link'));
@@ -674,7 +686,7 @@ describe('<Staff /> — Reset password (POST /api/staff/:id/reset-password)', ()
     renderStaff('ADMIN');
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByTestId('staff-action-reset-password-2'));
+    clickStaffAction('reset-password', 2);
     await waitFor(() => expect(screen.getByTestId('staff-reset-modal')).toBeInTheDocument());
 
     const input = screen.getByTestId('staff-reset-password-input');
@@ -702,7 +714,7 @@ describe('<Staff /> — Reset password (POST /api/staff/:id/reset-password)', ()
       expect(urls).toContain('/api/wellness/role-types?activeOnly=1');
     });
 
-    fireEvent.click(screen.getByTestId('staff-action-reset-password-2'));
+    clickStaffAction('reset-password', 2);
     await waitFor(() => expect(screen.getByTestId('staff-reset-modal')).toBeInTheDocument());
 
     fireEvent.change(screen.getByTestId('staff-reset-password-input'), {
@@ -730,7 +742,7 @@ describe('<Staff /> — Resend invite (POST /api/staff/:id/resend-invite)', () =
     renderStaff('ADMIN');
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByTestId('staff-action-resend-invite-2'));
+    clickStaffAction('resend-invite', 2);
 
     await waitFor(() => {
       const post = fetchApiMock.mock.calls.find(
@@ -751,7 +763,7 @@ describe('<Staff /> — Delete user (DELETE /api/staff/:id)', () => {
     renderStaff('ADMIN');
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByTestId('staff-action-delete-2'));
+    clickStaffAction('delete', 2);
 
     await waitFor(() => {
       const del = fetchApiMock.mock.calls.find(
@@ -833,7 +845,7 @@ describe('<Staff /> — Edit modal: commission profile dropdown population (PRD 
     ];
     renderStaff('ADMIN', { '/api/staff/commission-profiles': profiles });
     await waitFor(() => expect(screen.getByText('Dr. Harsh Kumar')).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId('staff-action-edit-2'));
+    clickStaffAction('edit', 2);
     await waitFor(() => expect(screen.getByTestId('staff-edit-modal')).toBeInTheDocument());
 
     const commissionSelect = screen.getByTestId('staff-edit-commission-profile');

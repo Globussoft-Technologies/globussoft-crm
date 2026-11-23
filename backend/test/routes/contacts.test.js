@@ -241,6 +241,9 @@ prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn().mockResolvedValue(null);
 prisma.wallet = prisma.wallet || {};
 prisma.wallet.findFirst = vi.fn().mockResolvedValue(null);
+prisma.activity = prisma.activity || {};
+prisma.activity.create = vi.fn();
+prisma.$transaction = vi.fn(async (callback) => callback(prisma));
 // T31: webhook.findMany is invoked by lib/webhookDelivery.js when the route
 // emits contact.created / contact.updated via eventBus. Empty array → the
 // helper short-circuits (no subscribers) so happy create / update / delete
@@ -326,6 +329,8 @@ beforeEach(() => {
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
   prisma.patient.findFirst.mockReset().mockResolvedValue(null);
   prisma.wallet.findFirst.mockReset().mockResolvedValue(null);
+  prisma.activity.create.mockReset().mockResolvedValue({ id: 99 });
+  prisma.$transaction.mockReset().mockImplementation(async (callback) => callback(prisma));
   prisma.webhook.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
   prisma.tenantSetting.findUnique.mockReset();
@@ -1745,12 +1750,42 @@ describe('PUT /api/contacts/:id — update', () => {
     );
   });
 
-  test('does not write Generic CRM lifecycle stages for another vertical', async () => {
-    prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
+  test('persists Wellness patient journey stages and records their activity', async () => {
+    const existing = { ...SAMPLE_CONTACT, lifecycleStageKey: 'contacted' };
+    const updated = { ...existing, lifecycleStageKey: 'new' };
+    prisma.contact.findFirst.mockResolvedValueOnce(existing);
     prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
-    prisma.contact.update.mockResolvedValueOnce(SAMPLE_CONTACT);
+    prisma.contact.update.mockResolvedValueOnce(updated);
+    prisma.activity.create.mockResolvedValueOnce({
+      id: 99,
+      type: 'Patient journey stage updated',
+      description: 'Updated from Contacted to New',
+    });
 
     const res = await request(makeApp({ vertical: 'wellness' }))
+      .patch('/api/contacts/9001')
+      .send({ lifecycleStageKey: 'new' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.$transaction).toHaveBeenCalledOnce();
+    expect(prisma.contact.update.mock.calls[0][0].data).toMatchObject({
+      lifecycleStageKey: 'new',
+      status: 'Lead',
+    });
+    expect(prisma.activity.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        type: 'Patient journey stage updated',
+        description: 'Updated from Contacted to New',
+      }),
+    }));
+  });
+
+  test('does not write lifecycle stages for a vertical without stage support', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+    prisma.contact.update.mockResolvedValueOnce(SAMPLE_CONTACT);
+
+    const res = await request(makeApp({ vertical: 'travel' }))
       .patch('/api/contacts/9001')
       .send({ lifecycleStageKey: 'new' });
 

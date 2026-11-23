@@ -2092,7 +2092,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
         );
 
         const frozenPane = container.querySelector('.leads-table-frozen-pane');
-        if (label === 'travel') expect(frozenPane).toBeTruthy();
+        if (label === 'travel' || label === 'wellness') expect(frozenPane).toBeTruthy();
         else expect(frozenPane).toBeNull();
         expect(scrollHeader).toBeTruthy();
         expect(scrollHeader).toHaveClass('leads-table-header-row');

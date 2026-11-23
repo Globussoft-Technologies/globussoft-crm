@@ -93,8 +93,9 @@ function PatientSummaryDownloadButton({ patientId, patientName }) {
   );
 }
 
-export default function PatientDetail() {
-  const { id } = useParams();
+export default function PatientDetail({ patientId: patientIdProp } = {}) {
+  const routeParams = useParams();
+  const id = String(patientIdProp ?? routeParams.id ?? "");
   const [patient, setPatient] = useState(null);
   const [services, setServices] = useState([]);
   const [doctors, setDoctors] = useState([]);
@@ -166,8 +167,8 @@ export default function PatientDetail() {
   if (!patient) return <div style={{ padding: '2rem' }}>Patient not found.</div>;
 
   return (
-    <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', gap: '1rem' }}>
+    <div className="wellness-patient-detail" style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: '1rem', gap: '1rem' }}>
         <Link to="/wellness/patients" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', color: 'var(--text-secondary)', textDecoration: 'none', fontSize: '0.85rem' }}>
           <ArrowLeft size={14} /> Back to patients
         </Link>

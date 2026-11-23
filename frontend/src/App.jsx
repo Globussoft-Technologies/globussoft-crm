@@ -101,7 +101,7 @@ function readPersistedTheme() {
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Home = lazy(() => import("./pages/Home"));
 const Contacts = lazy(() => import("./pages/Contacts"));
-const ContactDetail = lazy(() => import("./pages/ContactDetail"));
+const ContactDetailRoute = lazy(() => import("./pages/ContactDetailRoute"));
 const Pipeline = lazy(() => import("./pages/Pipeline"));
 const DealDetails = lazy(() => import("./pages/DealDetails"));
 const Workflows = lazy(() => import("./pages/Workflows"));
@@ -2657,7 +2657,7 @@ export default function App() {
                       <Route path="contacts" element={<Contacts />} />
                       {/* Travel contact names use the preview drawer; this shared
                           route remains active for Generic and Wellness deep links. */}
-                      <Route path="contacts/:id" element={<ContactDetail />} />
+                      <Route path="contacts/:id" element={<ContactDetailRoute />} />
                       <Route
                         path="pipeline"
                         element={
@@ -2903,7 +2903,7 @@ export default function App() {
                       >
                         <Route
                           path=":id"
-                          element={<ContactDetail renderBackdrop={false} />}
+                          element={<ContactDetailRoute renderBackdrop={false} />}
                         />
                       </Route>
                       <Route

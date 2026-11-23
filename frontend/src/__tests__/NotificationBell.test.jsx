@@ -494,7 +494,7 @@ describe('<NotificationBell />', () => {
     expect(btn).toBeInTheDocument();
   });
 
-  it('clicking a notification with a `link` navigates and closes the panel', async () => {
+  it('clicking a TMC catalogue notification opens the targeted diagnostics tab and closes the panel', async () => {
     const user = userEvent.setup();
     fetchApi
       .mockResolvedValueOnce({ count: 1 })
@@ -502,11 +502,11 @@ describe('<NotificationBell />', () => {
         notifications: [
           {
             id: 33,
-            title: 'Linked',
-            message: 'jump',
+            title: 'TMC catalogue selection received',
+            message: 'Asha Teacher submitted a selection of 1 catalogue for review.',
             type: 'info',
             isRead: false,
-            link: '/deals/123',
+            link: '/travel/diagnostics?tab=catalogues&teacherId=55',
             createdAt: new Date().toISOString(),
           },
         ],
@@ -518,12 +518,12 @@ describe('<NotificationBell />', () => {
     const bell = await screen.findByRole('button', { name: /Notifications \(1 unread\)/ });
     await user.click(bell);
 
-    const row = await screen.findByText('Linked');
+    const row = await screen.findByText('TMC catalogue selection received');
     await user.click(row);
 
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/deals/123'));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/travel/diagnostics?tab=catalogues&teacherId=55'));
     // Panel closes after navigation.
-    await waitFor(() => expect(screen.queryByText('Linked')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('TMC catalogue selection received')).not.toBeInTheDocument());
   });
 
   it('opens legacy travel lead notification links on the travel lead detail page', async () => {

@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { SOCIAL_NETWORKS } from './contactProfileConfig';
 import { InlineField } from './ProfileWidgets';
+import TagPickerPopover from '../../pages/wellness/patients/TagPickerPopover';
 import { fetchApi } from '../../utils/api';
 import { AuthContext } from '../../appContexts';
 import './ContactDetailsDrawer.css';
@@ -56,6 +57,14 @@ const GENERIC_TRACKING_KEYS = new Set([
   'currentDomain', 'formName', 'submittedAt', 'browser', 'operatingSystem',
   'deviceType', 'location',
 ]);
+
+const WELLNESS_LEAD_HIDDEN_DETAIL_KEYS = new Set([
+  'account', 'company', 'companysize', 'description', 'firstName', 'industry',
+  'jobtitle', 'keyword', 'lastName', 'linkedin', 'medium', 'monthlybudget',
+  'note', 'statecode', 'title', 'website', 'websiteurl', 'whatsapp', 'whatsappphone',
+  'telegram', 'teams', 'messenger', 'advertisingplatform', 'adplatform',
+  'billingstatecode', 'gst', 'workphone',
+].map((key) => key.replace(/[^a-z0-9]/gi, '').toLowerCase()));
 
 const ACTIONS = [
   { key: 'email', label: 'Email', Icon: Mail },
@@ -141,12 +150,13 @@ export function ContactDetailsGroup({ label, open, onToggle, children, showHeade
   );
 }
 
-export default function ContactDetailsDrawer({ contact, onClose, onAction, onFieldSave, onOwnerChange, staff = [], inline = false, hideSms = false, genericTagsEnabled = false }) {
+export default function ContactDetailsDrawer({ contact, onClose, onAction, onFieldSave, onOwnerChange, staff = [], locations = [], inline = false, hideSms = false, hideAppointmentActions = false, wellnessLeadView = false, genericTagsEnabled = false }) {
   const { tenant } = useContext(AuthContext);
   const isWellness = tenant?.vertical === 'wellness';
   const isTravel = tenant?.vertical === 'travel';
   const isGeneric = !isWellness && !isTravel;
   const isGenericTagManager = genericTagsEnabled && isGeneric;
+  const isWellnessLeadTagManager = wellnessLeadView && isWellness;
   const [openGroups, setOpenGroups] = useState(() => (
     Object.fromEntries(GROUPS.map((group) => [group.key, Boolean(group.openByDefault)]))
   ));
@@ -208,19 +218,26 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
   }, [contact?.id, contact?.tags]);
 
   useEffect(() => {
-    if (!isGenericTagManager) return undefined;
+    const endpoint = isGenericTagManager
+      ? '/api/contacts/tags'
+      : isWellnessLeadTagManager
+        ? '/api/wellness/patients/tags'
+        : null;
+    if (!endpoint) return undefined;
     let active = true;
     setTagCatalogLoading(true);
     setTagMutationError('');
-    fetchApi('/api/contacts/tags', { silent: true }).then((data) => {
-      if (active) setTagCatalog(normalizeTagRecords(data));
+    fetchApi(endpoint, { silent: true }).then((data) => {
+      if (active) setTagCatalog(isWellnessLeadTagManager
+        ? (Array.isArray(data?.tags) ? data.tags : [])
+        : normalizeTagRecords(data));
     }).catch(() => {
       if (active) setTagMutationError('Could not load tags.');
     }).finally(() => {
       if (active) setTagCatalogLoading(false);
     });
     return () => { active = false; };
-  }, [isGenericTagManager]);
+  }, [isGenericTagManager, isWellnessLeadTagManager]);
 
   const customFields = contact?.customFields || {};
   const webFormTracking = isGeneric ? latestWebFormTracking(contact) : {};
@@ -250,6 +267,16 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     { label: 'Monthly Budget', key: customKey(['monthly_budget', 'monthlyBudget']) || 'monthly_budget', value: contact?.monthlyBudget ?? customFields.monthly_budget ?? customFields.monthlyBudget, custom: true, type: 'number' },
     { label: 'Telegram / WhatsApp / Teams', key: customKey(['telegram', 'whatsapp', 'teams', 'messenger']) || 'messenger', value: contact?.telegram || contact?.whatsapp || contact?.teams || contact?.messenger || customFields.telegram || customFields.whatsapp || customFields.teams || customFields.messenger, custom: true },
     { label: 'Advertising Platform', key: customKey(['advertising_platform', 'advertisingPlatform', 'ad_platform']) || 'advertising_platform', value: contact?.advertisingPlatform || contact?.adPlatform || customFields.advertising_platform || customFields.advertisingPlatform || customFields.ad_platform, custom: true },
+  ];
+  const wellnessLeadFields = [
+    { label: 'Email', key: 'email', value: contact?.email },
+    { label: 'Treatment of interest', key: 'treatmentOfInterest', value: contact?.treatmentOfInterest },
+    { label: 'Preferred clinic', key: 'preferredLocationId', value: locations.find((location) => Number(location.id) === Number(contact?.preferredLocationId))?.name || (contact?.preferredLocationId ? `Clinic #${contact.preferredLocationId}` : 'Not set'), readOnly: true },
+    { label: 'Preferred practitioner', key: 'preferredPractitionerId', value: staff.find((user) => Number(user.id) === Number(contact?.preferredPractitionerId))?.name || (contact?.preferredPractitionerId ? `Practitioner #${contact.preferredPractitionerId}` : 'Not set'), readOnly: true },
+    { label: 'Source', key: 'source', value: contact?.source },
+    { label: 'Assigned staff', key: 'assignedToId', value: contact?.assignedTo?.name || contact?.assignedTo?.email, owner: true },
+    { label: 'Created', key: 'createdAt', value: contact?.createdAt, readOnly: true },
+    { label: 'Lead score', key: 'aiScore', value: contact?.aiScore != null ? `${contact.aiScore}/100` : 'Not calculated', readOnly: true },
   ];
   const assignedPlots = Array.isArray(genericWorkflowDetails?.assignedPlots)
     ? genericWorkflowDetails.assignedPlots
@@ -305,9 +332,11 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     { label: 'Telegram / WhatsApp / Teams', key: customKey(['telegram', 'whatsapp', 'teams', 'messenger']) || 'messenger', value: contact?.telegram || contact?.whatsapp || contact?.teams || contact?.messenger || customFields.telegram || customFields.whatsapp || customFields.teams || customFields.messenger, custom: true },
     { label: 'Advertising Platform', key: customKey(['advertising_platform', 'advertisingPlatform', 'ad_platform']) || 'advertising_platform', value: contact?.advertisingPlatform || contact?.adPlatform || customFields.advertising_platform || customFields.advertisingPlatform || customFields.ad_platform, custom: true },
   ];
-  const basicFields = isGeneric ? genericBasicFields : standardBasicFields;
+  const basicFields = wellnessLeadView ? wellnessLeadFields : isGeneric ? genericBasicFields : standardBasicFields;
   const dynamicFields = customDefinitions
-    .filter((definition) => !basicFields.some((field) => field.key === definition.fieldKey) && !(isGeneric && GENERIC_TRACKING_KEYS.has(definition.fieldKey)))
+    .filter((definition) => !basicFields.some((field) => field.key === definition.fieldKey)
+      && !(isGeneric && GENERIC_TRACKING_KEYS.has(definition.fieldKey))
+      && !(wellnessLeadView && WELLNESS_LEAD_HIDDEN_DETAIL_KEYS.has(String(definition.fieldKey || '').replace(/[^a-z0-9]/gi, '').toLowerCase())))
     .map((definition) => {
       let options = definition.options;
       if (typeof options === 'string') {
@@ -381,6 +410,9 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
   const filteredTagRecords = allTagRecords.filter((record) => !tagSearch.trim() || record.name.toLowerCase().includes(tagSearch.trim().toLowerCase()));
   const tagColorMap = new Map(allTagRecords.map((record) => [tagKey(record.name), record.color || fallbackTagColor(record.name)]));
   const isPendingTag = (nameValue) => pendingTags.some((tag) => tagKey(tag) === tagKey(nameValue));
+  const selectedWellnessTagIds = tagCatalog
+    .filter((record) => tags.some((tag) => tagKey(tag) === tagKey(record.name)))
+    .map((record) => record.id);
 
   const openTagPicker = () => {
     setPendingTags(dedupeTags(tags));
@@ -408,6 +440,50 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
       setTagMutationError('Could not save tags.');
     } finally {
       setTagSelectionSaving(false);
+    }
+  };
+
+  const saveWellnessLeadTags = async (nextTags) => {
+    setTagSelectionSaving(true);
+    try {
+      await onFieldSave?.({ key: 'tags' }, dedupeTags(nextTags));
+      setTagPickerOpen(false);
+    } catch (_error) {
+      // fetchApi surfaces the save failure through the app notification UI.
+    } finally {
+      setTagSelectionSaving(false);
+    }
+  };
+
+  const addWellnessLeadTag = async (tag) => {
+    const nameValue = String(tag?.name || '').trim();
+    if (!nameValue) return;
+    if (tags.some((item) => tagKey(item) === tagKey(nameValue))) {
+      setTagPickerOpen(false);
+      return;
+    }
+    await saveWellnessLeadTags([...tags, nameValue]);
+  };
+
+  const createWellnessLeadTag = async (nameValue) => {
+    const normalizedName = String(nameValue || '').trim();
+    if (!normalizedName) return;
+    setTagCreating(true);
+    try {
+      const response = await fetchApi('/api/wellness/patients/tags', {
+        method: 'POST',
+        body: JSON.stringify({ name: normalizedName }),
+      });
+      const createdTag = response?.tag || response;
+      if (!createdTag?.id || !createdTag?.name) return;
+      setTagCatalog((current) => current.some((tag) => tag.id === createdTag.id)
+        ? current
+        : [...current, createdTag].sort((left, right) => left.name.localeCompare(right.name)));
+      await addWellnessLeadTag(createdTag);
+    } catch (_error) {
+      // fetchApi surfaces the catalog creation failure through app notifications.
+    } finally {
+      setTagCreating(false);
     }
   };
 
@@ -523,7 +599,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
   };
 
   const drawer = (
-    <div className={inline ? 'cd-inline' : 'cd-overlay'} role={inline ? undefined : 'dialog'} aria-modal={inline ? undefined : 'true'} aria-label={inline ? undefined : (isWellness ? 'Patient details' : 'Contact details')} onMouseDown={(event) => { if (!inline && event.target === event.currentTarget) onClose(); }}>
+    <div className={inline ? `cd-inline${wellnessLeadView ? ' cd-inline--wellness-lead' : ''}` : 'cd-overlay'} role={inline ? undefined : 'dialog'} aria-modal={inline ? undefined : 'true'} aria-label={inline ? undefined : (isWellness ? 'Patient details' : 'Contact details')} onMouseDown={(event) => { if (!inline && event.target === event.currentTarget) onClose(); }}>
       <aside className="cd-drawer">
         <header className="cd-header">
           <div className="cd-header-top">
@@ -557,7 +633,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
           </div>
 
           <div className="cd-actions" aria-label="Contact actions">
-            {ACTIONS.filter(({ key }) => !(hideSms && key === 'sms')).map(({ key, label, Icon, primary }) => (
+            {ACTIONS.filter(({ key }) => !(hideSms && key === 'sms') && !(hideAppointmentActions && (key === 'meeting' || key === 'deal'))).map(({ key, label, Icon, primary }) => (
               <button key={key} type="button" className={`cd-action-btn${primary ? ' is-primary' : ''}`} onClick={() => runAction(key)}>
                 <Icon size={13} /> {label}
               </button>
@@ -589,16 +665,62 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
           )}
 
           <div className="cd-tools">
-            <label className="cd-search">
+            {!wellnessLeadView && <label className="cd-search">
               <Search size={14} />
               <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search fields" aria-label="Search fields" />
-            </label>
+            </label>}
             <label className="cd-toggle"><input type="checkbox" checked={showEmpty} onChange={(event) => setShowEmpty(event.target.checked)} /><span aria-hidden="true" /> Show empty fields</label>
           </div>
 
           {(!isGeneric || activeDetailTab === 'all') && <section className="cd-all-details">
             <h4>All details</h4>
-            {isGenericTagManager ? (
+            {isWellnessLeadTagManager ? (
+              <div className="cd-tags cd-wellness-lead-tag-manager">
+                <Tag size={13} />
+                <span>Tags</span>
+                <div className="cd-tag-values">
+                  {tags.map((tag) => {
+                    const nameValue = String(tag);
+                    const color = tagColorMap.get(tagKey(nameValue)) || fallbackTagColor(nameValue);
+                    return (
+                      <span className="cd-tag-chip" key={nameValue} style={{ background: color, borderColor: color, color: tagTextColor(color) }}>
+                        <span>{nameValue}</span>
+                        <button
+                          type="button"
+                          aria-label={`Remove tag ${nameValue}`}
+                          title={`Remove ${nameValue}`}
+                          disabled={tagSelectionSaving}
+                          onClick={() => saveWellnessLeadTags(tags.filter((item) => tagKey(item) !== tagKey(nameValue)))}
+                        >×</button>
+                      </span>
+                    );
+                  })}
+                  <div className="cd-wellness-lead-tag-control">
+                    <button
+                      type="button"
+                      className="cd-wellness-lead-tag-select"
+                      onClick={() => setTagPickerOpen((current) => !current)}
+                      disabled={tagCatalogLoading || tagSelectionSaving || tagCreating}
+                      aria-haspopup="dialog"
+                      aria-expanded={tagPickerOpen}
+                    >
+                      {tagCatalogLoading ? 'Loading tags…' : 'Select tags…'} <ChevronDown size={13} />
+                    </button>
+                    {tagPickerOpen && (
+                      <TagPickerPopover
+                        allTags={tagCatalog}
+                        onPick={addWellnessLeadTag}
+                        onClose={() => setTagPickerOpen(false)}
+                        onCreate={createWellnessLeadTag}
+                        excludeIds={selectedWellnessTagIds}
+                        showCreate
+                        title="Select patient tags"
+                      />
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : isGenericTagManager ? (
               <div className="cd-tags cd-tag-manager cd-generic-tags-card">
                 <Tag size={13} />
                 <span>Tags</span>
@@ -641,7 +763,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
                 </div>
               </div>
             ) : (
-              <div className="cd-tags"><Tag size={13} /><span>Tags</span><div className="cd-tag-values">{tags.map((tag) => <button type="button" className="cd-tag-value" key={String(tag)} onClick={() => onFieldSave?.({ key: 'tags' }, tags.filter((item) => String(item) !== String(tag)))} title={`Remove ${String(tag)}`}>{String(tag)} ×</button>)}<form className="cd-tag-form" onSubmit={(event) => { event.preventDefault(); const next = tagDraft.trim(); if (!next || tags.some((tag) => String(tag).toLowerCase() === next.toLowerCase())) return; onFieldSave?.({ key: 'tags' }, [...tags, next]); setTagDraft(''); }}><input value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} placeholder="Add tag" aria-label="Add tag" /></form></div></div>
+              <div className="cd-tags"><Tag size={13} /><span>Tags</span><div className="cd-tag-values">{tags.map((tag) => <button type="button" className="cd-tag-value" key={String(tag)} onClick={() => onFieldSave?.({ key: 'tags' }, tags.filter((item) => String(item) !== String(tag)))} title={`Remove ${String(tag)}`}>{String(tag)} ×</button>)}<form className="cd-tag-form" onSubmit={(event) => { event.preventDefault(); const next = tagDraft.trim(); if (!next || tags.some((tag) => String(tag).toLowerCase() === next.toLowerCase())) return; onFieldSave?.({ key: 'tags' }, [...tags, next]); setTagDraft(''); }}><input className={wellnessLeadView ? 'wellness-lead-tag-input' : undefined} value={tagDraft} onChange={(event) => setTagDraft(event.target.value)} placeholder="Add tag" aria-label="Add tag" /></form></div></div>
             )}
           </section>}
 
@@ -682,7 +804,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
                       <div className="cd-telephone-label">Telephone numbers</div>
                       <div className="cd-basic-grid">
                         {(!normalizedQuery || 'mobile'.includes(normalizedQuery)) && <div className="cd-basic-field"><span>Mobile</span><InlineField value={contact?.phone ?? ''} display={displayValue(contact?.phone)} onSave={(value) => onFieldSave?.({ key: 'phone' }, value)} /></div>}
-                        {(!normalizedQuery || 'work phone'.includes(normalizedQuery)) && <div className="cd-basic-field"><span>Work phone</span><InlineField value={contact?.workPhone ?? customFields.workPhone ?? ''} display={displayValue(contact?.workPhone ?? customFields.workPhone)} onSave={(value) => onFieldSave?.({ key: customKey(['workPhone', 'work_phone']) || 'workPhone', custom: true }, value)} /></div>}
+                        {!wellnessLeadView && (!normalizedQuery || 'work phone'.includes(normalizedQuery)) && <div className="cd-basic-field"><span>Work phone</span><InlineField value={contact?.workPhone ?? customFields.workPhone ?? ''} display={displayValue(contact?.workPhone ?? customFields.workPhone)} onSave={(value) => onFieldSave?.({ key: customKey(['workPhone', 'work_phone']) || 'workPhone', custom: true }, value)} /></div>}
                       </div>
                     </div>
                   </div>

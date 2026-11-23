@@ -1,10 +1,9 @@
 // Wave 2 Agent JJ — Staff Attendance page (Google Doc audit, 8 May 2026).
 //
 // Layout:
-//   - Top card: today's clock-in/out with big Punch In / Punch Out buttons
-//   - Below: "My Last 30 Days" attendance grid
-//   - For ADMIN/MANAGER only: a "Today — All Staff" section listing every
-//     staff row's status for the current day. Plain users don't see it.
+//   - Today's punch card and working summary share the top row.
+//   - Personal history and the manager-only team summary use separate tabs.
+//   - Plain users only see their own attendance view.
 //
 // Uses /api/attendance/* endpoints. Dual-vertical (works under both wellness
 // and generic verticals); the route is mounted at /wellness/attendance for
@@ -16,6 +15,7 @@ import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../App';
 import { DateRangeFilter, DateRangeModal, resolveDateRangeYmd } from '../../components/wellness/DateRangeFilter';
 import TopScrollSync from '../../components/TopScrollSync';
+import './Attendance.css';
 
 // Wraps navigator.geolocation.getCurrentPosition in a promise. Resolves to
 // null (never rejects) when geolocation is unsupported, denied, or times
@@ -104,6 +104,7 @@ export default function Attendance() {
   const { user, tenant } = useContext(AuthContext) || {};
   const isManager = user?.role === 'ADMIN' || user?.role === 'MANAGER';
   const isWellnessTenant = tenant?.vertical === 'wellness';
+  const [attendanceView, setAttendanceView] = useState('mine');
 
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -122,6 +123,15 @@ export default function Attendance() {
   const todayRow = history.find((r) => (r.date || '').slice(0, 10) === todayKey) || null;
   const isClockedIn = todayRow && todayRow.clockInAt && !todayRow.clockOutAt;
   const isClockedOut = todayRow && todayRow.clockOutAt;
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const thisMonthHistory = history.filter((r) => String(r.date || '').slice(0, 7) === currentMonth);
+  const getMinutesTotal = (rows) => rows.reduce((sum, row) => sum + (Number(row.totalMinutes) || 0), 0);
+  const visibleMinutes = getMinutesTotal(history);
+  const monthMinutes = getMinutesTotal(thisMonthHistory);
+  const attendanceDays = new Set(history.map((r) => String(r.date || '').slice(0, 10)).filter(Boolean)).size;
+  const averageMinutes = attendanceDays ? Math.round(visibleMinutes / attendanceDays) : 0;
+  const countStatus = (statuses) => history.filter((r) => statuses.includes(String(r.status || '').toUpperCase())).length;
 
   const load = () => {
     if (!from || !to) return;
@@ -243,117 +253,150 @@ export default function Attendance() {
   };
 
   return (
-    <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
-      <h1 style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
-        <Clock size={28} aria-hidden /> Attendance
-      </h1>
+    <div className="wellness-attendance-page">
+      <header className="attendance-page-header">
+        <div>
+          <h1><Clock size={27} aria-hidden="true" /> Attendance</h1>
+          <p>Track attendance, working hours and team records.</p>
+        </div>
+        <div className="attendance-page-date">
+          <Calendar size={16} aria-hidden="true" />
+          Today, {now.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })} ({now.toLocaleDateString(undefined, { weekday: 'short' })})
+        </div>
+      </header>
 
+      <div className="attendance-overview-grid">
       {/* Today's punch card */}
-      <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: 24 }}>
-        <h2 style={{ marginTop: 0 }}>Today, {new Date().toLocaleDateString()}</h2>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))', gap: 16, marginTop: 16 }}>
+      <section className="attendance-today-card" aria-labelledby="attendance-today-title">
+        <div className="attendance-today-heading">
           <div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary, #888)' }}>Clock-in</div>
-            <div style={{ fontSize: 22, fontWeight: 600 }}>{fmtTime(todayRow?.clockInAt)}</div>
+            <h2 id="attendance-today-title">Today, {now.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</h2>
           </div>
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary, #888)' }}>Clock-out</div>
-            <div style={{ fontSize: 22, fontWeight: 600 }}>{fmtTime(todayRow?.clockOutAt)}</div>
+          <span className={`attendance-shift-status${isClockedIn ? ' is-active' : isClockedOut ? ' is-complete' : ''}`}>
+            {isClockedIn ? 'Clocked in' : isClockedOut ? 'Clocked out' : 'Not clocked in'}
+          </span>
+        </div>
+
+        <div className="attendance-today-metrics">
+          <div className="attendance-today-metric">
+            <span>Clock-in</span>
+            <strong>{fmtTime(todayRow?.clockInAt)}</strong>
           </div>
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary, #888)' }}>Total</div>
-            <div style={{ fontSize: 22, fontWeight: 600 }}>{fmtMinutes(todayRow?.totalMinutes)}</div>
+          <div className="attendance-today-metric">
+            <span>Clock-out</span>
+            <strong>{fmtTime(todayRow?.clockOutAt)}</strong>
           </div>
-          <div>
-            <div style={{ fontSize: 12, color: 'var(--text-secondary, #888)' }}>Status</div>
-            <div style={{ fontSize: 16, fontWeight: 600 }}>{todayRow?.status || 'Not clocked in'}</div>
+          <div className="attendance-today-metric">
+            <span>Total hours</span>
+            <strong>{fmtMinutes(todayRow?.totalMinutes)}</strong>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 12, marginTop: 20, flexWrap: 'wrap' }}>
+
+        <div className="attendance-today-footer">
           {showLocationStatus && (
-            <div style={{ width: '100%', fontSize: 13, color: 'var(--text-secondary, #666)' }}>Checking attendance location requirements...</div>
+            <div className="attendance-location-note">Checking attendance location requirements...</div>
           )}
           {showLocationWarning && (
             <div
               role="alert"
-              style={{
-                width: '100%',
-                padding: '12px 14px',
-                borderRadius: 8,
-                background: locationDenied ? '#fde7e7' : '#fff5dc',
-                color: locationDenied ? '#a01a1a' : '#7a5600',
-                border: `1px solid ${locationDenied ? '#f3b8b8' : '#f0d18a'}`,
-              }}
+              className={`attendance-location-warning${locationDenied ? ' is-denied' : ''}`}
             >
               {locationDenied ? (
                 <>
                   <div>Location access is turned off. Enable location permission to mark attendance for wellness geofencing.</div>
-                  <div style={{ fontSize: 12, marginTop: 6 }}>To re-enable it, open your browser or device site settings and turn Location back on for this app.</div>
+                  <div className="attendance-location-help">To re-enable it, open your browser or device site settings and turn Location back on for this app.</div>
                 </>
               ) : 'Location access will be requested when you mark attendance. Please allow it so wellness geofencing can verify your location.'}
             </div>
           )}
-          <button
-            type="button"
-            onClick={onClockIn}
-            disabled={busy || isClockedIn || isClockedOut || locationDenied}
-            aria-label="Punch In"
-            style={{
-              padding: '14px 28px', fontSize: 16, fontWeight: 600,
-              background: isClockedIn || isClockedOut || locationDenied ? '#ccc' : 'var(--primary-color, var(--accent-color))',
-              color: '#fff', border: 'none', borderRadius: 8,
-              cursor: (busy || isClockedIn || isClockedOut || locationDenied) ? 'not-allowed' : 'pointer',
-              display: 'flex', alignItems: 'center', gap: 8,
-            }}
-          >
-            <LogIn size={18} aria-hidden /> Punch In
-          </button>
-          <button
-            type="button"
-            onClick={onClockOut}
-            disabled={busy || !isClockedIn || locationDenied}
-            aria-label="Punch Out"
-            style={{
-              padding: '14px 28px', fontSize: 16, fontWeight: 600,
-              background: !isClockedIn || locationDenied ? '#ccc' : '#a01a1a',
-              color: '#fff', border: 'none', borderRadius: 8,
-              cursor: (busy || !isClockedIn || locationDenied) ? 'not-allowed' : 'pointer',
-              display: 'flex', alignItems: 'center', gap: 8,
-            }}
-          >
-            <LogOut size={18} aria-hidden /> Punch Out
-          </button>
+          <div className="attendance-punch-actions">
+            <button
+              type="button"
+              className="attendance-punch-in"
+              onClick={onClockIn}
+              disabled={busy || isClockedIn || isClockedOut || locationDenied}
+              aria-label="Punch In"
+            >
+              <LogIn size={17} aria-hidden /> Punch In
+            </button>
+            <button
+              type="button"
+              className="attendance-punch-out"
+              onClick={onClockOut}
+              disabled={busy || !isClockedIn || locationDenied}
+              aria-label="Punch Out"
+            >
+              <LogOut size={17} aria-hidden /> Punch Out
+            </button>
+          </div>
         </div>
       </section>
 
+      <section className="attendance-working-summary" aria-labelledby="attendance-working-summary-title">
+        <h2 id="attendance-working-summary-title">Working Summary</h2>
+        <dl>
+          <div><dt>{dateFilter.preset === 'last30' ? `This Month (${now.toLocaleDateString(undefined, { month: 'short' })})` : 'This Month (selected period)'}</dt><dd>{fmtMinutes(monthMinutes)}</dd></div>
+          <div><dt>{dateFilter.preset === 'last30' ? 'Last 30 Days' : 'Selected Period'}</dt><dd>{fmtMinutes(visibleMinutes)}</dd></div>
+          <div><dt>Average per Day</dt><dd>{fmtMinutes(averageMinutes)}</dd></div>
+        </dl>
+      </section>
+      </div>
+
       {/* My attendance history */}
-      <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)', marginBottom: 24 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: 4 }}>
-          <h2 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Calendar size={20} aria-hidden /> My attendance
-          </h2>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+      {isManager && (
+        <div className="attendance-view-tabs" role="tablist" aria-label="Attendance views">
+          <button id="attendance-tab-mine" type="button" role="tab" aria-selected={attendanceView === 'mine'} aria-controls="attendance-panel-mine" onClick={() => setAttendanceView('mine')}>
+            <Calendar size={16} aria-hidden="true" /> My attendance
+          </button>
+          <button id="attendance-tab-team" type="button" role="tab" aria-selected={attendanceView === 'team'} aria-controls="attendance-panel-team" onClick={() => setAttendanceView('team')}>
+            <Users size={16} aria-hidden="true" /> All Staff
+          </button>
+        </div>
+      )}
+      <section
+        id="attendance-panel-mine"
+        className="attendance-tab-panel"
+        role={isManager ? 'tabpanel' : undefined}
+        aria-labelledby={isManager ? 'attendance-tab-mine' : undefined}
+        hidden={isManager && attendanceView !== 'mine'}
+      >
+        <section className="attendance-panel attendance-personal-overview">
+          <div className="attendance-panel-header">
+            <h2>My Attendance Overview</h2>
             <DateRangeFilter value={dateFilter} onChange={setDateFilter} label={null} includeAllOption={false} />
           </div>
-        </div>
-        {dateFilter.preset === 'last30' && (
-          <div style={{ fontSize: 12, color: 'var(--text-secondary, #888)', marginBottom: 12 }}>My Last 30 Days</div>
-        )}
+          <div className="attendance-personal-stats">
+            <div><strong>{countStatus(['PRESENT'])}</strong><span>Present</span></div>
+            <div><strong>{countStatus(['ABSENT'])}</strong><span>Absent</span></div>
+            <div><strong>{countStatus(['LATE'])}</strong><span>Late</span></div>
+            <div><strong>{countStatus(['HALF_DAY'])}</strong><span>Half-day</span></div>
+            <div><strong>{countStatus(['EARLY'])}</strong><span>Early</span></div>
+            <div><strong>{visibleMinutes}</strong><span>Total Minutes</span></div>
+          </div>
+        </section>
+
+        <section className="attendance-panel attendance-history-panel">
+          <div className="attendance-panel-header">
+            <div>
+              <h2><Calendar size={19} aria-hidden="true" /> Attendance History</h2>
+              <p>{dateFilter.preset === 'last30' ? 'My Last 30 Days' : 'Selected attendance period'}</p>
+            </div>
+          </div>
         {loading ? (
-          <div>Loading&hellip;</div>
+          <div className="attendance-empty-state" role="status">Loading&hellip;</div>
         ) : history.length === 0 ? (
-          <div style={{ color: 'var(--text-secondary, #888)', padding: 20, textAlign: 'center' }}>No attendance rows yet. Clock in to get started.</div>
+          <div className="attendance-empty-state">No attendance rows yet. Clock in to get started.</div>
         ) : (
           <TopScrollSync>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <table className="attendance-table">
             <thead>
               <tr>
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Date</th>
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Clock-in</th>
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Clock-out</th>
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Total</th>
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Status</th>
-                <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Source</th>
+                <th>Date</th>
+                <th>Clock-in</th>
+                <th>Clock-out</th>
+                <th>Total</th>
+                <th>Status</th>
+                <th>Source</th>
               </tr>
             </thead>
             <tbody>
@@ -361,16 +404,16 @@ export default function Attendance() {
                 const sc = statusClass(r.status);
                 return (
                   <tr key={r.id}>
-                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{fmtDate(r.date)}</td>
-                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{fmtTime(r.clockInAt)}</td>
-                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{fmtTime(r.clockOutAt)}</td>
-                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{fmtMinutes(r.totalMinutes)}</td>
-                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>
-                      <span style={{ background: sc.bg, color: sc.color, padding: '2px 8px', borderRadius: 4, fontSize: 12, fontWeight: 600 }}>
+                    <td>{fmtDate(r.date)}</td>
+                    <td>{fmtTime(r.clockInAt)}</td>
+                    <td>{fmtTime(r.clockOutAt)}</td>
+                    <td>{fmtMinutes(r.totalMinutes)}</td>
+                    <td>
+                      <span className="attendance-status-badge" style={{ background: sc.bg, color: sc.color }}>
                         {r.status}
                       </span>
                     </td>
-                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)', fontSize: 12, color: 'var(--text-secondary, #666)' }}>{r.source}</td>
+                    <td>{r.source}</td>
                   </tr>
                 );
               })}
@@ -378,10 +421,20 @@ export default function Attendance() {
           </table>
           </TopScrollSync>
         )}
+        </section>
       </section>
 
       {/* Manager-only: today's staff snapshot */}
-      {isManager && <ManagerStaffSnapshot />}
+      {isManager && (
+        <div
+          id="attendance-panel-team"
+          role="tabpanel"
+          aria-labelledby="attendance-tab-team"
+          hidden={attendanceView !== 'team'}
+        >
+          <ManagerStaffSnapshot />
+        </div>
+      )}
     </div>
   );
 }
@@ -457,37 +510,27 @@ function ManagerStaffSnapshot() {
   const totalMinutes = summary?.totalMinutes || 0;
 
   return (
-    <section style={{ background: 'var(--surface-color, #fff)', borderRadius: 12, padding: 24, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
-        <h2 style={{ marginTop: 0, marginBottom: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Users size={20} aria-hidden /> All Staff — Selected Period
-        </h2>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+    <section className="attendance-panel attendance-team-panel">
+      <div className="attendance-panel-header attendance-team-header">
+        <div>
+          <h2><Users size={19} aria-hidden="true" /> All Staff — Selected Period</h2>
+          <p>Team attendance totals and payroll records for this period.</p>
+        </div>
+        <div className="attendance-team-actions">
           <button
             type="button"
+            className="attendance-secondary-button"
             onClick={() => setExportDatePickerOpen(true)}
             aria-label="Select payroll date range"
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 6,
-              padding: '6px 10px', borderRadius: 6,
-              border: '1px solid var(--border-color, #ddd)',
-              background: 'var(--surface-color, #fff)', color: 'var(--text-primary)',
-              cursor: 'pointer', fontSize: 13,
-            }}
           >
             <Calendar size={14} aria-hidden />
             {formatDateRangeLabel(exportFrom, exportTo)}
           </button>
           <button
             type="button"
+            className="attendance-secondary-button"
             onClick={onExport}
             disabled={exporting}
-            style={{
-              padding: '6px 12px', borderRadius: 6,
-              border: '1px solid var(--border-color, #ddd)',
-              background: 'var(--surface-color, #fff)', color: 'var(--text-primary)',
-              cursor: exporting ? 'not-allowed' : 'pointer', fontSize: 13, fontWeight: 600,
-            }}
           >
             <Upload size={14} /> Export Payroll CSV
           </button>
@@ -506,12 +549,12 @@ function ManagerStaffSnapshot() {
         />
       )}
       {loading ? (
-        <div>Loading&hellip;</div>
+        <div className="attendance-empty-state" role="status">Loading&hellip;</div>
       ) : !summary ? (
-        <div style={{ color: 'var(--text-secondary, #888)' }}>No data yet.</div>
+        <div className="attendance-empty-state">No data yet.</div>
       ) : (
         <div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 140px), 1fr))', gap: 12, marginBottom: 16 }}>
+          <div className="attendance-summary-grid">
             <Stat label="Total" value={total} />
             <Stat label="Absent" value={absent} />
             <Stat label="Present" value={present} />
@@ -523,12 +566,12 @@ function ManagerStaffSnapshot() {
           </div>
           {Object.keys(summary.byUser || {}).length > 0 ? (
             <TopScrollSync>
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <table className="attendance-table attendance-team-table">
               <thead>
                 <tr>
-                  <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Staff member</th>
-                  <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Days</th>
-                  <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid var(--border-color, #eee)' }}>Minutes</th>
+                  <th>Staff member</th>
+                  <th>Days</th>
+                  <th>Minutes</th>
                 </tr>
               </thead>
               <tbody>
@@ -536,21 +579,21 @@ function ManagerStaffSnapshot() {
                   .sort((a, b) => String(a.name || a.email || a.userId).localeCompare(String(b.name || b.email || b.userId)))
                   .map((u) => (
                   <tr key={u.userId}>
-                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>
+                    <td>
                       <div>{u.name || u.email || `User #${u.userId}`}</div>
                       {u.name && u.email && (
-                        <div style={{ marginTop: 2, fontSize: 12, color: 'var(--text-secondary, #888)' }}>{u.email}</div>
+                        <div className="attendance-staff-email">{u.email}</div>
                       )}
                     </td>
-                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{u.days}</td>
-                    <td style={{ padding: 8, borderBottom: '1px solid var(--border-light, #f5f5f5)' }}>{u.minutes}</td>
+                    <td>{u.days}</td>
+                    <td>{u.minutes}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
             </TopScrollSync>
           ) : (
-            <div style={{ color: 'var(--text-secondary, #888)' }}>
+            <div className="attendance-empty-state attendance-team-empty">
               {exportFrom === todayKey && exportTo === todayKey
                 ? 'Nobody clocked in today yet.'
                 : 'No attendance rows for the selected period.'}
@@ -564,9 +607,9 @@ function ManagerStaffSnapshot() {
 
 function Stat({ label, value }) {
   return (
-    <div style={{ background: 'var(--subtle-bg, #f7f7f7)', borderRadius: 8, padding: 12 }}>
-      <div style={{ fontSize: 11, color: 'var(--text-secondary, #888)' }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700 }}>{value}</div>
+    <div className="attendance-summary-stat">
+      <div>{label}</div>
+      <strong>{value}</strong>
     </div>
   );
 }

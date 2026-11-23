@@ -1194,8 +1194,16 @@ router.get("/reports/visit/:id", phiReadGate, getPatientDetails);
 
 router.get("/patients", phiReadGate, async (req, res) => {
   try {
-    const { q, limit = 50, offset = 0, locationId } = req.query;
+    const { q, limit = 50, offset = 0, locationId, contactId } = req.query;
     const where = tenantWhere(req);
+    if (contactId !== undefined) {
+      const contactIdText = typeof contactId === "string" ? contactId : "";
+      const parsedContactId = Number(contactIdText);
+      if (!/^\d+$/.test(contactIdText) || !Number.isSafeInteger(parsedContactId) || parsedContactId < 1) {
+        return res.status(400).json({ error: "Invalid contact ID", code: "INVALID_CONTACT_ID" });
+      }
+      where.contactId = parsedContactId;
+    }
     if (q) {
       where.OR = [
         { name: { contains: q } },
@@ -1292,6 +1300,7 @@ router.get("/patients", phiReadGate, async (req, res) => {
       {
         count: patients.length,
         query: q || null,
+        contactId: contactId ? Number.parseInt(contactId, 10) : null,
         locationId: locationId ? parseInt(locationId) : null,
         // Pin the shape into the audit row so reviewers can answer "did
         // this list call disclose PHI?" without joining two tables.
@@ -1328,11 +1337,11 @@ router.get("/patients", phiReadGate, async (req, res) => {
     // name-only slim read isn't in that risk class.
     if (!wantFullShape) {
       const outPatientsSlim = shouldMaskForViewer(req)
-        ? maskRows(patients, ["name"])
+        ? maskRows(patients, ["name", "firstName", "lastName", "displayName"])
         : patients;
       return res.json({ patients: outPatientsSlim, total });
     }
-    const piiFields = ["name", "phone", "email", "dob"];
+    const piiFields = ["name", "firstName", "lastName", "displayName", "phone", "email", "dob"];
     const outPatients = shouldMaskForViewer(req)
       ? maskRows(patients, piiFields)
       : patients;
@@ -5865,6 +5874,16 @@ router.all("/treatments/*", treatmentsGone);
 
 router.get("/services", async (req, res) => {
   try {
+    const where = tenantWhere(req, { NOT: { isActive: false } });
+    const q = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 120) : "";
+    if (q) {
+      where.OR = [
+        { name: { contains: q } },
+        { category: { contains: q } },
+        { serviceCategory: { is: { name: { contains: q } } } },
+        { description: { contains: q } },
+      ];
+    }
     const paginated = req.query.page !== undefined || req.query.pageSize !== undefined;
     if (paginated) {
       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
@@ -5875,7 +5894,6 @@ router.get("/services", async (req, res) => {
         : sortBy === "oldest"
           ? [{ createdAt: "asc" }, { id: "asc" }]
           : [{ ticketTier: "desc" }, { name: "asc" }, { id: "asc" }];
-      const where = tenantWhere(req, { NOT: { isActive: false } });
       const [services, total] = await prisma.$transaction([
         prisma.service.findMany({
           where,
@@ -5895,7 +5913,7 @@ router.get("/services", async (req, res) => {
     // pre-fill on BookAppointment whenever the linked service sorted past
     // position 200.
     const services = await prisma.service.findMany({
-      where: tenantWhere(req, { NOT: { isActive: false } }),
+      where,
       orderBy: [{ ticketTier: "desc" }, { name: "asc" }],
       take: 2000,
     });

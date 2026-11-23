@@ -770,10 +770,9 @@ export default function Staff() {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [filterOpen]);
 
-  // Generic staff actions use one shared, row-aware menu. Keeping only the
-  // active row's menu open avoids the browser rendering a separate native
-  // select popup for every row and also lets the menu escape the table's
-  // overflow container.
+  // Generic and wellness staff actions use one shared, row-aware menu.
+  // Keeping only the active row's menu open lets it escape the table's
+  // overflow container without crowding each row with action buttons.
   useEffect(() => {
     if (openGenericActions === null) return undefined;
     const closeMenu = (event) => {
@@ -1362,7 +1361,7 @@ export default function Staff() {
   );
   const visibleStaff = filteredStaff.slice(0, visibleStaffCount);
   const activeGenericMember =
-    !isTravel && !isWellness
+    !isTravel
       ? visibleStaff.find((member) => member.id === openGenericActions)
       : null;
   const highlightedStaffIndex = highlightedStaffId
@@ -2426,7 +2425,7 @@ export default function Staff() {
                     >
                       {canManageStaff || canViewPermissions ? (
                         <>
-                          {!isTravel && !isWellness && (
+                          {!isTravel && (
                             <button
                               type="button"
                               onClick={(event) => {
@@ -2465,32 +2464,12 @@ export default function Staff() {
                               />
                             </button>
                           )}
-                        {(isTravel || isWellness) && (
+                        {isTravel && (
                         <div
-                          role={!isTravel && !isWellness ? "menu" : undefined}
-                          aria-label={!isTravel && !isWellness ? `Actions for ${member.name || member.email}` : undefined}
-                          data-staff-generic-actions={!isTravel && !isWellness ? "true" : undefined}
-                          onMouseDown={(event) => {
-                            if (!isTravel && !isWellness) event.stopPropagation();
-                          }}
                           style={{
-                            display: isTravel || isWellness ? "flex" : "none",
+                            display: "flex",
                             gap: "0.3rem",
                             flexWrap: "wrap",
-                            ...(!isTravel && !isWellness ? {
-                              top: genericActionsAnchor ? genericActionsAnchor.bottom + 4 : 0,
-                              left: genericActionsAnchor ? genericActionsAnchor.left : 0,
-                              position: "fixed",
-                              zIndex: 1000,
-                              minWidth: "9.5rem",
-                              padding: "0.45rem",
-                              flexDirection: "column",
-                              alignItems: "stretch",
-                              background: "var(--surface-color, #fff)",
-                              border: "1px solid var(--border-color, #ddd)",
-                              borderRadius: "0.5rem",
-                              boxShadow: "0 8px 20px rgba(0,0,0,0.14)",
-                            } : {}),
                           }}
                         >
                           {canManageStaff && (

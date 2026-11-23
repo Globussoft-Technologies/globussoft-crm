@@ -1,0 +1,295 @@
+.wellness-attendance-calendar-page {
+  box-sizing: border-box;
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  flex-direction: column;
+  gap: 1rem;
+  margin: 0;
+  padding: clamp(1rem, 1.8vw, 2rem);
+  color: var(--text-primary);
+}
+
+.attendance-calendar-page-header {
+  display: flex;
+  min-height: 3.75rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.attendance-calendar-page-header h1 {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0;
+  color: var(--text-primary);
+  font-size: clamp(1.45rem, 2vw, 1.9rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.attendance-calendar-page-header h1 svg {
+  flex: 0 0 auto;
+  color: var(--primary-color, var(--accent-color));
+}
+
+.attendance-calendar-page-header p {
+  margin: 0.35rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.attendance-calendar-back {
+  display: inline-flex;
+  min-height: 40px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: var(--surface-color, #fff);
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.attendance-calendar-back:hover {
+  border-color: var(--primary-color, var(--accent-color));
+  background: var(--subtle-bg, rgba(0, 0, 0, 0.03));
+}
+
+.attendance-calendar-back:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--primary-color, var(--accent-color)) 35%, transparent);
+  outline-offset: 2px;
+}
+
+.attendance-calendar-picker-anchor {
+  position: relative;
+  z-index: 5;
+}
+
+.attendance-calendar-month-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--surface-color, #fff);
+}
+
+.attendance-calendar-month-button {
+  display: inline-flex;
+  min-width: 180px;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 1.05rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.attendance-calendar-month-button:hover,
+.attendance-calendar-month-button[aria-expanded="true"] {
+  border-color: var(--border-color);
+  background: var(--surface-color, #fff);
+}
+
+.attendance-calendar-month-button svg {
+  color: var(--text-secondary);
+}
+
+.attendance-calendar-date-picker {
+  position: absolute;
+  top: calc(100% + 0.45rem);
+  left: 0;
+  z-index: 20;
+  width: min(320px, calc(100vw - 2rem));
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--surface-color, #fff);
+  box-shadow: 0 14px 36px rgba(31, 29, 23, 0.18);
+  color: var(--text-primary);
+}
+
+.attendance-calendar-picker-summary {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem 0.5rem 1rem;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.82rem;
+  font-weight: 550;
+}
+
+.attendance-calendar-picker-summary button,
+.attendance-calendar-picker-navigation > button {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.attendance-calendar-picker-summary button:hover,
+.attendance-calendar-picker-navigation > button:hover {
+  border-color: var(--border-color);
+  background: var(--subtle-bg, rgba(0, 0, 0, 0.035));
+  color: var(--text-primary);
+}
+
+.attendance-calendar-picker-navigation {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.25rem 0.65rem;
+}
+
+.attendance-calendar-picker-navigation > div {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  font-size: 0.87rem;
+  font-weight: 650;
+}
+
+.attendance-calendar-picker-navigation > div button {
+  padding: 0.35rem 0.15rem;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.attendance-calendar-picker-navigation > div button:hover {
+  color: var(--primary-color, var(--accent-color));
+}
+
+.attendance-calendar-picker-days,
+.attendance-calendar-picker-options {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.2rem;
+  padding: 0.25rem 0.75rem 0.8rem;
+}
+
+.attendance-calendar-picker-weekday {
+  display: grid;
+  min-height: 30px;
+  place-items: center;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
+.attendance-calendar-picker-day,
+.attendance-calendar-picker-options button {
+  display: grid;
+  min-width: 0;
+  min-height: 34px;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.attendance-calendar-picker-day:hover,
+.attendance-calendar-picker-options button:hover {
+  border-color: var(--border-color);
+  background: var(--subtle-bg, rgba(0, 0, 0, 0.04));
+}
+
+.attendance-calendar-picker-day.is-outside,
+.attendance-calendar-picker-options button.is-outside {
+  color: var(--text-secondary);
+  opacity: 0.55;
+}
+
+.attendance-calendar-picker-day.is-today:not(.is-selected) {
+  border-color: var(--text-primary);
+  font-weight: 700;
+}
+
+.attendance-calendar-picker-day.is-selected,
+.attendance-calendar-picker-options button.is-selected {
+  border-color: var(--primary-color, var(--accent-color));
+  background: var(--primary-color, var(--accent-color));
+  color: #fff;
+  opacity: 1;
+}
+
+.attendance-calendar-picker-options {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding-top: 0.4rem;
+  padding-bottom: 0.9rem;
+}
+
+.attendance-calendar-picker-options button {
+  min-height: 48px;
+  border-radius: 9px;
+  font-size: 0.82rem;
+}
+
+.attendance-calendar-date-picker button:focus-visible,
+.attendance-calendar-month-button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--primary-color, var(--accent-color)) 35%, transparent);
+  outline-offset: 1px;
+}
+
+.attendance-calendar-staff-label {
+  box-sizing: border-box;
+  min-height: 32px;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--surface-color, #fff);
+}
+
+@media (max-width: 600px) {
+  .wellness-attendance-calendar-page {
+    gap: 0.9rem;
+    padding: 1rem;
+  }
+
+  .attendance-calendar-page-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 430px) {
+  .attendance-calendar-date-picker {
+    left: -3rem;
+  }
+}

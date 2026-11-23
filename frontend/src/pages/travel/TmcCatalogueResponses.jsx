@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { ChevronDown, ChevronRight, ExternalLink, RefreshCw } from "lucide-react";
 import Pagination from "../../components/ui/Pagination";
 import { fetchApi } from "../../utils/api";
@@ -17,6 +18,8 @@ function cardStyle(extra = {}) {
 
 export default function TmcCatalogueResponses() {
   const notify = useNotify();
+  const [searchParams] = useSearchParams();
+  const teacherId = searchParams.get("teacherId");
   const [responses, setResponses] = useState([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -28,9 +31,14 @@ export default function TmcCatalogueResponses() {
     setLoading(true);
     try {
       const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String((page - 1) * PAGE_SIZE) });
+      if (teacherId) params.set("teacherId", teacherId);
       const result = await fetchApi(`/api/travel/tmc-catalogue-responses?${params.toString()}`);
       setResponses(Array.isArray(result?.responses) ? result.responses : []);
       setTotal(Number(result?.total) || 0);
+      const targetedResponse = Array.isArray(result?.responses)
+        ? result.responses.find((response) => String(response?.teacher?.id) === String(teacherId))
+        : null;
+      if (teacherId) setExpandedId(targetedResponse?.id ?? null);
     } catch (error) {
       setResponses([]);
       setTotal(0);
@@ -38,7 +46,7 @@ export default function TmcCatalogueResponses() {
     } finally {
       setLoading(false);
     }
-  }, [notify, page]);
+  }, [notify, page, teacherId]);
 
   useEffect(() => { load(); }, [load, reloadTick]);
 

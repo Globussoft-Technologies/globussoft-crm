@@ -246,11 +246,12 @@ describe("<Settings /> — page shell + representative card pin", () => {
     expect(within(directory).queryByRole("button", { name: /SendGrid/ }) !== null).toBe(vertical === "travel");
     expect(within(directory).queryByRole("button", { name: /Google Maps/ }) !== null).toBe(vertical === "generic");
     expect(within(directory).queryByRole("button", { name: /WhatsApp \/ Meta/ }) !== null).toBe(vertical === "generic");
-    for (const [label, path] of [["Gmail", "/gmail"], ["Google Drive", "/travel/trip-knowledge"], ["Google Calendar", "/calendar-sync"], ["WhatsApp Web", "/travel/whatsapp"]]) {
+    for (const [label, path] of [["Gmail", "/gmail"], ["Google Drive", "/travel/trip-knowledge"], ["Google Calendar", "/calendar-sync"]]) {
       const tile = within(directory).queryByRole("link", { name: new RegExp(label) });
       if (vertical === "travel") expect(tile).toHaveAttribute("href", path);
       else expect(tile).not.toBeInTheDocument();
     }
+    expect(within(directory).queryByRole("link", { name: /WhatsApp Web/ })).not.toBeInTheDocument();
     if (vertical !== "wellness") {
       expect(fetchApiMock.mock.calls.some(([url]) => url === "/api/wellness/consent-templates" || url === "/api/wellness/role-types")).toBe(false);
     }

@@ -27,10 +27,9 @@ export function rememberDashboardNavigation(location) {
 }
 
 export function readRefreshedDashboardNavigation(location) {
-  if (typeof performance !== 'undefined' && performance.getEntriesByType) {
-    const entry = performance.getEntriesByType('navigation')[0];
-    if (entry && entry.type !== 'reload') return null;
-  }
+  if (typeof performance === 'undefined' || !performance.getEntriesByType) return null;
+  const entry = performance.getEntriesByType('navigation')[0];
+  if (!entry || entry.type !== 'reload') return null;
   if (typeof sessionStorage === 'undefined') return null;
   try {
     const stored = JSON.parse(sessionStorage.getItem(DASHBOARD_NAVIGATION_STORAGE_KEY) || 'null');

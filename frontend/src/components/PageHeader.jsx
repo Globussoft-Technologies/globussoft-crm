@@ -33,7 +33,7 @@ export function DashboardBackLink() {
       }}
     >
       <ArrowLeft size={16} aria-hidden="true" />
-      Back to Dashboard
+      Back to dashboard
     </Link>
   );
 }

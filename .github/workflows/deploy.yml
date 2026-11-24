@@ -897,7 +897,7 @@ jobs:
 
       #  Backend deploy 
       # git pull -> npm install -> prisma generate -> pm2 restart -> health.
-      # On health failure, the next step rolls back to HEAD~1.
+      # On failure, the next step restores the checkout recorded before deploy.
       - name: Deploy backend
         id: backend
         uses: appleboy/ssh-action@v1.2.0
@@ -919,6 +919,8 @@ jobs:
             echo "before SHA: $(git rev-parse --short HEAD)"
 
             git fetch origin main
+            rollback_ref="refs/demo-deploy/rollback/${{ github.run_id }}-${{ github.run_attempt }}"
+            git update-ref "$rollback_ref" HEAD
             git reset --hard origin/main
             echo "after  SHA: $(git rev-parse --short HEAD)"
             git log --oneline -3
@@ -1003,24 +1005,31 @@ jobs:
 
             echo "=== pm2 restart ==="
             test -s "$TALLY_CONNECTOR_EXE_PATH"
+            error_log="$HOME/.pm2/logs/globussoft-crm-backend-error.log"
+            log_offset=0
+            if [[ -f "$error_log" ]]; then
+              log_offset=$(stat -c %s "$error_log")
+            fi
             pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3
 
             echo "=== health poll ==="
-            for i in 1 2 3 4 5 6 7 8 9 10; do
-              body=$(curl -s --max-time 5 -H 'Authorization: Deployment-Readiness' http://127.0.0.1:5099/api/health 2>&1 || true)
-              if echo "$body" | grep -q '"healthy"' && echo "$body" | grep -q '"tallyConnectorBinaryAvailable":true'; then
-                echo "  [try $i] healthy"
-                exit 0
+            if ! bash ../scripts/demo-deploy-readiness.sh 60; then
+              echo "=== CRM startup error markers since restart ==="
+              # Never upload raw PM2 logs; they may include CRM data or secrets.
+              if [[ -f "$error_log" ]]; then
+                current_size=$(stat -c %s "$error_log")
+                if (( current_size >= log_offset )); then
+                  tail -c "+$((log_offset + 1))" "$error_log" | tail -c 65536 \
+                    | grep -oE 'ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND|Cannot find module|EADDRINUSE|EACCES|ECONNREFUSED|SyntaxError|ReferenceError|TypeError|PrismaClientInitializationError' \
+                    | tail -20 || true
+                fi
               fi
-              echo "  [try $i] $body"
-              sleep 2
-            done
-            echo "[fail] backend did not reach healthy within 20s"
-            exit 1
+              exit 1
+            fi
+            git update-ref -d "$rollback_ref" || echo "[deploy] could not clean up rollback ref"
 
-      # If the backend deploy failed (most likely the health check), roll back
-      # to HEAD~1 and restart. Don't try anything fancier  keep the rollback
-      # path identical to a manual `git reset --hard HEAD~1 && pm2 restart`.
+      # Restore the exact previous checkout, which might not be HEAD~1.
+      # This rolls back code only; database schema changes are not reverted.
       - name: Rollback backend on failure
         if: failure() && steps.backend.conclusion == 'failure'
         uses: appleboy/ssh-action@v1.2.0
@@ -1034,15 +1043,30 @@ jobs:
             set -eo pipefail
             export PATH="$HOME/.nvm/versions/node/v24.14.0/bin:$PATH"
             cd ~/globussoft-crm
-            echo "=== ROLLBACK to HEAD~1 ==="
+            rollback_ref="refs/demo-deploy/rollback/${{ github.run_id }}-${{ github.run_attempt }}"
+            if ! previous=$(git rev-parse --verify "$rollback_ref^{commit}"); then
+              echo "[rollback] no checkout recorded; no reset attempted"
+              exit 1
+            fi
+            probe=$(mktemp)
+            trap 'rm -f "$probe"' EXIT
+            # The previous checkout might not contain this script yet.
+            git show HEAD:scripts/demo-deploy-readiness.sh > "$probe" ||
+              git show origin/main:scripts/demo-deploy-readiness.sh > "$probe"
+            echo "=== ROLLBACK to recorded checkout ==="
             echo "current: $(git rev-parse --short HEAD)"
-            git reset --hard HEAD~1
+            git reset --hard "$previous"
             echo "rolled back to: $(git rev-parse --short HEAD)"
             cd backend
             npm install --no-audit --no-fund --loglevel=error 2>&1 | tail -3
             npx prisma generate 2>&1 | tail -2
             pm2 restart globussoft-crm-backend --update-env 2>&1 | tail -3
-            echo "[rollback] complete - health verification skipped (manual check needed)"
+            if ! bash "$probe" 60; then
+              echo "[rollback] previous checkout did not become ready; manual intervention needed"
+              exit 1
+            fi
+            git update-ref -d "$rollback_ref"
+            echo "[rollback] previous checkout is healthy; database schema was not reverted"
 
       #  Frontend deploy 
       # vite build on the server, rsync dist -> /var/www, then sudo chown to

@@ -48,6 +48,10 @@ export function InlineField({ value, display, type = 'text', options = [], onSav
     setSaving(true);
     try {
       await onSave(next === '' ? null : next);
+    } catch {
+      // Inline saves are triggered by DOM event handlers, so a rejected save
+      // must not escape as an unhandled promise. The owning page is responsible
+      // for restoring optimistic state and displaying its error notification.
     } finally {
       setSaving(false);
     }
@@ -107,7 +111,7 @@ export function InlineField({ value, display, type = 'text', options = [], onSav
       value={draft ?? ''}
       placeholder={placeholder}
       onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
+      onBlur={() => commit()}
       onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setEditing(false); }}
     />
   );

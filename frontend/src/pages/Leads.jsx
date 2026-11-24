@@ -993,6 +993,27 @@ function PortalWhenReady({ enabled, target, children }) {
   return target ? createPortal(children, target) : null;
 }
 
+function useMediaQuery(query) {
+  const readMatch = useCallback(
+    () => typeof window !== "undefined"
+      && typeof window.matchMedia === "function"
+      && window.matchMedia(query).matches,
+    [query],
+  );
+  const [matches, setMatches] = useState(readMatch);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return undefined;
+    const mediaQuery = window.matchMedia(query);
+    const updateMatch = () => setMatches(mediaQuery.matches);
+    updateMatch();
+    mediaQuery.addEventListener?.("change", updateMatch);
+    return () => mediaQuery.removeEventListener?.("change", updateMatch);
+  }, [query]);
+
+  return matches;
+}
+
 const LEAD_TAG_LIMIT = 50;
 const LEAD_TAG_MAX_LENGTH = 80;
 
@@ -2940,6 +2961,7 @@ const Leads = ({ initialListState = null } = {}) => {
   const auth = useContext(AuthContext);
   const isWellness = auth?.tenant?.vertical === "wellness";
   const isTravel = auth?.tenant?.vertical === "travel";
+  const isPhoneViewport = useMediaQuery("(max-width: 768px)");
   const { activeSubBrand } = useActiveSubBrand();
   // Callified AI calling is only available in the generic CRM vertical.
   const isGeneric = !isWellness && !isTravel;
@@ -3279,6 +3301,32 @@ const Leads = ({ initialListState = null } = {}) => {
   const [bulkCampaignId, setBulkCampaignId] = useState("");
   const [bulkCampaignSaving, setBulkCampaignSaving] = useState(false);
   const [leadBulkActionsOpen, setLeadBulkActionsOpen] = useState(false);
+  const [mobileBulkMenuRect, setMobileBulkMenuRect] = useState(null);
+
+  useLayoutEffect(() => {
+    if (!leadBulkActionsOpen || !isTravel || !isPhoneViewport) {
+      setMobileBulkMenuRect(null);
+      return undefined;
+    }
+    const updateMobileBulkMenuRect = () => {
+      const frame = document.querySelector(".travel-content-frame");
+      const rect = frame?.getBoundingClientRect();
+      if (!rect || rect.width <= 0 || rect.height <= 0) return;
+      setMobileBulkMenuRect({
+        left: Math.round(rect.left + 8),
+        top: Math.round(rect.top + 8),
+        width: Math.max(0, Math.round(rect.width - 16)),
+        maxHeight: Math.max(0, Math.round(rect.height - 16)),
+      });
+    };
+    updateMobileBulkMenuRect();
+    window.addEventListener("resize", updateMobileBulkMenuRect);
+    window.addEventListener("scroll", updateMobileBulkMenuRect, true);
+    return () => {
+      window.removeEventListener("resize", updateMobileBulkMenuRect);
+      window.removeEventListener("scroll", updateMobileBulkMenuRect, true);
+    };
+  }, [isPhoneViewport, isTravel, leadBulkActionsOpen]);
 
   useEffect(() => {
     if (!leadBulkActionsOpen) return undefined;
@@ -10672,21 +10720,33 @@ const Leads = ({ initialListState = null } = {}) => {
                 )}
               </button>
               {leadBulkActionsOpen && (
-                <>
-                  <div
+                <PortalWhenReady
+                  enabled={isTravel && isPhoneViewport}
+                  target={typeof document !== "undefined" ? document.body : null}
+                >
+                  <>
+                    {isTravel && isPhoneViewport && (
+                      <div
+                        className="lead-bulk-actions-backdrop"
+                        aria-hidden="true"
+                        onMouseDown={() => setLeadBulkActionsOpen(false)}
+                      />
+                    )}
+                    <div
                     role="menu"
                     aria-label="Bulk actions"
-                    className="lead-bulk-actions-menu"
+                    className={`lead-bulk-actions-menu${isTravel && isPhoneViewport ? " lead-bulk-actions-menu--mobile-dialog" : ""}`}
                     onMouseDown={(e) => e.stopPropagation()}
                     style={{
                       position: "absolute",
                       top: "calc(100% + 4px)",
-                      // Anchor from the trigger's left edge. Right-aligning a
-                      // 420px menu makes it extend outside the table card when
-                      // the trigger sits near the left side, clipping the
-                      // first action labels.
-                      left: 0,
-                      right: "auto",
+                      // Travel places this trigger toward the right side of a
+                      // clipped table card. Anchor that menu from the trigger's
+                      // right edge so its 420px surface stays inside the card.
+                      // Other verticals retain the left-edge alignment used by
+                      // their standalone action rows.
+                      left: isTravel ? "auto" : 0,
+                      right: isTravel ? 0 : "auto",
                       zIndex: 1089,
                       width: "min(420px, 92vw)",
                       maxWidth: "calc(100vw - 1rem)",
@@ -10698,6 +10758,31 @@ const Leads = ({ initialListState = null } = {}) => {
                       boxShadow: "0 12px 32px rgba(0,0,0,0.2)",
                       display: "grid",
                       gap: "0.75rem",
+                      ...(isTravel && isPhoneViewport
+                        ? {
+                            position: "fixed",
+                            top: "50%",
+                            right: "auto",
+                            bottom: "auto",
+                            left: "50%",
+                            width: "min(28rem, calc(100vw - 1.5rem))",
+                            maxWidth: "calc(100vw - 1.5rem)",
+                            maxHeight: "calc(100dvh - 1.5rem)",
+                            overflowY: "auto",
+                            transform: "translate(-50%, -50%)",
+                            zIndex: 1200,
+                            ...(mobileBulkMenuRect
+                              ? {
+                                  left: mobileBulkMenuRect.left,
+                                  top: mobileBulkMenuRect.top,
+                                  width: mobileBulkMenuRect.width,
+                                  maxWidth: mobileBulkMenuRect.width,
+                                  maxHeight: mobileBulkMenuRect.maxHeight,
+                                  transform: "none",
+                                }
+                              : {}),
+                          }
+                        : {}),
                     }}
                   >
                     <div
@@ -10742,7 +10827,7 @@ const Leads = ({ initialListState = null } = {}) => {
                           gap: "0.65rem",
                         }}
                       >
-                        <div style={{ display: "flex", gap: "0.5rem" }}>
+                        <div className="lead-bulk-selection-actions" style={{ display: "flex", gap: "0.5rem" }}>
                           <button type="button" className="btn-secondary" onClick={selectCurrentPageLeads} style={{ flex: 1, padding: "0.45rem 0.55rem", fontSize: "0.78rem" }}>Select current page</button>
                           <button type="button" className="btn-secondary" onClick={selectAllPresentLeads} style={{ flex: 1, padding: "0.45rem 0.55rem", fontSize: "0.78rem" }}>Select all present</button>
                         </div>
@@ -10768,6 +10853,7 @@ const Leads = ({ initialListState = null } = {}) => {
                         )}
                         {canLeadUpdate && (
                           <div
+                            className="lead-bulk-assignment-actions"
                             style={{
                               display: "flex",
                               alignItems: "center",
@@ -10905,8 +10991,9 @@ const Leads = ({ initialListState = null } = {}) => {
                           Clear selection
                         </button>
                       </div>
-                  </div>
-                </>
+                    </div>
+                  </>
+                </PortalWhenReady>
               )}
             </div>
           )}

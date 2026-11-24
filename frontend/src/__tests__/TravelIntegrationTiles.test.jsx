@@ -11,7 +11,6 @@ const connections = [
   ["gmail", "Gmail", "/gmail"],
   ["drive", "Google Drive", "/travel/trip-knowledge"],
   ["calendar", "Google Calendar", "/calendar-sync"],
-  ["whatsapp", "WhatsApp Web", "/travel/whatsapp"],
 ];
 
 function CurrentPath() {
@@ -30,7 +29,7 @@ describe("Travel settings connection tiles", () => {
 
   it("uses the existing readiness API and routes each Connect link to the right page", async () => {
     render(<Harness />);
-    expect(await screen.findAllByText("Not connected")).toHaveLength(4);
+    expect(await screen.findAllByText("Not connected")).toHaveLength(3);
     expect(fetchApiMock).toHaveBeenCalledTimes(1);
     expect(fetchApiMock).toHaveBeenCalledWith("/api/travel/dashboard/readiness", { silent: true });
     for (const [, label, path] of connections) {
@@ -40,6 +39,12 @@ describe("Travel settings connection tiles", () => {
       fireEvent.click(tile);
       expect(screen.getByLabelText("Current route")).toHaveTextContent(path);
     }
+  });
+
+  it("does not expose the temporarily disabled Travel WhatsApp integration", async () => {
+    render(<Harness />);
+    expect(await screen.findAllByText("Not connected")).toHaveLength(3);
+    expect(screen.queryByRole("link", { name: /WhatsApp Web/i })).not.toBeInTheDocument();
   });
 
   it("shows Manage only for connected accounts without changing their destination", async () => {
@@ -62,8 +67,8 @@ describe("Travel settings connection tiles", () => {
   it("keeps setup links available when status cannot be loaded without claiming disconnection", async () => {
     fetchApiMock.mockRejectedValue(new Error("Service unavailable"));
     render(<Harness />);
-    expect(await screen.findAllByText("Status unavailable")).toHaveLength(4);
-    expect(screen.getAllByText("Open setup")).toHaveLength(4);
+    expect(await screen.findAllByText("Status unavailable")).toHaveLength(3);
+    expect(screen.getAllByText("Open setup")).toHaveLength(3);
     expect(screen.queryByText("Not connected")).not.toBeInTheDocument();
     expect(screen.queryByText("Connect")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("link", { name: /Google Drive/ }));
@@ -74,19 +79,19 @@ describe("Travel settings connection tiles", () => {
     const pending = [];
     fetchApiMock.mockImplementation(() => new Promise((resolve) => pending.push(resolve)));
     const view = render(<Harness />);
-    expect(screen.getAllByText("Checking connection…")).toHaveLength(4);
+    expect(screen.getAllByText("Checking connection…")).toHaveLength(3);
     view.rerender(<Harness tenantId={78} userId={9} />);
     await act(async () => pending[0]({ checks: connections.map(([id]) => ({ id, ready: true })) }));
     expect(screen.queryByText("Connected")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Checking connection…")).toHaveLength(4);
+    expect(screen.getAllByText("Checking connection…")).toHaveLength(3);
     await act(async () => pending[1]({ checks: connections.map(([id]) => ({ id, ready: false })) }));
-    expect(screen.getAllByText("Not connected")).toHaveLength(4);
+    expect(screen.getAllByText("Not connected")).toHaveLength(3);
   });
 
   it("keeps missing readiness checks unknown rather than marking them disconnected", async () => {
     fetchApiMock.mockResolvedValue({ checks: [{ id: "calendar", ready: true }] });
     render(<Harness />);
-    expect(await screen.findAllByText("Status unavailable")).toHaveLength(3);
+    expect(await screen.findAllByText("Status unavailable")).toHaveLength(2);
     expect(within(screen.getByRole("link", { name: /Google Calendar/ })).getByText("Manage")).toBeInTheDocument();
     expect(screen.queryByText("Not connected")).not.toBeInTheDocument();
   });

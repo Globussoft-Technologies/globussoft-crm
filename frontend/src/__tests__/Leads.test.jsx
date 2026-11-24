@@ -4062,6 +4062,42 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
     expect(await within(dialog).findByText('Sub-brand')).toBeInTheDocument();
   });
 
+  it('right-aligns the Travel Bulk actions menu so the table card does not clip it', async () => {
+    renderLeads(TRAVEL_AUTH);
+    await screen.findByRole('link', { name: 'Lily' });
+
+    fireEvent.click(screen.getByRole('button', { name: /Bulk actions/i }));
+    const menu = screen.getByRole('menu', { name: /Bulk actions/i });
+
+    expect(menu).toHaveStyle({ left: 'auto', right: '0px' });
+  });
+
+  it('portals Travel Bulk actions into a viewport dialog on phones', async () => {
+    const matchMediaSpy = vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+      matches: query === '(max-width: 768px)',
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+
+    try {
+      const { container } = renderLeads(TRAVEL_AUTH);
+      await screen.findByRole('link', { name: 'Lily' });
+
+      fireEvent.click(screen.getByRole('button', { name: /Bulk actions/i }));
+      const menu = screen.getByRole('menu', { name: /Bulk actions/i });
+
+      expect(menu).toHaveClass('lead-bulk-actions-menu--mobile-dialog');
+      expect(container).not.toContainElement(menu);
+      expect(document.body.querySelector('.lead-bulk-actions-backdrop')).toBeInTheDocument();
+
+      fireEvent.mouseDown(document.body.querySelector('.lead-bulk-actions-backdrop'));
+      expect(screen.queryByRole('menu', { name: /Bulk actions/i })).not.toBeInTheDocument();
+    } finally {
+      matchMediaSpy.mockRestore();
+    }
+  });
+
   it('disables row and card hover hooks for the Travel Leads table', async () => {
     const { container } = renderLeads(TRAVEL_AUTH);
     await screen.findByRole('link', { name: 'Lily' });

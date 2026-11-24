@@ -41,6 +41,7 @@ import {
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import CountBadge from "../../components/CountBadge";
+import { DashboardBackLink } from "../../components/PageHeader";
 import { SEARCH_DEBOUNCE_MS } from "../../utils/timing";
 import { AuthContext } from "../../App";
 import PermissionGate from "../../components/PermissionGate";
@@ -1154,6 +1155,7 @@ export default function Itineraries() {
         boxSizing: "border-box",
       }}
     >
+      <DashboardBackLink />
       <header
         className="itineraries-page__header"
         style={{

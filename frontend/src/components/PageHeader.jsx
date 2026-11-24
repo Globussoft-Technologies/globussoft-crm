@@ -1,31 +1,39 @@
+import { useEffect } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
 import CountBadge from './CountBadge';
+import { dashboardPathForState, readRefreshedDashboardNavigation, rememberDashboardNavigation } from '../utils/dashboardNavigation';
 
 export function DashboardBackLink() {
   const location = useLocation();
+  const stateDashboardPath = dashboardPathForState(location.state);
+  const dashboardPath = stateDashboardPath || readRefreshedDashboardNavigation(location);
 
-  if (location.state?.fromWellnessDashboard !== true) return null;
+  useEffect(() => {
+    rememberDashboardNavigation(location);
+  }, [location]);
+
+  if (!dashboardPath) return null;
 
   return (
     <Link
-      to="/wellness"
+      to={dashboardPath}
       aria-label="Back to dashboard"
       style={{
         display: 'inline-flex',
         alignItems: 'center',
-        gap: '0.35rem',
+        gap: 6,
         width: 'fit-content',
-        marginBottom: '1rem',
+        marginBottom: 14,
         color: 'var(--text-secondary)',
-        fontSize: '0.85rem',
+        fontSize: 13,
         fontWeight: 400,
         lineHeight: 1.4,
         textDecoration: 'none',
       }}
     >
-      <ArrowLeft size={14} aria-hidden="true" />
-      Back to dashboard
+      <ArrowLeft size={16} aria-hidden="true" />
+      Back to Dashboard
     </Link>
   );
 }

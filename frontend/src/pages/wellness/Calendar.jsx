@@ -5,7 +5,6 @@ import { useNotify } from '../../utils/notify';
 import { tenantLocale } from '../../utils/date';
 import { AuthContext } from '../../App';
 import { usePermissions } from '../../hooks/usePermissions';
-import { DashboardBackLink } from '../../components/PageHeader';
 
 import {
   displayStatus,
@@ -22,6 +21,7 @@ import {
 } from './calendar/constants';
 
 import CalendarHeader from './calendar/CalendarHeader';
+import { DashboardBackLink } from '../../components/PageHeader';
 import HolidayBanner from './calendar/HolidayBanner';
 import CalendarDayGrid from './calendar/CalendarDayGrid';
 import CalendarLegends from './calendar/CalendarLegends';

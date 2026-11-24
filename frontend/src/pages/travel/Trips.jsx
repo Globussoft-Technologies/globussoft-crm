@@ -31,6 +31,7 @@ import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import TopScrollSync from "../../components/TopScrollSync";
 import CountBadge from "../../components/CountBadge";
+import { DashboardBackLink } from "../../components/PageHeader";
 import TripPager from "./TripPager";
 import SearchHighlight from "../../components/ui/SearchHighlight";
 
@@ -546,6 +547,7 @@ export default function Trips() {
 
   return (
     <div className="travel-trips-page" style={{ padding: 24, maxWidth: 1480, margin: "0 auto" }}>
+      <DashboardBackLink />
       <div
         className="travel-trips-page__header"
         style={{

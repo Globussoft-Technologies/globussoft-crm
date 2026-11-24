@@ -407,7 +407,7 @@ export default function ColumnPicker({
   const showGenericLeadClearSelection = tableKey === "leads" && Boolean(density);
 
   return (
-    <div ref={wrapRef} className={density ? 'leads-view-control' : undefined} style={{ position: "relative", display: "inline-block" }}>
+    <div ref={wrapRef} className={`column-picker-control${density ? ' leads-view-control' : ''}`} style={{ position: "relative", display: "inline-block" }}>
       <button
         ref={triggerRef}
         type="button"

@@ -31,6 +31,7 @@ import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { useActiveSubBrand } from "../../utils/subBrand";
 import TopScrollSync from "../../components/TopScrollSync";
+import { dashboardNavigationState } from "../../utils/dashboardNavigation";
 
 export default function TravelDashboard() {
   const { user, tenant } = useContext(AuthContext) || {};
@@ -53,7 +54,20 @@ export default function TravelDashboard() {
 
   const loadReadiness = () => {
     fetchApi("/api/travel/dashboard/readiness")
-      .then(setReadiness)
+      .then((snapshot) => {
+        // WhatsApp Web is temporarily disabled in the Travel UI. Exclude its
+        // check from the displayed readiness totals so the dashboard does not
+        // report an integration that users cannot configure here.
+        const checks = Array.isArray(snapshot?.checks)
+          ? snapshot.checks.filter((check) => check.id !== "whatsapp")
+          : [];
+        setReadiness({
+          ...snapshot,
+          checks,
+          readyCount: checks.filter((check) => check.ready).length,
+          totalCount: checks.length,
+        });
+      })
       .catch(() => setReadiness(null));
   };
 
@@ -247,7 +261,7 @@ export default function TravelDashboard() {
                   {(data.recentTrips || []).map((t) => (
                     <tr key={t.id} style={trStyle}>
                       <td style={td}>
-                        <Link to={`/travel/trips/${t.id}`} style={tripLink}>
+                        <Link to={`/travel/trips/${t.id}`} state={dashboardNavigationState('travel')} style={tripLink}>
                           <code>{t.tripCode}</code>
                         </Link>
                       </td>
@@ -289,6 +303,7 @@ export default function TravelDashboard() {
                         <td style={td}>
                           <Link
                             to={`/staff?highlight=${encodeURIComponent(String(r.userId))}`}
+                            state={dashboardNavigationState('travel')}
                             style={{
                               color: "var(--primary-color)",
                               fontWeight: 600,
@@ -475,6 +490,7 @@ function Tile({ icon: Icon, label, value, footer, accent, link, statusLinks, onC
                   <Link
                     key={index}
                     to={statusLink}
+                    state={dashboardNavigationState('travel')}
                     onClick={(event) => event.stopPropagation()}
                     style={{ color: "inherit", textDecoration: "none", borderRadius: 4 }}
                     aria-label={`Filter ${label} by ${displayLabel}`}
@@ -498,12 +514,12 @@ function Tile({ icon: Icon, label, value, footer, accent, link, statusLinks, onC
         role="link"
         tabIndex={0}
         onClick={(event) => {
-          if (!event.target.closest("a")) navigate(link);
+          if (!event.target.closest("a")) navigate(link, { state: dashboardNavigationState('travel') });
         }}
         onKeyDown={(event) => {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault();
-            navigate(link);
+            navigate(link, { state: dashboardNavigationState('travel') });
           }
         }}
         style={{
@@ -526,6 +542,7 @@ function Tile({ icon: Icon, label, value, footer, accent, link, statusLinks, onC
       <Link
         className="travel-dashboard-kpi-card"
         to={link}
+        state={dashboardNavigationState('travel')}
         style={{
           ...tileStyle,
           ...style,
@@ -713,6 +730,7 @@ function ReadinessModal({ readiness, onClose }) {
               </div>
               <Link
                 to={check.link}
+                state={dashboardNavigationState('travel')}
                 onClick={onClose}
                 style={{
                   padding: "6px 12px",

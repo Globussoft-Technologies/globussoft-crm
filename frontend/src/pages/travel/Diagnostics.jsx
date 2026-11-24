@@ -19,6 +19,7 @@ import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 import CalendarRangePicker from "../../components/CalendarRangePicker";
 import CountBadge from "../../components/CountBadge";
+import { DashboardBackLink } from "../../components/PageHeader";
 import TopScrollSync from "../../components/TopScrollSync";
 import { useActiveSubBrand } from "../../utils/subBrand";
 import TmcCatalogueResponses from "./TmcCatalogueResponses";
@@ -480,6 +481,7 @@ export default function Diagnostics() {
         boxSizing: "border-box",
       }}
     >
+      <DashboardBackLink />
       <div
         className="diagnostics-filter-bar"
         style={{

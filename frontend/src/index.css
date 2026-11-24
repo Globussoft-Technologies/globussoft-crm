@@ -2788,7 +2788,7 @@ html[data-theme="dark"] .tally-cost-centres-pagination {
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 768px) {
   .app-main > main.generic-page-content:has(.reports-page) {
     padding-left: 0.25rem !important;
     padding-right: 0.25rem !important;
@@ -7697,6 +7697,225 @@ body[data-vertical="travel"]
   .leads-page-root
   .travel-leads-table-card:hover::before {
   display: none !important;
+}
+
+/* The Travel action row is portalled into the search toolbar. Let its
+   controls shrink and wrap rather than making the table card wider than the
+   page. The Bulk actions menu is right-anchored in Leads.jsx because this card
+   deliberately clips its wide data grid. */
+body[data-vertical="travel"] .leads-page-root .travel-leads-actions-host,
+body[data-vertical="travel"] .leads-page-root .travel-leads-actions-toolbar,
+body[data-vertical="travel"] .leads-page-root .lead-bulk-actions-control {
+  min-width: 0;
+}
+
+body[data-vertical="travel"] .leads-page-root .travel-leads-actions-toolbar {
+  flex-wrap: wrap;
+}
+
+body[data-vertical="travel"]
+  .leads-page-root
+  .travel-leads-actions-toolbar
+  .lead-bulk-actions-menu {
+  left: auto !important;
+  right: 0 !important;
+  width: min(420px, calc(100vw - 2rem)) !important;
+  max-width: calc(100vw - 2rem) !important;
+  max-height: calc(100dvh - 1rem);
+  overflow-y: auto;
+}
+
+/* On phones the menu is portalled to <body> so the table card's clipping and
+   backdrop filter cannot turn it into content below the grid. Present it as
+   a centered, independently scrollable action dialog. */
+.lead-bulk-actions-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1199;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.lead-bulk-actions-menu--mobile-dialog {
+  position: fixed !important;
+  top: 50% !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: 50% !important;
+  width: min(28rem, calc(100vw - 1.5rem)) !important;
+  max-width: calc(100vw - 1.5rem) !important;
+  max-height: calc(100dvh - 1.5rem) !important;
+  overflow-y: auto !important;
+  transform: translate(-50%, -50%);
+  z-index: 1200 !important;
+}
+
+@media (max-width: 899px) {
+  .leads-page-root--travel {
+    padding: var(--crm-card-padding, 0.75rem) !important;
+  }
+
+  body[data-vertical="travel"] .leads-page-root .travel-leads-search-toolbar {
+    align-items: stretch !important;
+    padding: 0.75rem !important;
+  }
+
+  body[data-vertical="travel"] .leads-page-root .travel-leads-search-controls {
+    width: 100%;
+    flex-basis: 100% !important;
+  }
+
+  /* At tablet widths the portalled action row wraps beneath search and its
+     trigger sits near the card's left edge. Open toward the right here; the
+     desktop right anchor would otherwise push most of the menu off-canvas. */
+  body[data-vertical="travel"]
+    .leads-page-root
+    .travel-leads-actions-toolbar
+    .lead-bulk-actions-menu {
+    left: 0 !important;
+    right: auto !important;
+  }
+}
+
+@media (max-width: 600px) {
+  body[data-vertical="travel"] .leads-page-root .travel-leads-search-controls {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: stretch !important;
+    gap: 0.5rem !important;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root
+    .travel-leads-search-controls
+    > div:first-child {
+    grid-column: 1 / -1;
+    width: 100% !important;
+  }
+
+  body[data-vertical="travel"] .leads-page-root .travel-leads-actions-host {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  body[data-vertical="travel"] .leads-page-root .travel-leads-actions-toolbar {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100% !important;
+    gap: 0.5rem !important;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root
+    .travel-leads-actions-toolbar
+    > :is(button, .lead-bulk-actions-control),
+  body[data-vertical="travel"]
+    .leads-page-root
+    .travel-leads-actions-toolbar
+    .lead-bulk-actions-control
+    > button {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root
+    .travel-leads-actions-toolbar
+    > span[aria-hidden="true"] {
+    display: none;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root
+    .travel-leads-actions-toolbar
+    .lead-bulk-actions-menu {
+    left: auto !important;
+    right: 0 !important;
+    width: calc(100vw - 1.5rem) !important;
+    max-width: calc(100vw - 1.5rem) !important;
+  }
+}
+
+@media (max-width: 380px) {
+  /* A two-column action row is too wide once the application content pane is
+     below 380px. Stack every Travel Leads control and explicitly neutralize
+     the shared phone rule that caps unclassified buttons at 96% width. */
+  body[data-vertical="travel"] .leads-page-root--travel .travel-leads-search-controls,
+  body[data-vertical="travel"] .leads-page-root--travel .travel-leads-actions-toolbar,
+  body[data-vertical="travel"] .leads-page-root--travel .travel-leads-search-actions {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: 100% !important;
+    min-width: 0;
+    justify-content: stretch !important;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root--travel
+    :is(.travel-leads-search-controls, .travel-leads-actions-toolbar, .travel-leads-search-actions)
+    > * {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    box-sizing: border-box;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root--travel
+    :is(.travel-leads-search-controls, .travel-leads-actions-toolbar, .travel-leads-search-actions)
+    :is(button, .btn-secondary) {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    justify-content: center;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root--travel
+    .travel-leads-search-actions
+    .column-picker-control {
+    display: block !important;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root--travel
+    .travel-leads-actions-toolbar
+    .lead-bulk-actions-menu {
+    left: 0 !important;
+    right: auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root--travel
+    .lead-bulk-actions-menu
+    :is(.lead-bulk-selection-actions, .lead-bulk-assignment-actions) {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root--travel
+    .lead-bulk-actions-menu
+    :is(select, button) {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .lead-bulk-actions-menu--mobile-dialog
+    :is(.lead-bulk-selection-actions, .lead-bulk-assignment-actions) {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lead-bulk-actions-menu--mobile-dialog :is(select, button) {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
 }
 
 /* Keep long source labels inside their pill instead of letting the nested

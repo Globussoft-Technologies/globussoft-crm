@@ -1,6 +1,6 @@
 import { useContext, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight, Calendar, FolderOpen, Mail, MessageCircle } from "lucide-react";
+import { ArrowRight, Calendar, FolderOpen, Mail } from "lucide-react";
 import { AuthContext } from "../../appContexts";
 import { fetchApi } from "../../utils/api";
 
@@ -8,7 +8,9 @@ const CONNECTIONS = [
   { id: "gmail", label: "Gmail", category: "Email inbox", icon: Mail, color: "rose", path: "/gmail", description: "Connect your Gmail mailbox to read and send email from the CRM." },
   { id: "drive", label: "Google Drive", category: "Travel knowledge", icon: FolderOpen, color: "amber", path: "/travel/trip-knowledge", description: "Connect Google Drive and manage the brochure folder used by Travel Knowledge." },
   { id: "calendar", label: "Google Calendar", category: "Calendar", icon: Calendar, color: "blue", path: "/calendar-sync", description: "Connect and manage your Google Calendar through the existing calendar setup." },
-  { id: "whatsapp", label: "WhatsApp Web", category: "Messaging", icon: MessageCircle, color: "green", path: "/travel/whatsapp", description: "Connect WhatsApp by scanning a QR code on your Travel WhatsApp page." },
+  // WhatsApp Web is intentionally hidden from Travel setup until the
+  // integration is re-enabled for this vertical. Keep the route/service intact
+  // for existing sessions and other verticals.
 ];
 
 export default function TravelIntegrationTiles() {

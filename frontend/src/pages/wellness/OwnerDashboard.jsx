@@ -7,6 +7,7 @@ import { AuthContext } from '../../App';
 import { launchAdsGptAs } from '../../utils/adsgpt';
 import { launchCallifiedSSO } from '../../utils/callified';
 import { getGreeting } from '../../utils/greeting';
+import { dashboardNavigationState } from '../../utils/dashboardNavigation';
 
 // #207/#214: clinical staff (doctor/professional/telecaller/helper) must not
 // land on the Owner Dashboard. Mirror the Login redirect logic so a direct
@@ -46,18 +47,27 @@ export default function OwnerDashboard() {
   const [pnl, setPnl] = useState(null);
   const [loading, setLoading] = useState(true);
   const [locations, setLocations] = useState([]);
-  const [locationId, setLocationId] = useState('');
+  const [locationId, setLocationId] = useState(() => {
+    try { return sessionStorage.getItem('wellness-dashboard-location') || ''; } catch { return ''; }
+  });
   const [adsgptLogin, setAdsgptLogin] = useState('');
   const [adsGptStatus, setAdsGptStatus] = useState({ state: 'idle', msg: '' });
   const [callifiedStatus, setCallifiedStatus] = useState({ state: 'idle', msg: '' });
   const openDashboardCard = (path) => navigate(path, {
-    state: { fromWellnessDashboard: true },
+    state: dashboardNavigationState('wellness'),
   });
 
   // #207/#214: redirect non-management away from the Owner Dashboard.
   // Direct URL nav by a doctor/telecaller/helper/professional now bounces
   // to the page that fits their daily work (matches the post-login landing
   // logic in Login.jsx).
+  useEffect(() => {
+    try {
+      if (locationId) sessionStorage.setItem('wellness-dashboard-location', locationId);
+      else sessionStorage.removeItem('wellness-dashboard-location');
+    } catch { /* dashboard remains usable when storage is unavailable */ }
+  }, [locationId]);
+
   useEffect(() => {
     if (!user) return;
     if (tenant?.vertical !== 'wellness') return;
@@ -228,7 +238,7 @@ export default function OwnerDashboard() {
               <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.4rem', lineHeight: 1.4 }}>
                 {(data.pendingRecommendations || [])[0]?.body}
               </div>
-              <Link to="/wellness/recommendations" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', marginTop: '0.75rem', fontSize: '0.85rem', color: 'var(--accent-color)' }}>
+              <Link to="/wellness/recommendations" state={dashboardNavigationState('wellness')} style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', marginTop: '0.75rem', fontSize: '0.85rem', color: 'var(--accent-color)' }}>
                 Review all {data.pendingApprovals ?? 0} <ArrowRight size={14} />
               </Link>
             </>
@@ -387,15 +397,15 @@ export default function OwnerDashboard() {
 
       {/* Quick links */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
-        <Link to="/wellness/patients" className="glass" style={{ padding: '1rem', textDecoration: 'none', color: 'inherit', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Link to="/wellness/patients" state={dashboardNavigationState('wellness')} className="glass" style={{ padding: '1rem', textDecoration: 'none', color: 'inherit', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span><Users size={18} style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} /> Patients ({data.totals.patients})</span>
           <ArrowRight size={16} />
         </Link>
-        <Link to="/wellness/services" className="glass" style={{ padding: '1rem', textDecoration: 'none', color: 'inherit', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Link to="/wellness/services" state={dashboardNavigationState('wellness')} className="glass" style={{ padding: '1rem', textDecoration: 'none', color: 'inherit', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span><Sparkles size={18} style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} /> Service catalog ({data.totals.services})</span>
           <ArrowRight size={16} />
         </Link>
-        <Link to="/wellness/recommendations" className="glass" style={{ padding: '1rem', textDecoration: 'none', color: 'inherit', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Link to="/wellness/recommendations" state={dashboardNavigationState('wellness')} className="glass" style={{ padding: '1rem', textDecoration: 'none', color: 'inherit', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span><Bell size={18} style={{ verticalAlign: 'middle', marginRight: '0.5rem' }} /> Agent inbox ({data.pendingApprovals})</span>
           <ArrowRight size={16} />
         </Link>

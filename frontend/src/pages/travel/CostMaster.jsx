@@ -14,6 +14,7 @@ import {
   SUB_BRAND_IDS, SUB_BRAND_LABEL,
 } from "../../utils/travelSubBrand";
 import CountBadge from "../../components/CountBadge";
+import { DashboardBackLink } from "../../components/PageHeader";
 
 const CATEGORIES = [
   { value: "", label: "All categories" },
@@ -725,6 +726,7 @@ export default function CostMaster() {
 
   return (
     <div className="finance-page" style={{ padding: "28px 32px", width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
+      <DashboardBackLink />
       {/* Header */}
       <div className="finance-page__header" style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 6 }}>
         <h1 className="finance-page__title" style={{ display: "flex", alignItems: "center", gap: 8, margin: 0, fontSize: 22, fontWeight: 600, color: "var(--success-color, #3ecf7e)" }}>

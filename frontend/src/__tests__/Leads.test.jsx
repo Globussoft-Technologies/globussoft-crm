@@ -3079,7 +3079,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
           availableColumns: [
             { key: 'name', label: 'Name' },
             { key: 'companySize', label: 'No Of Employee' },
-            { key: 'description', label: 'Note' },
+            { key: 'note', label: 'Note' },
             { key: 'assignedTo', label: 'Assigned To' },
             {
               key: 'cf_customer_id',
@@ -5259,7 +5259,7 @@ describe('Leads extended Freshsales-parity columns', () => {
           visible: ['name', 'description', 'actions'],
           availableColumns: [
             { key: 'name', label: 'Name', lockedVisible: true },
-            { key: 'description', label: 'Note' },
+            { key: 'note', label: 'Note' },
             { key: 'actions', label: 'Actions', lockedVisible: true },
           ],
         });
@@ -5294,7 +5294,7 @@ describe('Leads extended Freshsales-parity columns', () => {
             { key: 'linkedin', label: 'LinkedIn' },
             { key: 'industry', label: 'Service Type' },
             { key: 'companySize', label: 'No Of Employee' },
-            { key: 'description', label: 'Note' },
+            { key: 'note', label: 'Note' },
             { key: 'stateCode', label: 'State' },
             { key: 'firstTouchSource', label: 'First Touch Source' },
             { key: 'lastTouchSource', label: 'Last Touch Source' },

@@ -252,7 +252,7 @@ router.post("/extension-capture", verifyToken, async (req, res) => {
     }
 
     // 2. Real dedup — does this sender/phone already have a Contact? If so,
-    // append the summary to their existing description rather than forking
+    // append the summary to their existing note rather than forking
     // a second row for the same person.
     const existing =
       email || phone ? await findDuplicateContact(email, phone, tenantId) : null;
@@ -271,8 +271,8 @@ router.post("/extension-capture", verifyToken, async (req, res) => {
     });
 
     if (existing) {
-      const nextDescription = existing.description
-        ? `${existing.description}\n\n${block}`
+      const nextNote = existing.note
+        ? `${existing.note}\n\n${block}`
         : block;
       // An explicit pick only ADOPTS an unowned lead — it never yanks a lead
       // off whoever already owns it. Re-assignment stays the ADMIN-only
@@ -282,7 +282,7 @@ router.post("/extension-capture", verifyToken, async (req, res) => {
       const updated = await prisma.contact.update({
         where: { id: existing.id },
         data: {
-          description: nextDescription,
+          note: nextNote,
           ...(adopts ? { assignedToId: assignee.assigneeId } : {}),
         },
       });
@@ -312,7 +312,7 @@ router.post("/extension-capture", verifyToken, async (req, res) => {
         phone,
         source: sourceTag,
         status: "Lead",
-        description: block,
+        note: block,
         idempotencyKey,
         aiScore,
         aiScoreLastComputedAt: new Date(),

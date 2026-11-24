@@ -623,7 +623,7 @@ const FILTERABLE_FIELDS = {
   linkedin: { column: "linkedin", kind: "text", label: "LinkedIn", verticals: ["generic"] },
   industry: { column: "industry", kind: "text", label: "Service Type", verticals: ["generic"] },
   companySize: { column: "companySize", kind: "text", label: "No Of Employee", verticals: ["generic"] },
-  description: { column: "description", kind: "text", label: "Note", verticals: ["generic"] },
+  note: { column: "note", kind: "text", label: "Note", verticals: ["generic"] },
   stateCode: { column: "stateCode", kind: "text", label: "State", verticals: ["generic"] },
   status: { column: "status", kind: "text", label: "Status", required: true },
   source: { column: "source", kind: "text", label: "Source" },
@@ -3657,7 +3657,7 @@ router.delete("/:id/activities/:activityId", async (req, res) => {
 });
 
 // "Summarize" (2026-07-07) — on-demand full-history AI narrative. Re-reads
-// EVERY WhatsApp message linked to this contact and REPLACES Contact.description
+// EVERY WhatsApp message linked to this contact and REPLACES Contact.note
 // with one flowing narrative + a current lead-stage line. Independent of the
 // incremental "Sync Lead" action on the WhatsApp thread view.
 router.post("/:id/summarize-chat", async (req, res) => {
@@ -3699,10 +3699,10 @@ router.post("/:id/summarize-chat", async (req, res) => {
 // extension-sourced leads (gmail / whatsapp-extension). These sources have
 // no raw message log to re-read (unlike /summarize-chat's WhatsAppMessage
 // rows) — each capture already wrote a one-time dated block straight into
-// Contact.description (routes/leads_extension_capture.js). This reads
+// Contact.note (routes/leads_extension_capture.js). This reads
 // whatever dated blocks have piled up from repeat captures and REPLACES
-// description with one consolidated AI narrative, same replace-outright
-// semantics as /summarize-chat, just fed the description text itself.
+// note with one consolidated AI narrative, same replace-outright
+// semantics as /summarize-chat, just fed the note text itself.
 router.post("/:id/resummarize-capture", async (req, res) => {
   try {
     const id = parseInt(req.params.id);

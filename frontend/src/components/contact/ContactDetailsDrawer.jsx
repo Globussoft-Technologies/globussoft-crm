@@ -317,7 +317,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     { label: 'Service Type', key: 'industry', value: contact?.industry },
     { label: 'No Of Employee', key: 'companySize', value: contact?.companySize },
     { label: 'Sub-brand', key: 'subBrand', value: contact?.subBrand },
-    { label: 'Note', key: 'description', value: contact?.description },
+    { label: 'Note', key: 'note', value: contact?.note },
     { label: 'State', key: 'stateCode', value: contact?.stateCode },
     { label: 'Last Updated', key: 'lastUpdated', value: contact?.updatedAt, readOnly: true },
     { label: 'First Touch Source', key: 'firstTouchSource', value: contact?.firstTouchSource },

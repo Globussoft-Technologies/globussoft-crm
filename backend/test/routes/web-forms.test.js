@@ -1168,6 +1168,43 @@ describe('POST /api/forms/public/:slug/submit', () => {
     );
   });
 
+  test('includes Google and Meta attribution identifiers in the Generic webhook payload', async () => {
+    mockWorkflowForm();
+    prisma.contact.create.mockResolvedValue({
+      id: 2001,
+      tenantId: TENANT_ID,
+      name: 'Attributed Lead',
+      email: 'attributed@example.com',
+      status: 'Lead',
+    });
+
+    const response = await request(makeApp())
+      .post('/api/forms/public/contact-us/submit?scope=generic')
+      .field('name', 'Attributed Lead')
+      .field('email', 'attributed@example.com')
+      .field('_gbsTracking', JSON.stringify({
+        gclid: 'google-click-1',
+        fbclid: 'meta-click-1',
+        fbc: 'fb-cookie-1',
+        fbp: 'fb-browser-1',
+        campaign_id: 'campaign-1',
+      }));
+
+    expect(response.status).toBe(201);
+    expect(emitEventMock).toHaveBeenCalledWith(
+      'contact.created',
+      expect.objectContaining({
+        gclid: 'google-click-1',
+        fbclid: 'meta-click-1',
+        fbc: 'fb-cookie-1',
+        fbp: 'fb-browser-1',
+        campaign_id: 'campaign-1',
+      }),
+      TENANT_ID,
+      undefined,
+    );
+  });
+
   test('emits contact.updated when an existing Generic lead submits the form again', async () => {
     mockWorkflowForm();
     prisma.contact.findFirst.mockResolvedValue({
@@ -1867,6 +1904,7 @@ describe('POST /api/forms/public/:slug/submit', () => {
       utm_source: 'newsletter',
       utm_medium: null,
       utm_campaign: null,
+      utm_id: 'utm-123',
       utm_term: null,
       utm_content: null,
     }));

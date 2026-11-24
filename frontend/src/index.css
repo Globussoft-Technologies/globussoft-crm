@@ -1318,12 +1318,13 @@ button {
   max-width: 1392px;
   margin: 0 auto;
   padding: 24px 0 48px;
-  color: #24213a;
+  background: var(--bg-color, #f0f2f5);
+  color: var(--text-primary, #24213a);
 }
 
 .tally-cost-centres-page > h1 {
   margin: 20px 0 2px;
-  color: #211e37;
+  color: var(--text-primary, #211e37);
   font-size: 32px;
   font-weight: 700;
   letter-spacing: -0.8px;
@@ -1332,7 +1333,7 @@ button {
 
 .tally-cost-centres-description {
   margin: 0;
-  color: #5d6373;
+  color: var(--text-secondary, #5d6373);
   font-size: 15px;
   line-height: 1.6;
 }
@@ -1345,9 +1346,9 @@ button {
   min-height: 59px;
   margin: 19px 0 25px;
   padding: 12px 16px;
-  border: 1px solid #d9dce1;
+  border: 1px solid var(--border-color, #d9dce1);
   border-radius: 12px;
-  background: #fff;
+  background: var(--surface-color, #fff);
   box-shadow: 0 1px 2px rgba(27, 34, 48, 0.02);
 }
 
@@ -1356,7 +1357,7 @@ button {
   align-items: center;
   gap: 0;
   min-width: 0;
-  color: #29263e;
+  color: var(--text-primary, #29263e);
   font-size: 15px;
   font-weight: 500;
   white-space: nowrap;
@@ -1367,10 +1368,10 @@ button {
   height: 30px;
   margin-left: 0;
   padding: 3px 8px;
-  border: 1px solid #8e8e8e;
+  border: 1px solid var(--border-color, #8e8e8e);
   border-radius: 0;
-  background: #fff;
-  color: #24213a;
+  background: var(--input-bg, #fff);
+  color: var(--text-primary, #24213a);
   font: inherit;
   font-size: 13px;
 }
@@ -1378,10 +1379,10 @@ button {
 .tally-cost-centres-form button {
   height: 30px;
   padding: 3px 8px;
-  border: 1px solid #c8cbd1;
+  border: 1px solid var(--border-color, #c8cbd1);
   border-radius: 3px;
-  background: #fff;
-  color: #26233b;
+  background: var(--surface-color, #fff);
+  color: var(--text-primary, #26233b);
   font: inherit;
   font-size: 13px;
   line-height: 1;
@@ -1392,8 +1393,8 @@ button {
 }
 
 .tally-cost-centres-form button:hover {
-  border-color: #8d91a0;
-  background: #f5f6f8;
+  border-color: var(--accent-color, #8d91a0);
+  background: var(--surface-hover, #f5f6f8);
 }
 
 .tally-cost-centres-message,
@@ -1418,7 +1419,7 @@ button {
   width: 850px;
   max-width: 100%;
   border-collapse: collapse;
-  color: #28253d;
+  color: var(--text-primary, #28253d);
   font-size: 15px;
   line-height: 1.35;
   text-align: left;
@@ -1426,7 +1427,7 @@ button {
 
 .tally-cost-centres-table th {
   padding: 4px 10px 5px 0;
-  color: #252239;
+  color: var(--text-secondary, #252239);
   font-size: 15px;
   font-weight: 700;
   white-space: nowrap;
@@ -1508,7 +1509,7 @@ button {
 }
 
 .tally-cost-centres-form label span {
-  color: #3d4660;
+  color: var(--text-secondary, #3d4660);
   font-size: 12px;
   font-weight: 700;
 }
@@ -1517,7 +1518,7 @@ button {
   width: 100%;
   height: 43px;
   padding: 8px 12px;
-  border: 1px solid #d9dce1;
+  border: 1px solid var(--border-color, #d9dce1);
   border-radius: 9px;
   font-size: 14px;
 }
@@ -1527,16 +1528,16 @@ button {
   align-self: end;
   padding: 0 16px;
   border-radius: 9px;
-  border-color: #d7d9e1;
-  color: #29304a;
+  border-color: var(--border-color, #d7d9e1);
+  color: var(--text-primary, #29304a);
   font-weight: 600;
 }
 
 .tally-cost-centres-table-wrap {
   margin-top: 25px;
-  border: 1px solid #dfe1e6;
+  border: 1px solid var(--border-color, #dfe1e6);
   border-radius: 16px;
-  background: #fff;
+  background: var(--surface-color, #fff);
   overflow: hidden;
 }
 
@@ -1550,16 +1551,16 @@ button {
 .tally-cost-centres-table th {
   height: 44px;
   padding: 0 12px;
-  border-bottom: 1px solid #dfe1e6;
-  background: #fcfcfd;
-  color: #3d4660;
+  border-bottom: 1px solid var(--border-color, #dfe1e6);
+  background: var(--table-header-bg, #fcfcfd);
+  color: var(--text-secondary, #3d4660);
   font-size: 12px;
 }
 
 .tally-cost-centres-table td {
   height: 58px;
   padding: 0 12px;
-  border-bottom: 1px solid #e1e3e7;
+  border-bottom: 1px solid var(--border-color, #e1e3e7);
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1618,6 +1619,10 @@ button {
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  flex-wrap: wrap;
   margin-top: 16px;
 }
 
@@ -1633,6 +1638,34 @@ button {
 .tally-cost-centres-pagination button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+html[data-theme="dark"] .tally-cost-centres-page {
+  color: var(--text-primary);
+}
+
+html[data-theme="dark"] .tally-cost-centres-page > h1 {
+  color: var(--text-primary);
+}
+
+html[data-theme="dark"] .tally-cost-centres-description {
+  color: var(--text-secondary);
+}
+
+html[data-theme="dark"] .tally-cost-centres-pagination {
+  color: var(--text-secondary);
+}
+
+@media (max-width: 480px) {
+  .tally-cost-centres-pagination {
+    justify-content: center;
+    gap: 6px;
+  }
+
+  .tally-cost-centres-pagination button {
+    padding-right: 10px;
+    padding-left: 10px;
+  }
 }
 
 @media (max-width: 760px) {
@@ -12438,9 +12471,10 @@ body[data-vertical="generic"] .developer-api-data-scroll {
 .travel-lead-lifecycle-terminals {
   display: flex;
   align-items: stretch;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   width: 100%;
+  overflow: hidden;
 }
 .travel-lead-lifecycle-terminals button {
   display: block;
@@ -12448,14 +12482,17 @@ body[data-vertical="generic"] .developer-api-data-scroll {
   flex: 1;
   height: auto;
   min-height: 40px;
-  padding: 0 8px;
+  padding: 0 4px;
+  overflow: hidden;
   border: 1px dashed var(--border-color);
   border-radius: 9px;
   background: var(--surface-color);
   color: var(--danger-color);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 14px;
+  text-overflow: clip;
+  white-space: nowrap;
   cursor: pointer;
 }
 .travel-lead-content {
@@ -12580,15 +12617,15 @@ body[data-vertical="generic"] .developer-api-data-scroll {
   position: relative;
   margin-top: 19px;
   padding: 21px 16px 18px;
-  border-color: #c9c9ff;
-  background: #f7f7ff;
+  border-color: color-mix(in srgb, var(--accent-color) 35%, var(--border-color));
+  background: color-mix(in srgb, var(--accent-color) 8%, var(--surface-color));
 }
 .travel-lead-itinerary-button {
   float: right;
   margin: -4px 0 10px 16px;
 }
 .travel-lead-trip-label {
-  color: #5b21e6;
+  color: var(--accent-color);
   font-size: 11px;
   font-weight: 800;
 }
@@ -12606,10 +12643,10 @@ body[data-vertical="generic"] .developer-api-data-scroll {
   height: 5px;
   margin-bottom: 10px;
   border-radius: 5px;
-  background: #d9ddea;
+  background: var(--subtle-bg-3);
 }
 .travel-lead-trip-progress div > div.is-complete {
-  background: #5b21e6;
+  background: var(--accent-color);
 }
 .travel-lead-trip-progress small {
   color: var(--text-secondary);

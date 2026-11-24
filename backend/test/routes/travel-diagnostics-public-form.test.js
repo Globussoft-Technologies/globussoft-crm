@@ -941,6 +941,14 @@ describe("POST /api/travel/diagnostics/public/report/:slug/interests", () => {
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.interests).toEqual([{ name: "Hampi Heritage Trail", driveLink: "https://drive.example/hampi" }]);
+    expect(res.body.reportPdfUrl).toBe("/api/uploads/diagnostics/diag-1-abc.pdf");
+    expect(pdfModule.generateDiagnosticPdfBestEffort).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 555 }),
+      null,
+      expect.objectContaining({
+        recommendations: [{ name: "Hampi Heritage Trail", driveLink: "https://drive.example/hampi" }],
+      }),
+    );
     expect(prisma.tenantSetting.upsert.mock.calls[0][0]).toMatchObject({
       where: { tenantId_key: { tenantId: 1, key: "travel.diagnostic.interests.555" } },
     });

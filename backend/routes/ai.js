@@ -21,6 +21,11 @@ function respondGeminiLimit(res, err) {
   return true;
 }
 
+function respondProviderFailure(res, err) {
+  if (!err?.code?.startsWith("AI_PROVIDER_")) return false;
+  return res.status(err.status || 502).json({ error: err.message, code: err.code });
+}
+
 // Strip common markdown markup a model might emit even when told not to
 // (belt-and-braces for short_answer mode, which is inserted verbatim into
 // plain-text form fields that render no markdown).
@@ -142,6 +147,7 @@ Requirements:
       return res.json({ draft: resp.text, model: resp.model });
     } catch (genErr) {
       if (respondGeminiLimit(res, genErr)) return;
+      if (respondProviderFailure(res, genErr)) return;
       if (genErr.friendly) {
         // No BYOK, no funded CRM subscription — degrade to the template
         // fallback rather than surfacing a billing error on a compose box.
@@ -152,6 +158,7 @@ Requirements:
     }
   } catch (err) {
     console.error("[AI Draft] Error:", err.message);
+    if (respondProviderFailure(res, err)) return;
     if (req.body.mode === "short_answer") {
       // Never inject email boilerplate ("Dear...", "Best regards,") into a
       // non-email form field on an unexpected error.
@@ -198,6 +205,7 @@ Requirements:
       return res.json({ draft: resp.text, model: resp.model });
     } catch (genErr) {
       if (respondGeminiLimit(res, genErr)) return;
+      if (respondProviderFailure(res, genErr)) return;
       if (!genErr.friendly) throw genErr;
       // Falls through to the canned fallback below.
     }
@@ -205,6 +213,7 @@ Requirements:
     res.json({ draft: "Thank you for your email. I've reviewed your message and will follow up with a detailed response shortly.\n\nBest regards,", model: "fallback" });
   } catch (err) {
     console.error("[AI Reply] Error:", err.message);
+    if (respondProviderFailure(res, err)) return;
     res.json({ draft: "Thank you for your email. I'll review and get back to you shortly.\n\nBest regards,", model: "fallback" });
   }
 });
@@ -232,6 +241,7 @@ Context: "${context}"`;
       return res.json({ subjects: lines });
     } catch (genErr) {
       if (respondGeminiLimit(res, genErr)) return;
+      if (respondProviderFailure(res, genErr)) return;
       if (!genErr.friendly) throw genErr;
       // Falls through to the canned fallback below.
     }

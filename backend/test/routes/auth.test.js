@@ -161,6 +161,8 @@ const portalResetTokens = requireCJS('../../lib/portalResetTokens');
 const phoneOtp = requireCJS('../../lib/phoneOtp');
 phoneOtp.isValidPhone = vi.fn().mockReturnValue(false);
 phoneOtp.checkVerifiedPhoneToken = vi.fn().mockReturnValue(false);
+const eventBus = requireCJS('../../lib/eventBus');
+eventBus.emitEvent = vi.fn().mockResolvedValue(undefined);
 
 const authRouter = requireCJS('../../routes/auth');
 
@@ -222,6 +224,7 @@ beforeEach(() => {
   emailOtp.enforceRegistrationOtp.mockReset().mockReturnValue({ ok: true, emailVerifiedAt: new Date() });
   emailOtp.sendOtpEmail.mockReset().mockResolvedValue({ sent: true });
   emailSender.sendEmail.mockReset().mockResolvedValue({ sent: true, source: 'tenant' });
+  eventBus.emitEvent.mockReset().mockResolvedValue(undefined);
   portalResetTokens.resetTokens.clear();
   // T37 / Class B6 — keep self-heal seam permissive across tests.
   prisma.userRole.count.mockReset().mockResolvedValue(1);
@@ -1041,6 +1044,17 @@ describe('POST /api/auth/customer/register', () => {
     expect(prisma.contact.create).not.toHaveBeenCalled();
     expect(prisma.contact.update).not.toHaveBeenCalled();
     expect(await bcrypt.compare('portal-selected-password', existingPortalHash)).toBe(true);
+    expect(eventBus.emitEvent).toHaveBeenCalledWith(
+      'account.created',
+      expect.objectContaining({
+        contactId: 89,
+        recipientEmail: 'portal-user@example.com',
+        recipientName: 'Portal User',
+        signInLink: expect.stringMatching(/\/travel\/portal$/),
+      }),
+      3,
+      undefined,
+    );
   });
 });
 

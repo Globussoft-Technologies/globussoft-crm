@@ -1434,6 +1434,39 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(screen.getByLabelText('Edit Name for Alice Lead')).toHaveAttribute('type', 'button');
   });
 
+  it('keeps wellness lead profiles on the Leads route', async () => {
+    renderLeads({
+      ...authValue,
+      tenant: { id: 2, vertical: 'wellness', name: 'Wellness CRM' },
+    }, ['/leads']);
+
+    const aliceLink = await screen.findByRole('link', { name: 'Alice Lead' });
+    expect(aliceLink).toHaveAttribute('href', '/leads/101');
+    navigateMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'View Alice Lead' }));
+    expect(screen.queryByRole('dialog', { name: 'Lead preview' })).not.toBeInTheDocument();
+    expect(navigateMock).toHaveBeenCalledWith('/leads/101', {
+      state: expect.objectContaining({
+        returnTo: '/leads?page=1&limit=10',
+        leadsListState: { pageIndex: 0, pageSize: 10 },
+        openFullPage: true,
+      }),
+    });
+
+    fireEvent.click(aliceLink);
+    expect(screen.getByTestId('router-location')).toHaveAttribute(
+      'data-pathname',
+      '/leads/101',
+    );
+    expect(JSON.parse(screen.getByTestId('router-location').getAttribute('data-state'))).toEqual(
+      expect.objectContaining({ openFullPage: true }),
+    );
+    expect(screen.getByTestId('router-location')).not.toHaveAttribute(
+      'data-pathname',
+      '/contacts/101',
+    );
+  });
+
   it('keeps the Name column edit icon as the only way to inline-edit the name', async () => {
     renderLeads(authValue);
 
@@ -1616,31 +1649,32 @@ describe('Leads Freshsales-style list UI affordances', () => {
     }
   });
 
-  it('hides prospect conversion in the generic lead preview', async () => {
+  it('opens full lead detail from the Generic eye action without showing preview', async () => {
     renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
-    fireEvent.click(screen.getByRole('button', { name: 'Preview Alice Lead' }));
+    navigateMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'View Alice Lead' }));
 
-    const preview = screen.getByRole('dialog', { name: 'Lead preview' });
-    expect(preview).toBeInTheDocument();
-    expect(within(preview).getByText('Contact information')).toBeInTheDocument();
-    expect(within(preview).getByText('Open full detail')).toBeInTheDocument();
-    expect(within(preview).queryByRole('button', { name: 'Convert to Prospect' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Lead preview' })).not.toBeInTheDocument();
+    expect(navigateMock).toHaveBeenCalledWith('/leads/101?page=1&limit=10', {
+      state: expect.objectContaining({
+        returnTo: '/leads?page=1&limit=10',
+        leadsListState: { pageIndex: 0, pageSize: 10 },
+        openFullPage: true,
+      }),
+    });
   });
 
-  it('converts a lead from the Travel lead preview', async () => {
+  it('keeps the Travel Convert to Prospect row action unchanged', async () => {
     renderLeads({
       ...authValue,
       tenant: { id: 2, vertical: 'travel', name: 'Travel CRM' },
     });
 
     await screen.findByText('Alice Lead');
-    fireEvent.click(screen.getByRole('button', { name: 'Preview Alice Lead' }));
-
-    const preview = screen.getByRole('dialog', { name: 'Lead preview' });
     fetchApiMock.mockClear();
-    fireEvent.click(within(preview).getByRole('button', { name: 'Convert to Prospect' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Convert Alice Lead to Prospect' }));
 
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/101', expect.objectContaining({
@@ -3972,6 +4006,7 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(travelFetchMock);
     notifyError.mockReset();
+    navigateMock.mockReset();
   });
 
   it('keeps Travel actions beside search and shows Sub-brand as a default filter section', async () => {
@@ -4008,21 +4043,31 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
     lilyRows.forEach((row) => expect(row).not.toHaveClass('table-row-hover'));
   });
 
-  it('navigates to the travel lead profile when clicking a name in the Name column', async () => {
+  it('opens the full Travel Lead Details page when clicking the lead name', async () => {
     renderLeads(TRAVEL_AUTH);
     const lilyLink = await screen.findByRole('link', { name: 'Lily' });
     expect(lilyLink).toHaveAttribute('href', '/travel/leads/50?page=1&limit=10');
 
     fireEvent.click(lilyLink);
     expect(screen.queryByRole('dialog', { name: 'Lead preview' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('router-location')).toHaveAttribute('data-pathname', '/travel/leads/50');
+    expect(JSON.parse(screen.getByTestId('router-location').getAttribute('data-state'))).toEqual(
+      expect.objectContaining({
+        openFullPage: true,
+        returnTo: '/leads?page=1&limit=10',
+      }),
+    );
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 
-  it('preserves Travel pagination, rows, search, and sorting through lead details', async () => {
+  it('uses the Travel eye action to open full detail and restore the complete table state', async () => {
     const manyLeads = Array.from({ length: 25 }, (_, index) => ({
       id: 100 + index,
       name: `Traveler ${String(index + 1).padStart(2, '0')}`,
       email: `traveler${index + 1}@example.com`,
       subBrand: 'TMC',
+      source: 'Organic',
+      status: 'Lead',
       createdAt: '2026-07-17T10:00:00Z',
     }));
     fetchApiMock.mockImplementation((url, opts) => {
@@ -4034,21 +4079,36 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
 
     const firstRender = renderLeads(
       TRAVEL_AUTH,
-      ['/leads?page=2&limit=10&q=Traveler&sortBy=name&sortDirection=asc'],
+      ['/leads?page=2&limit=10&q=Traveler&source=Organic&subBrand=TMC&sortBy=name&sortDirection=asc'],
     );
-    const leadLink = await screen.findByRole('link', { name: 'Traveler 11' });
-    fireEvent.click(leadLink);
+    await screen.findByRole('link', { name: 'Traveler 11' });
+    navigateMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'View Traveler 11' }));
 
-    const location = screen.getByTestId('router-location');
-    expect(location).toHaveAttribute('data-pathname', '/travel/leads/110');
-    const detailParams = new URLSearchParams(location.getAttribute('data-search'));
+    expect(screen.queryByRole('dialog', { name: 'Lead preview' })).not.toBeInTheDocument();
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    const [detailDestination, navigationOptions] = navigateMock.mock.calls[0];
+    const [detailPath, detailSearch = ''] = detailDestination.split('?');
+    expect(detailPath).toBe('/travel/leads/110');
+    const detailParams = new URLSearchParams(detailSearch);
     expect(detailParams.get('page')).toBe('2');
     expect(detailParams.get('limit')).toBe('10');
     expect(detailParams.get('q')).toBe('Traveler');
+    expect(detailParams.get('source')).toBe('Organic');
+    expect(detailParams.get('subBrand')).toBe('TMC');
     expect(detailParams.get('sortBy')).toBe('name');
     expect(detailParams.get('sortDirection')).toBe('asc');
-    const detailState = JSON.parse(location.getAttribute('data-state'));
+    const detailState = navigationOptions.state;
+    expect(detailState.openFullPage).toBe(true);
     expect(detailState.leadsListState).toEqual({ pageIndex: 1, pageSize: 10 });
+    expect(detailState.leadsTableState).toEqual(expect.objectContaining({
+      searchTerm: 'Traveler',
+      sourceFilter: 'Organic',
+      subBrandFilter: 'TMC',
+      sortConfig: { key: 'name', direction: 'asc' },
+      pageIndex: 1,
+      pageSize: 10,
+    }));
 
     firstRender.unmount();
     renderLeads(TRAVEL_AUTH, [detailState.returnTo]);

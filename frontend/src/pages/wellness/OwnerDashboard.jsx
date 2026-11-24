@@ -50,6 +50,9 @@ export default function OwnerDashboard() {
   const [adsgptLogin, setAdsgptLogin] = useState('');
   const [adsGptStatus, setAdsGptStatus] = useState({ state: 'idle', msg: '' });
   const [callifiedStatus, setCallifiedStatus] = useState({ state: 'idle', msg: '' });
+  const openDashboardCard = (path) => navigate(path, {
+    state: { fromWellnessDashboard: true },
+  });
 
   // #207/#214: redirect non-management away from the Owner Dashboard.
   // Direct URL nav by a doctor/telecaller/helper/professional now bounces
@@ -167,7 +170,7 @@ export default function OwnerDashboard() {
 
       {/* KPI grid */}
       <div className="wellness-owner-kpis" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
-        <StatCard icon={Calendar} label="Today's appointments" value={data.today?.visits ?? 0} sub={`${data.today?.completed ?? 0} completed so far`} color="var(--accent-color)" onClick={() => navigate('/wellness/calendar')} />
+        <StatCard icon={Calendar} label="Today's appointments" value={data.today?.visits ?? 0} sub={`${data.today?.completed ?? 0} completed so far`} color="var(--accent-color)" onClick={() => openDashboardCard('/wellness/calendar')} />
         {/* #565: month-to-date realised revenue from the canonical P&L
             endpoint, matching the figure on /wellness/reports. */}
         <StatCard
@@ -176,13 +179,13 @@ export default function OwnerDashboard() {
           value={formatRupees(pnl?.totalRevenue)}
           sub="from completed visits (P&L canonical)"
           color="var(--success-color)"
-          onClick={() => navigate('/wellness/reports')}
+          onClick={() => openDashboardCard('/wellness/reports')}
         />
         <StatCard icon={IndianRupee} label="Today's expected revenue" value={formatRupees(data.today.expectedRevenue)} sub="based on scheduled services" color="var(--success-color)" />
         <StatCard icon={Activity} label="Occupancy" value={`${data.today.occupancyPct}%`} sub="vs target 100%" color={data.today.occupancyPct >= 60 ? 'var(--success-color)' : 'var(--warning-color)'} />
         <StatCard icon={Users} label="New leads today" value={data.today.newLeads} sub="across all channels" color="#3b82f6" />
-        <StatCard icon={Bell} label="Pending approvals" value={data.pendingApprovals} sub="from the AI agent" color="#a855f7" onClick={() => navigate('/wellness/recommendations')} />
-        <StatCard icon={Stethoscope} label="Active packages" value={data.activeTreatmentPlans} sub="multi-session bundles in progress" color="#ec4899" onClick={() => navigate('/wellness/services?tab=activetreatments')} />
+        <StatCard icon={Bell} label="Pending approvals" value={data.pendingApprovals} sub="from the AI agent" color="#a855f7" onClick={() => openDashboardCard('/wellness/recommendations')} />
+        <StatCard icon={Stethoscope} label="Active packages" value={data.activeTreatmentPlans} sub="multi-session bundles in progress" color="#ec4899" onClick={() => openDashboardCard('/wellness/services?tab=activetreatments')} />
         {/* PRD §6.8 — no-show risk: amber if any flagged, green when clean. */}
         <StatCard
           icon={AlertTriangle}

@@ -86,11 +86,16 @@ describe('<CustomerRegister /> organization autocomplete', () => {
 
   beforeEach(() => {
     navigateMock.mockReset();
+    localStorage.clear();
+    sessionStorage.clear();
     originalFetch = global.fetch;
     installCustomerRegisterFetch();
   });
 
   it('autofills and locks Travel Stall for TMC teacher registration', async () => {
+    localStorage.setItem('landing-registration-draft:previous-parent', JSON.stringify({
+      regValues: { parent_email: 'another-user@example.com', parent_name: 'Another User' },
+    }));
     renderPage('/customer/register?next=%2Ftmc%2Fteacher-portal&tmcRole=TEACHER');
 
     const orgInput = await screen.findByLabelText(/Booking for/i);
@@ -98,6 +103,8 @@ describe('<CustomerRegister /> organization autocomplete', () => {
       expect(orgInput).toHaveValue('Travel Stall');
       expect(orgInput).toBeDisabled();
     });
+    expect(screen.getByLabelText(/Email Address/i)).toHaveValue('');
+    expect(screen.getByLabelText(/Full name/i)).toHaveValue('');
     expect(screen.queryByText(/No matching organizations found/i)).not.toBeInTheDocument();
   });
 
@@ -111,14 +118,14 @@ describe('<CustomerRegister /> organization autocomplete', () => {
     expect(global.fetch.mock.calls.some(([url]) => String(url).includes('draftToken=draft-123'))).toBe(true);
   });
 
-  it('restores identity from the landing-page draft when the legacy redirect has no token', async () => {
+  it('does not restore another identity from a legacy browser draft without a token', async () => {
     localStorage.setItem('landing-registration-draft:tmc-trip', JSON.stringify({
       regValues: { parent_email: 'legacy-parent@example.com', parent_name: 'Legacy Parent' },
     }));
     renderPage('/customer/register?next=%2Ftmc%2Fparent-portal&tenantSlug=travel-stall');
 
-    expect(await screen.findByLabelText(/Email Address/i)).toHaveValue('legacy-parent@example.com');
-    expect(screen.getByLabelText(/Full name/i)).toHaveValue('Legacy Parent');
+    expect(await screen.findByLabelText(/Email Address/i)).toHaveValue('');
+    expect(screen.getByLabelText(/Full name/i)).toHaveValue('');
   });
 
   it('does not rate a password as good before it reaches eight characters', async () => {

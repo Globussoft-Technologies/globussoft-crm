@@ -237,9 +237,9 @@ function installFetchMock({
   });
 }
 
-function renderPage() {
+function renderPage(initialEntry = '/wellness/recommendations') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <Recommendations />
     </MemoryRouter>,
   );
@@ -275,6 +275,27 @@ describe('<Recommendations /> — page chrome', () => {
     installFetchMock({ filteredPromise: new Promise(() => {}) });
     renderPage();
     expect(await screen.findByText(/^Loading…$/)).toBeInTheDocument();
+  });
+});
+
+describe('<Recommendations /> — dashboard return link', () => {
+  it('shows the plain back link only after dashboard-card navigation', () => {
+    installFetchMock();
+    const firstRender = renderPage({
+      pathname: '/wellness/recommendations',
+      state: { fromWellnessDashboard: true },
+    });
+
+    const backLink = screen.getByRole('link', { name: 'Back to dashboard' });
+    expect(backLink).toHaveAttribute('href', '/wellness');
+    expect(backLink).toHaveStyle({
+      color: 'var(--text-secondary)',
+      textDecoration: 'none',
+    });
+
+    firstRender.unmount();
+    renderPage();
+    expect(screen.queryByRole('link', { name: 'Back to dashboard' })).not.toBeInTheDocument();
   });
 });
 

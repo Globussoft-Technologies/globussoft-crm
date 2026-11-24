@@ -1990,6 +1990,21 @@ router.post(
         console.warn("[tmc-portal][teacher/catalogues/response] admin notification failed:", notifyErr.message);
       }
 
+      // Notify the teacher through the configured travel email automation.
+      // Delivery is best-effort so an email-provider failure never makes a
+      // successfully saved catalogue selection look like it failed.
+      require("../lib/eventBus").emitEvent("catalogue.request_submitted", {
+        contactId: Number(req.tmcContact.id),
+        recipientEmail: req.tmcContact.email,
+        recipientName: req.tmcContact.name,
+        catalogue: {
+          name: selectedCatalogues.map((file) => file.fileName || file.name || "TMC catalogue").join(", "),
+        },
+        catalogueFiles: selectedCatalogues,
+        subBrand: "tmc",
+      }, tenantId, req.io).catch((error) => {
+        console.error("[tmc-portal][teacher/catalogues] catalogue email failed:", error.message);
+      });
       return res.status(201).json({
         ok: true,
         response: {

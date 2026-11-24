@@ -64,6 +64,7 @@ const audit = requireCJS('../../lib/audit');
 const notificationService = requireCJS('../../lib/notificationService');
 const travelKnowledgeBaseSync = requireCJS('../../lib/travelKnowledgeBaseSync');
 const driveOAuth = requireCJS('../../lib/googleDriveOAuth');
+const eventBus = requireCJS('../../lib/eventBus');
 const originalVisaLetterStore = {
   readLetterBuffer: visaLetterStore.readLetterBuffer,
   storeLetterPdf: visaLetterStore.storeLetterPdf,
@@ -76,6 +77,7 @@ const originalTmcCatalogueDeps = {
 audit.writeAudit = vi.fn().mockResolvedValue(undefined);
 notificationService.notifyMany = vi.fn().mockResolvedValue(undefined);
 const router = requireCJS('../../routes/tmc_portal');
+eventBus.emitEvent = vi.fn().mockResolvedValue(undefined);
 
 function makeApp() {
   const app = express();
@@ -110,6 +112,7 @@ function contact(persona, overrides = {}) {
 }
 
 beforeEach(() => {
+  eventBus.emitEvent.mockClear();
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ id: 7, vertical: 'travel', slug: 'tmc' });
   prisma.contact.findFirst.mockReset();
   prisma.contact.findMany.mockReset().mockResolvedValue([]);
@@ -293,6 +296,13 @@ describe('TMC teacher catalogue selection', () => {
       fileName: 'Nepal School Trip.pdf',
       folderPath: 'TMC',
     })]);
+    expect(eventBus.emitEvent).toHaveBeenCalledWith('catalogue.request_submitted', expect.objectContaining({
+      contactId: 41,
+      recipientEmail: 'teacher@example.test',
+      recipientName: 'TEACHER Contact',
+      catalogue: { name: 'Nepal School Trip.pdf' },
+      subBrand: 'tmc',
+    }), 7, undefined);
   });
 
   test('notifies tenant admins after a teacher submits or updates their catalogue selection', async () => {

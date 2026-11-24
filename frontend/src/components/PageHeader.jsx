@@ -1,5 +1,34 @@
-import React from 'react';
+import { ArrowLeft } from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
 import CountBadge from './CountBadge';
+
+export function DashboardBackLink() {
+  const location = useLocation();
+
+  if (location.state?.fromWellnessDashboard !== true) return null;
+
+  return (
+    <Link
+      to="/wellness"
+      aria-label="Back to dashboard"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '0.35rem',
+        width: 'fit-content',
+        marginBottom: '1rem',
+        color: 'var(--text-secondary)',
+        fontSize: '0.85rem',
+        fontWeight: 400,
+        lineHeight: 1.4,
+        textDecoration: 'none',
+      }}
+    >
+      <ArrowLeft size={14} aria-hidden="true" />
+      Back to dashboard
+    </Link>
+  );
+}
 
 /**
  * Shared page-header hero panel for wellness list/index pages.

@@ -420,6 +420,30 @@ describe('ContactDetail — current profile contract', () => {
     expect(screen.queryByRole('heading', { name: 'Contacts' })).not.toBeInTheDocument();
   });
 
+  it('keeps wellness neighbor navigation in Leads', async () => {
+    const baseFetch = makeFetchImpl();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts?status=Lead&limit=200') {
+        return Promise.resolve([{ id: 42 }, { id: 43 }]);
+      }
+      return baseFetch(url, opts);
+    });
+    renderPage({
+      listType: 'leads',
+      vertical: 'wellness',
+      renderBackdrop: false,
+      state: { returnTo: '/leads', leadsListState: { pageIndex: 0, pageSize: 10 } },
+    });
+
+    const profile = await getProfile();
+    fireEvent.click(profile.getByRole('button', { name: 'Next lead' }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts?status=Lead&limit=200', { silent: true });
+    });
+    expect(profile.queryByRole('button', { name: 'Next contact' })).not.toBeInTheDocument();
+  });
+
   it('sends the lead sequence action to Marketing Campaign sequences', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     renderPage({ listType: 'leads', vertical: 'generic' });

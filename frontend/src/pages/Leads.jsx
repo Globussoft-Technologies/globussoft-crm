@@ -82,6 +82,12 @@ import { runLeadBatches } from '../utils/leadBulkWork';
 import { useLeadCheckboxDrag } from '../utils/useLeadCheckboxDrag';
 import { buildAssistantFilterState } from "../utils/leadAssistantFilters";
 import { richTextToPlainText } from "../utils/richText";
+import {
+  GENERIC_LEAD_STATUS_EDIT_OPTIONS,
+  GENERIC_LEAD_STATUS_FILTER_OPTIONS,
+  genericLeadStatusLabel,
+  genericLeadStatusValue,
+} from "../utils/genericLeadStatus";
 import PickupCustomerStatusDialog from "../components/PickupCustomerStatusDialog";
 import PickupLocationSelect from "../components/PickupLocationSelect";
 import "./Leads.css";
@@ -348,6 +354,7 @@ const LEAD_CUSTOM_FIELD_TYPES_WITH_OPTIONS = new Set([
   "multiselect",
 ]);
 const GENERIC_LEAD_SERVER_SORT_KEYS = new Set([
+  "id",
   "name",
   "email",
   "phone",
@@ -749,8 +756,6 @@ const CSV_IMPORT_FIELD_TYPES = {
   landingPageUrl: "url",
   note: "textarea",
 };
-const GENERIC_BACKEND_STATUS_OPTIONS = ["New", "Contacted", "Won", "Churned", "Junk", "Interested", "Unqualified", "Qualified", "Lost"];
-const GENERIC_STATUS_DISPLAY_MAP = { Lead: "New", Prospect: "Contacted", Customer: "Won" };
 const TRAVEL_ADDITIONAL_DEFAULT_FILTER_FIELDS = Object.freeze(["subBrand"]);
 // The import mapper must offer CRM fields even when a user has hidden those
 // columns from their personal Leads table layout. Keep this catalog separate
@@ -2080,6 +2085,7 @@ function BuiltInInlineCellEditor({
   editOnDisplayClick = true,
   showEditButton = true,
   disableTruncation = false,
+  alwaysSelect = false,
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? "");
@@ -2126,7 +2132,7 @@ function BuiltInInlineCellEditor({
     }
   };
 
-  if (!editing) {
+  if (!editing && !(type === "select" && alwaysSelect)) {
     const isEmpty = value === null || value === undefined || value === "";
     return (
       <span
@@ -2543,7 +2549,16 @@ function CreateLeadFieldsPicker({
   );
 }
 
-function LeadFieldCreateModal({ onClose, onCreated, notify }) {
+function normalizeLeadFieldIdentity(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 50);
+}
+
+function LeadFieldCreateModal({ onClose, onCreated, notify, existingFields = [], reservedFields = [] }) {
   const [label, setLabel] = useState("");
   const [fieldType, setFieldType] = useState("text");
   const [optionsText, setOptionsText] = useState("");
@@ -2551,6 +2566,7 @@ function LeadFieldCreateModal({ onClose, onCreated, notify }) {
   const [placeholder, setPlaceholder] = useState("");
   const [isRequired, setIsRequired] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [labelError, setLabelError] = useState("");
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -2560,13 +2576,27 @@ function LeadFieldCreateModal({ onClose, onCreated, notify }) {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [onClose, saving]);
 
+  const validateLabel = () => {
+    const trimmedLabel = label.trim();
+    if (!trimmedLabel) {
+      setLabelError("Label is required.");
+      return false;
+    }
+    const candidate = normalizeLeadFieldIdentity(trimmedLabel);
+    const duplicateExists = [...existingFields, ...reservedFields].some((field) => (
+      [field?.fieldKey, field?.key, field?.value, field?.id, field?.label]
+        .map(normalizeLeadFieldIdentity)
+        .filter(Boolean)
+        .includes(candidate)
+    ));
+    setLabelError(duplicateExists ? "A field with this name already exists." : "");
+    return !duplicateExists;
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     const trimmedLabel = label.trim();
-    if (!trimmedLabel) {
-      notify.error("Label is required");
-      return;
-    }
+    if (!validateLabel()) return;
 
     const options = optionsText
       .split(",")
@@ -2596,11 +2626,16 @@ function LeadFieldCreateModal({ onClose, onCreated, notify }) {
       const created = await fetchApi("/api/lead-custom-fields", {
         method: "POST",
         body: JSON.stringify(body),
+        silent: true,
       });
       notify.success("Field created");
       onCreated(created);
     } catch (err) {
-      notify.error(err?.message || "Failed to create field");
+      if (["DUPLICATE_FIELD_KEY", "RESERVED_FIELD_KEY"].includes(err?.code)) {
+        setLabelError("A field with this name already exists.");
+      } else {
+        notify.error(err?.message || "Failed to create field");
+      }
     } finally {
       setSaving(false);
     }
@@ -2716,12 +2751,19 @@ function LeadFieldCreateModal({ onClose, onCreated, notify }) {
               type="text"
               className="input-field"
               value={label}
-              onChange={(event) => setLabel(event.target.value)}
+              onChange={(event) => { setLabel(event.target.value); if (labelError) setLabelError(""); }}
+              onBlur={validateLabel}
               placeholder="e.g. Referral Source"
               maxLength={80}
               autoFocus
+              aria-invalid={Boolean(labelError)}
               style={{ width: "100%", maxWidth: "100%", minWidth: 0 }}
             />
+            {labelError ? (
+              <span role="alert" style={{ color: "var(--danger-color, #ef4444)", fontSize: "0.75rem", fontWeight: 400 }}>
+                {labelError}
+              </span>
+            ) : null}
           </label>
 
           <label
@@ -4163,7 +4205,7 @@ const Leads = ({ initialListState = null } = {}) => {
     title: "",
     countryCode: isWellness || isTravel ? "+91" : "+1",
     source: isWellness ? "walk-in" : isTravel ? "tmc_registration" : "Organic",
-    status: "Lead",
+    status: isGeneric ? "New" : "Lead",
     ...(isGeneric ? { website: "" } : {}),
     treatmentOfInterest: "",
     preferredLocationId: "",
@@ -5990,7 +6032,7 @@ const Leads = ({ initialListState = null } = {}) => {
         countryCode: "+1",
         phone: "",
         source: "Organic",
-        status: "Lead",
+        status: isGeneric ? "New" : "Lead",
         ...(isGeneric ? { website: "" } : {}),
         customFields: {},
       });
@@ -6233,7 +6275,7 @@ const Leads = ({ initialListState = null } = {}) => {
         countryCode: isTravel ? "+91" : "+1",
         phone: "",
         source: "Organic",
-        status: "Lead",
+        status: isGeneric ? "New" : "Lead",
         ...(isGeneric ? { website: "" } : {}),
         customFields: {},
       });
@@ -7069,7 +7111,14 @@ const Leads = ({ initialListState = null } = {}) => {
             column.key.startsWith("cf_"),
         )
       : catalogColumns;
-    const fieldsByKey = new Map();
+    // Lead ID is a Generic CRM system field, independent of whether the
+    // table-column catalogue has refreshed yet. Keeping it as an explicit
+    // filter definition also makes rolling frontend/backend updates safe.
+    const fieldsByKey = new Map(
+      isGeneric
+        ? [["id", { field: "id", label: "Lead ID", kind: "number" }]]
+        : [],
+    );
     for (const catalogColumn of verticalColumns) {
       const columnKey =
         isGeneric && catalogColumn.key === "description"
@@ -7183,6 +7232,7 @@ const Leads = ({ initialListState = null } = {}) => {
     )
     .filter(
       (key) =>
+        (key === "id" && isGeneric) ||
         key === "email" ||
         key === "company" ||
         key === "phone" ||
@@ -7260,6 +7310,7 @@ const Leads = ({ initialListState = null } = {}) => {
         customFieldByKey.has(key),
     )
     .map((key) => {
+      if (key === "id") return { key, label: "Lead ID" };
       if (key === "email") return { key, label: "Email" };
       if (key === "company")
         return { key, label: isTravel ? "School Name" : "Company" };
@@ -9163,6 +9214,8 @@ const Leads = ({ initialListState = null } = {}) => {
     disableTruncation = false,
     onSave = updateLeadInlineValue,
     className,
+    alwaysSelect = false,
+    editable = true,
   }) => (
     <td
       className={className}
@@ -9179,9 +9232,10 @@ const Leads = ({ initialListState = null } = {}) => {
         onSave={onSave}
         renderValue={renderValue}
         required={required}
-        editOnDisplayClick={canLeadUpdate}
-        showEditButton={canLeadUpdate}
+        editOnDisplayClick={editable && canLeadUpdate}
+        showEditButton={editable && canLeadUpdate}
         disableTruncation={disableTruncation}
+        alwaysSelect={alwaysSelect}
       />
     </td>
   );
@@ -9356,6 +9410,18 @@ const Leads = ({ initialListState = null } = {}) => {
       );
     }
     switch (column.key) {
+      case "id":
+        return (
+          <td
+            style={getBodyCellStyle("id", {
+              color: "var(--text-secondary)",
+              fontSize: "0.875rem",
+            })}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {lead.id}
+          </td>
+        );
       case "email":
         return renderBuiltInLeadCell({
           lead,
@@ -9442,6 +9508,7 @@ const Leads = ({ initialListState = null } = {}) => {
           type: "select",
           options: sourceFilterOptions,
           className: "leads-source-col",
+          editable: !isGeneric,
           renderValue: (displayValue) => (
             <span
               className="leads-source-badge"
@@ -9618,12 +9685,15 @@ const Leads = ({ initialListState = null } = {}) => {
           // Generic CRM Status is the backend Contact.status field. It is
           // intentionally independent from lifecycleStageKey.
           value: isGeneric
-            ? (GENERIC_STATUS_DISPLAY_MAP[lead.status] || lead.status || "New")
+            ? genericLeadStatusValue(lead.status)
             : (configuredStage?.label || lead.status || "Lead"),
           type: "select",
-          options: isGeneric ? GENERIC_BACKEND_STATUS_OPTIONS : lifecycleOptions.map((option) => option.label),
+          alwaysSelect: isGeneric && canLeadUpdate,
+          options: isGeneric ? GENERIC_LEAD_STATUS_EDIT_OPTIONS : lifecycleOptions.map((option) => option.label),
           renderValue: (displayValue) => (
-            <span style={sourceBadgeStyle}>{displayValue || ""}</span>
+            <span style={sourceBadgeStyle}>
+              {isGeneric ? genericLeadStatusLabel(displayValue) : displayValue || ""}
+            </span>
           ),
           onSave: async (row, _field, selectedLabel) => {
             const option = lifecycleOptions.find(
@@ -9657,11 +9727,18 @@ const Leads = ({ initialListState = null } = {}) => {
           lead,
           field: "status",
           label: "Status",
-          value: lead.status || "Lead",
+          value: isGeneric
+            ? genericLeadStatusValue(lead.status)
+            : (lead.status || "Lead"),
           type: "select",
-          options: ["Lead", "Prospect", "Customer", "Churned", "Junk"],
+          alwaysSelect: isGeneric && canLeadUpdate,
+          options: isGeneric
+            ? GENERIC_LEAD_STATUS_EDIT_OPTIONS
+            : ["Lead", "Prospect", "Customer", "Churned", "Junk"],
           renderValue: (displayValue) => (
-            <span style={sourceBadgeStyle}>{displayValue || ""}</span>
+            <span style={sourceBadgeStyle}>
+              {isGeneric ? genericLeadStatusLabel(displayValue) : displayValue || ""}
+            </span>
           ),
         });
       case "title":
@@ -11124,6 +11201,7 @@ const Leads = ({ initialListState = null } = {}) => {
               allowedFieldKeys={visibleLeadFilterFieldKeys}
               allowedFieldLabels={visibleLeadFilterFieldLabels}
               allowedFieldDefinitions={leadFilterFieldCatalog}
+              allowedValueOptions={isGeneric ? { status: GENERIC_LEAD_STATUS_FILTER_OPTIONS } : undefined}
               additionalDefaultFieldKeys={
                 isTravel ? TRAVEL_ADDITIONAL_DEFAULT_FILTER_FIELDS : undefined
               }
@@ -14615,6 +14693,7 @@ const Leads = ({ initialListState = null } = {}) => {
             showSelectedFilters={false}
             showCountBadge={false}
             onClose={() => setHeaderFilterRequest(null)}
+            allowedValueOptions={isGeneric ? { status: GENERIC_LEAD_STATUS_FILTER_OPTIONS } : undefined}
           />
         )}
         {renameFieldState && (
@@ -16125,6 +16204,11 @@ const Leads = ({ initialListState = null } = {}) => {
       {leadFieldModalOpen && supportsLeadCustomFields && isAdmin && (
         <LeadFieldCreateModal
           notify={notify}
+          existingFields={customFieldDefs}
+          reservedFields={[
+            ...BUILTIN_RULE_COLUMNS,
+            ...leadColumnCatalog.filter((field) => !String(field.key || "").startsWith("cf_")),
+          ]}
           onClose={() => setLeadFieldModalOpen(false)}
           onCreated={handleLeadFieldCreated}
         />

@@ -71,6 +71,13 @@ function normalizeVisibleColumnsForTable(visible, available) {
 const BUILTIN_COLUMNS = {
   leads: [
     { key: "name", label: "Name", lockedVisible: true }, // always shown — the row's identity, hiding it would leave no way to tell rows apart
+    {
+      key: "id",
+      label: "Lead ID",
+      webhookField: "contactId",
+      filterField: "id",
+      filterKind: "number",
+    },
     { key: "email", label: "Email" },
     { key: "phone", label: "Phone" },
     { key: "whatsappPhone", label: "WhatsApp Number" },

@@ -290,7 +290,7 @@ export default function Dashboard() {
       },
       {
         label: 'Total Contacts', value: contactCount.toLocaleString(), icon: <Users size={24} />, color: '#3b82f6',
-        path: '/contacts',
+        path: '/leads',
       },
       {
         label: 'Conversion Rate', value: formatPercent(conversionRate), icon: <TrendingUp size={24} />, color: 'var(--warning-color)',

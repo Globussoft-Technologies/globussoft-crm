@@ -204,6 +204,18 @@ beforeEach(() => {
 });
 
 describe('PATCH /api/contacts/:id — revert a converted lead', () => {
+  test('Generic CRM normalizes a frontend New status update to backend Lead', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(prospect);
+    prisma.contact.update.mockResolvedValueOnce({ ...prospect, status: 'Lead' });
+
+    const res = await request(makeApp())
+      .patch(`/api/contacts/${CONTACT_ID}`)
+      .send({ status: 'New' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.update.mock.calls[0][0].data.status).toBe('Lead');
+  });
+
   test('case 1: { status: "Lead" } resolves and writes the status', async () => {
     prisma.contact.findFirst.mockResolvedValueOnce(prospect);
     prisma.contact.update.mockResolvedValueOnce({ ...prospect, status: 'Lead' });

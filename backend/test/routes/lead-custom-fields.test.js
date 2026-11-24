@@ -28,6 +28,7 @@ authMw.verifyRole = () => (_req, _res, next) => next();
 
 // ── Prisma singleton patching ──────────────────────────────────────────
 prisma.leadCustomFieldDefinition = prisma.leadCustomFieldDefinition || {};
+prisma.webForm = prisma.webForm || {};
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn();
 prisma.leadCustomFieldDefinition.findMany = vi.fn();
@@ -38,6 +39,8 @@ prisma.leadCustomFieldDefinition.create = vi.fn();
 prisma.leadCustomFieldDefinition.update = vi.fn();
 prisma.leadCustomFieldDefinition.delete = vi.fn();
 prisma.leadCustomFieldDefinition.aggregate = vi.fn();
+prisma.webForm.findMany = vi.fn();
+prisma.webForm.update = vi.fn();
 prisma.$transaction = vi.fn();
 
 const leadCustomFieldsRouter = requireCJS('../../routes/lead_custom_fields');
@@ -66,6 +69,8 @@ beforeEach(() => {
   prisma.leadCustomFieldDefinition.update.mockReset();
   prisma.leadCustomFieldDefinition.delete.mockReset();
   prisma.leadCustomFieldDefinition.aggregate.mockReset().mockResolvedValue({ _max: { displayOrder: null } });
+  prisma.webForm.findMany.mockReset().mockResolvedValue([]);
+  prisma.webForm.update.mockReset();
   prisma.$transaction.mockReset().mockImplementation((operations) => Promise.all(operations));
 });
 
@@ -210,18 +215,18 @@ describe('POST /api/lead-custom-fields', () => {
 
   test('stores tooltip and placeholder', async () => {
     prisma.leadCustomFieldDefinition.create.mockResolvedValue({
-      id: 1, tenantId: TENANT_ID, fieldKey: 'url', label: 'Website', fieldType: 'url', options: null, tooltip: 'Company website', placeholder: 'https://example.com', isRequired: false, displayOrder: 1,
+      id: 1, tenantId: TENANT_ID, fieldKey: 'portfolio_link', label: 'Portfolio Link', fieldType: 'url', options: null, tooltip: 'Company portfolio', placeholder: 'https://example.com', isRequired: false, displayOrder: 1,
     });
 
     const res = await request(makeApp()).post('/api/lead-custom-fields').send({
-      label: 'Website',
+      label: 'Portfolio Link',
       fieldType: 'url',
-      tooltip: 'Company website',
+      tooltip: 'Company portfolio',
       placeholder: 'https://example.com',
     });
 
     expect(res.status).toBe(201);
-    expect(res.body.tooltip).toBe('Company website');
+    expect(res.body.tooltip).toBe('Company portfolio');
     expect(res.body.placeholder).toBe('https://example.com');
   });
 
@@ -230,6 +235,53 @@ describe('POST /api/lead-custom-fields', () => {
 
     const res = await request(makeApp()).post('/api/lead-custom-fields').send({
       label: 'Referral Source',
+      fieldType: 'text',
+    });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('DUPLICATE_FIELD_KEY');
+  });
+
+  test.each([
+    ['Phone', 'phone'],
+    ['Full name', 'full_name'],
+    ['Job Title', 'job_title'],
+    ['UTM Source', 'utm_source'],
+  ])('rejects generic custom field %s because it collides with a built-in field', async (label) => {
+    const res = await request(makeApp()).post('/api/lead-custom-fields').send({
+      label,
+      fieldType: 'text',
+    });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({
+      error: 'A built-in field with this name already exists',
+      code: 'RESERVED_FIELD_KEY',
+    });
+    expect(prisma.leadCustomFieldDefinition.findUnique).not.toHaveBeenCalled();
+    expect(prisma.leadCustomFieldDefinition.create).not.toHaveBeenCalled();
+  });
+
+  test('keeps reserved built-in validation scoped to Generic CRM', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'travel' });
+    prisma.leadCustomFieldDefinition.create.mockResolvedValue({
+      id: 3, tenantId: TENANT_ID, fieldKey: 'phone', label: 'Phone', fieldType: 'text', options: null, tooltip: null, placeholder: null, isRequired: false, displayOrder: 1,
+    });
+
+    const res = await request(makeApp()).post('/api/lead-custom-fields').send({
+      label: 'Phone',
+      fieldType: 'text',
+    });
+
+    expect(res.status).toBe(201);
+    expect(res.body.fieldKey).toBe('phone');
+  });
+
+  test('returns the duplicate-field envelope when concurrent creates hit the unique constraint', async () => {
+    prisma.leadCustomFieldDefinition.create.mockRejectedValue({ code: 'P2002' });
+
+    const res = await request(makeApp()).post('/api/lead-custom-fields').send({
+      label: 'Referral source',
       fieldType: 'text',
     });
 
@@ -318,5 +370,57 @@ describe('DELETE /api/lead-custom-fields/:id', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+  });
+
+  test('removes a deleted field and its conditions from every generic web form', async () => {
+    prisma.leadCustomFieldDefinition.findFirst.mockResolvedValue({
+      id: 8, tenantId: TENANT_ID, fieldKey: 'how_are_u', label: 'How are u', fieldType: 'text', options: null, tooltip: null, placeholder: null, isRequired: false, displayOrder: 1,
+    });
+    prisma.webForm.findMany.mockResolvedValue([
+      {
+        id: 20,
+        fieldsJson: JSON.stringify([
+          { id: 'name', sourceKind: 'contact', sourceKey: 'name', label: 'Name' },
+          { id: 'custom-8', sourceKind: 'lead_custom', sourceKey: 'how_are_u', label: 'How are u' },
+          { id: 'details', sourceKind: 'custom', sourceKey: 'details', label: 'Details', showWhen: { fieldId: 'custom-8', fieldKey: 'how_are_u', value: 'Yes' } },
+        ]),
+      },
+      {
+        id: 21,
+        fieldsJson: JSON.stringify([
+          { id: 'email', sourceKind: 'contact', sourceKey: 'email', label: 'Email' },
+        ]),
+      },
+    ]);
+    prisma.webForm.update.mockResolvedValue({ id: 20 });
+
+    const res = await request(makeApp()).delete('/api/lead-custom-fields/8');
+
+    expect(res.status).toBe(200);
+    expect(prisma.webForm.findMany).toHaveBeenCalledWith({
+      where: { tenantId: TENANT_ID, scope: 'generic' },
+      select: { id: true, fieldsJson: true },
+    });
+    expect(prisma.webForm.update).toHaveBeenCalledTimes(1);
+    const savedFields = JSON.parse(prisma.webForm.update.mock.calls[0][0].data.fieldsJson);
+    expect(savedFields).toEqual([
+      { id: 'name', sourceKind: 'contact', sourceKey: 'name', label: 'Name' },
+      { id: 'details', sourceKind: 'custom', sourceKey: 'details', label: 'Details', showWhen: null },
+    ]);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.leadCustomFieldDefinition.delete).toHaveBeenCalledWith({ where: { id: 8 } });
+  });
+
+  test('does not change web forms when deleting a Travel custom field', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'travel' });
+    prisma.leadCustomFieldDefinition.findFirst.mockResolvedValue({
+      id: 9, tenantId: TENANT_ID, fieldKey: 'travel_note', label: 'Travel note', fieldType: 'text', options: null, tooltip: null, placeholder: null, isRequired: false, displayOrder: 1,
+    });
+
+    const res = await request(makeApp()).delete('/api/lead-custom-fields/9');
+
+    expect(res.status).toBe(200);
+    expect(prisma.webForm.findMany).not.toHaveBeenCalled();
+    expect(prisma.webForm.update).not.toHaveBeenCalled();
   });
 });

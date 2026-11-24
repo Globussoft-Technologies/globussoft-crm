@@ -1889,7 +1889,7 @@ describe('POST /api/forms/public/:slug/submit', () => {
 
         source: 'Referral',
 
-        status: 'Prospect',
+        status: 'Lead',
 
       }),
 
@@ -2265,13 +2265,13 @@ describe('Generic web form leads popup API', () => {
       { id: 'x', sourceKind: 'custom', sourceKey: 'message', label: 'Message' },
     ]) });
     prisma.webFormSubmission.count.mockResolvedValue(26);
-    prisma.webFormSubmission.findMany.mockResolvedValue([{ id: 9,
+    prisma.webFormSubmission.findMany.mockResolvedValueOnce([{ id: 9,
       payloadJson: JSON.stringify({ source: 'Website', medium: 'Google', 'custom:message': '  hello  ' }),
       filesJson: null, contact: { id: 3, createdAt: '2026-01-01', updatedAt: '2026-02-01', deletedAt: '2026-02-02', status: 'Lead' },
-    }]);
+    }]).mockResolvedValueOnce([{ payloadJson: JSON.stringify({ source: 'Website', medium: 'Google', 'custom:message': '  hello  ' }), filesJson: null }]);
     const res = await request(makeApp()).get('/api/forms/7/leads?page=2&limit=25&search=Google');
     expect(res.status).toBe(200);
-    expect(res.body.leads[0]).toMatchObject({ values: ['Website', 'Google', '  hello  '], createdAt: '2026-01-01', updatedAt: '2026-02-01', deletedAt: '2026-02-02' });
+    expect(res.body.leads[0]).toMatchObject({ values: ['Website', 'Google', '  hello  '], createdAt: '2026-01-01', updatedAt: '2026-02-01', deletedAt: '2026-02-02', isLead: false });
     expect(prisma.webForm.findFirst).toHaveBeenCalledWith({ where: { id: 7, tenantId: TENANT_ID, scope: 'generic' } });
     const query = prisma.webFormSubmission.findMany.mock.calls[0][0];
     expect(query).toMatchObject({ skip: 25, take: 25, where: { webFormId: 7, tenantId: TENANT_ID, scope: 'generic' } });
@@ -2279,23 +2279,52 @@ describe('Generic web form leads popup API', () => {
     expect(query.where.OR).toContainEqual({ payloadJson: { contains: 'Google' } });
     expect(prisma.webFormSubmission.count).toHaveBeenCalledWith({ where: query.where });
   });
-  test('keeps orphaned and non-Lead submissions visible and marks them absent from Leads', async () => {
+  test('keeps status-changed submissions in Leads while marking orphaned submissions absent', async () => {
     prisma.webForm.findFirst.mockResolvedValue({ id: 7, fieldsJson: JSON.stringify([]) });
     prisma.webFormSubmission.count.mockResolvedValue(2);
     prisma.webFormSubmission.findMany.mockResolvedValue([
-      { id: 10, payloadJson: '{}', filesJson: null, submittedAt: '2026-02-03', contact: { id: 4, createdAt: '2026-01-03', updatedAt: '2026-02-03', deletedAt: null, status: 'Customer' } },
-      { id: 11, payloadJson: '{}', filesJson: null, submittedAt: '2026-02-04', contact: null },
+      { id: 10, payloadJson: '{"name":"Customer"}', filesJson: null, submittedAt: '2026-02-03', contact: { id: 4, createdAt: '2026-01-03', updatedAt: '2026-02-03', deletedAt: null, status: 'Customer' } },
+      { id: 11, payloadJson: '{"name":"Orphan"}', filesJson: null, submittedAt: '2026-02-04', contact: null },
     ]);
 
     const res = await request(makeApp()).get('/api/forms/7/leads');
 
     expect(res.status).toBe(200);
     expect(res.body.leads).toMatchObject([
-      { contactId: 4, isLead: false, deletedAt: null },
+      { contactId: 4, isLead: true, deletedAt: null },
       { contactId: null, isLead: false, deletedAt: null, createdAt: '2026-02-04', updatedAt: '2026-02-04' },
     ]);
     const query = prisma.webFormSubmission.findMany.mock.calls[0][0];
     expect(query.where.contact).toBeUndefined();
+  });
+  test('marks exact duplicate submission snapshots across pages', async () => {
+    prisma.webForm.findFirst.mockResolvedValue({ id: 7, fieldsJson: JSON.stringify([
+      { id: 'name', sourceKind: 'contact', sourceKey: 'name', label: 'Name', fieldType: 'text' },
+      { id: 'email', sourceKind: 'contact', sourceKey: 'email', label: 'Email', fieldType: 'email' },
+    ]) });
+    prisma.webFormSubmission.count.mockResolvedValue(3);
+    prisma.webFormSubmission.findMany
+      .mockResolvedValueOnce([
+        { id: 20, payloadJson: '{"name":" Exact duplicate ","email":"same@example.com"}', filesJson: null, submittedAt: '2026-02-03', contact: { id: 6, deletedAt: null, status: 'Interested' } },
+        { id: 21, payloadJson: '{"name":"Unique"}', filesJson: null, submittedAt: '2026-02-04', contact: { id: 7, deletedAt: null, status: 'New' } },
+      ])
+      .mockResolvedValueOnce([
+        { payloadJson: '{"name":" Exact duplicate ","email":"same@example.com"}', filesJson: null },
+        { payloadJson: '{"email":"same@example.com","name":"Exact duplicate"}', filesJson: null },
+        { payloadJson: '{"name":"Unique"}', filesJson: null },
+      ]);
+
+    const res = await request(makeApp()).get('/api/forms/7/leads?limit=2');
+
+    expect(res.status).toBe(200);
+    expect(res.body.leads).toMatchObject([
+      { contactId: 6, isLead: true, isDuplicate: true },
+      { contactId: 7, isLead: true, isDuplicate: false },
+    ]);
+    expect(prisma.webFormSubmission.findMany.mock.calls[1][0]).toMatchObject({
+      where: { tenantId: TENANT_ID, scope: 'generic', webFormId: 7 },
+      select: { payloadJson: true, filesJson: true },
+    });
   });
   test.each(['wellness', 'travel'])('denies %s access', async (vertical) => {
     expect((await request(makeApp(vertical)).get('/api/forms/7/leads')).status).toBe(403);

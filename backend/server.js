@@ -2317,17 +2317,30 @@ const startHttpServer = () => server.listen(PORT, () => {
 // empty board for legacy Generic pipelines. Fail-open keeps older local
 // databases bootable until `prisma generate` and `prisma db push` run.
 const { ensureGenericPipelineStageAssignments } = require("./scripts/ensureGenericPipelineStageAssignments");
+const { ensureGenericContactStatuses } = require("./scripts/ensureGenericContactStatuses");
 runRbacBootBeforeTraffic()
-  .then(() => ensureGenericPipelineStageAssignments())
-  .then((stats) => {
-    if (!stats || stats.assignmentsCreated === 0) return;
-    console.log(
-      `[generic-stage-boot] backfilled ${stats.assignmentsCreated} assignment(s) across ${stats.pipelines} Generic pipeline(s)`,
-    );
+  .then(async () => {
+    const stageStats = await ensureGenericPipelineStageAssignments();
+    const statusStats = process.env.DISABLE_GENERIC_STATUS_BOOT_SYNC === "1"
+      ? null
+      : await ensureGenericContactStatuses();
+    return { stageStats, statusStats };
+  })
+  .then(({ stageStats, statusStats }) => {
+    if (stageStats?.assignmentsCreated > 0) {
+      console.log(
+        `[generic-stage-boot] backfilled ${stageStats.assignmentsCreated} assignment(s) across ${stageStats.pipelines} Generic pipeline(s)`,
+      );
+    }
+    if (statusStats?.updated > 0) {
+      console.log(
+        `[generic-status-boot] normalized ${statusStats.updated} Generic contact status value(s) for backend automation`,
+      );
+    }
   })
   .catch((err) =>
     console.error(
-      "[generic-stage-boot] non-fatal error:",
+      "[generic-boot] non-fatal stage/status normalization error:",
       err && err.message ? err.message : err,
     ),
   )

@@ -1187,6 +1187,39 @@ describe('POST /api/contacts — create', () => {
     }));
   });
 
+  test('Generic CRM persists the frontend New label as Lead for auto-dial compatibility', async () => {
+    const created = {
+      id: 12344,
+      name: 'New UI Lead',
+      email: 'new-ui-lead@example.com',
+      phone: '+919876955400',
+      tenantId: TENANT_ID,
+      assignedToId: null,
+      status: 'Lead',
+      callifiedCampaignId: 42,
+    };
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'true' });
+    findDuplicateMock.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce(created);
+
+    const res = await request(makeApp({ vertical: 'generic' }))
+      .post('/api/contacts')
+      .send({
+        name: 'New UI Lead',
+        email: 'new-ui-lead@example.com',
+        phone: '+919876955400',
+        status: 'New',
+        callifiedCampaignId: 42,
+      });
+
+    expect(res.status).toBe(201);
+    expect(prisma.contact.create.mock.calls[0][0].data.status).toBe('Lead');
+    expect(autoDialEnqueueMock).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: 12344,
+      campaignId: 42,
+    }));
+  });
+
   test('Generic CRM contact workflow payload adds +91 to a local phone number', async () => {
     const created = {
       id: 12346,

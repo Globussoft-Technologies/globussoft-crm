@@ -180,6 +180,78 @@ describe("ColumnPicker reorder", () => {
     expect(notifySuccess).toHaveBeenCalledWith("2 fields deleted");
   });
 
+  it("keeps the deletion action as Clear selection while some fields remain selected", async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/table-column-prefs/leads" && !opts) {
+        return Promise.resolve({
+          availableColumns: [
+            { key: "name", label: "Name" },
+            { key: "cf_priority", label: "Priority" },
+            { key: "cf_region", label: "Region" },
+          ],
+          visible: ["name"],
+        });
+      }
+      return Promise.resolve({ success: true });
+    });
+
+    render(
+      <ColumnPicker
+        tableKey="leads"
+        deletableColumns={[
+          { id: 44, key: "cf_priority", fieldKey: "priority" },
+          { id: 45, key: "cf_region", fieldKey: "region" },
+        ]}
+      />,
+    );
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/table-column-prefs/leads"));
+    fireEvent.click(screen.getByRole("button", { name: /Customize table/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Select all hidden fields for deletion" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select Priority field for deletion" }));
+
+    expect(screen.getByRole("button", { name: "Clear field deletion selection" })).toHaveTextContent("Clear selection");
+    expect(screen.queryByRole("button", { name: "Select all hidden fields for deletion" })).toBeNull();
+  });
+
+  it("shows the lower clear action only while generic Lead fields are selected for deletion", async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/table-column-prefs/leads" && !opts) {
+        return Promise.resolve({
+          availableColumns: [
+            { key: "name", label: "Name", lockedVisible: true },
+            { key: "cf_priority", label: "Priority" },
+            { key: "actions", label: "Actions", lockedVisible: true },
+          ],
+          visible: ["name", "actions"],
+        });
+      }
+      return Promise.resolve([]);
+    });
+
+    render(
+      <ColumnPicker
+        tableKey="leads"
+        triggerLabel="View"
+        density="comfortable"
+        onManageFields={vi.fn()}
+        deletableColumns={[{ id: 44, key: "cf_priority", fieldKey: "priority" }]}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "View" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    expect(screen.queryByRole("button", { name: "Clear selected fields for deletion" })).toBeNull();
+
+    const deletionCheckbox = screen.getByRole("checkbox", { name: "Select Priority field for deletion" });
+    fireEvent.click(deletionCheckbox);
+    expect(deletionCheckbox).toBeChecked();
+
+    fireEvent.click(screen.getByRole("button", { name: "Clear selected fields for deletion" }));
+    expect(deletionCheckbox).not.toBeChecked();
+    expect(screen.queryByRole("button", { name: "Clear selected fields for deletion" })).toBeNull();
+  });
+
   it("lets users drag visible columns into a new order and saves that order", async () => {
     const onColumnsChange = vi.fn();
     render(<ColumnPicker tableKey="leads" onColumnsChange={onColumnsChange} />);

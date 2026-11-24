@@ -927,7 +927,7 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
         const email = String(getSpreadsheetValue(row, ["email", "Email"])).trim();
         const rawStatus = String(getSpreadsheetValue(row, ["status", "Status"]) || "Lead").trim();
         const status = isGeneric
-          ? rawStatus
+          ? (rawStatus.toLowerCase() === "new" ? "Lead" : rawStatus)
           : [...ALLOWED_CONTACT_STATUSES].find(
             (allowedStatus) => allowedStatus.toLowerCase() === rawStatus.toLowerCase(),
           );

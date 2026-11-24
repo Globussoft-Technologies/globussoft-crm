@@ -135,6 +135,7 @@ describe("GET /api/contacts/filter-fields", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.fields.map((f) => f.field)).toEqual([
+      "id",
       "name",
       "firstName",
       "lastName",
@@ -208,6 +209,7 @@ describe("GET /api/contacts/filter-fields", () => {
     const res = await request(makeApp()).get("/api/contacts/filter-fields");
 
     const byKey = Object.fromEntries(res.body.fields.map((f) => [f.field, f]));
+    expect(byKey.id).toMatchObject({ kind: "number", label: "Lead ID" });
     expect(byKey.name.kind).toBe("text");
     expect(byKey.whatsappPhone.kind).toBe("text");
     expect(byKey.whatsappPhone.label).toBe("WhatsApp Number");
@@ -389,6 +391,7 @@ describe("GET /api/contacts/filter-fields", () => {
       const fieldKeys = res.body.fields.map((f) => f.field);
       expect(fieldKeys).not.toContain("subBrand");
       expect(fieldKeys).not.toContain("kycStatus");
+      expect(fieldKeys).not.toContain("id");
     });
 
     test("travel tenant DOES see subBrand/kycStatus", async () => {
@@ -399,6 +402,7 @@ describe("GET /api/contacts/filter-fields", () => {
       const fieldKeys = res.body.fields.map((f) => f.field);
       expect(fieldKeys).toContain("subBrand");
       expect(fieldKeys).toContain("kycStatus");
+      expect(fieldKeys).not.toContain("id");
     });
 
     test("a tenant row with no vertical falls back to generic (subBrand yes, kycStatus no)", async () => {
@@ -458,6 +462,25 @@ describe("GET /api/contacts/filter-values/:field", () => {
       { value: "Lead", label: "Lead" },
       { value: "Customer", label: "Customer" },
     ]);
+  });
+
+  test("Generic Leads exposes canonical statuses instead of legacy stored values", async () => {
+    const res = await request(makeApp()).get(
+      "/api/contacts/filter-values/status?includeCrmStatuses=true",
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.values).toEqual([
+      { value: "New", label: "New" },
+      { value: "Contacted", label: "Contacted" },
+      { value: "Interested", label: "Interested" },
+      { value: "Unqualified", label: "Unqualified" },
+      { value: "Qualified", label: "Qualified" },
+      { value: "Lost", label: "Lost" },
+      { value: "Won", label: "Won" },
+      { value: "Churned", label: "Churned" },
+    ]);
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
   });
 
   test("?q searches the complete text column before the DISTINCT result limit", async () => {
@@ -893,6 +916,18 @@ describe("GET /api/contacts?filters=<JSON> — generic where-clause builder", ()
           { source: { contains: "Web" } },
         ],
       },
+    ]);
+  });
+
+  test("Generic status filters match canonical and legacy aliases during backfill", async () => {
+    const filters = [{ field: "status", operator: "contains", values: ["New", "Won"] }];
+    const res = await request(makeApp()).get(
+      `/api/contacts?includeCrmStatuses=true&filters=${encodeURIComponent(JSON.stringify(filters))}`,
+    );
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.findMany.mock.calls[0][0].where.AND).toEqual([
+      { status: { in: ["New", "Lead", "Won", "Customer"] } },
     ]);
   });
 

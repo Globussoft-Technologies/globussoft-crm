@@ -75,6 +75,26 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(keys.at(-1)).toBe('actions');
   });
 
+  test('generic Leads exposes Lead ID for filtering and workflow payloads only', async () => {
+    const generic = await request(makeApp()).get('/api/table-column-prefs/leads');
+
+    expect(generic.status).toBe(200);
+    expect(generic.body.availableColumns.find((column) => column.key === 'id')).toMatchObject({
+      label: 'Lead ID',
+      webhookField: 'contactId',
+      filterField: 'id',
+      filterKind: 'number',
+    });
+    expect(generic.body.visible).not.toContain('id');
+
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'travel' });
+    const travel = await request(makeApp()).get('/api/table-column-prefs/leads');
+    expect(travel.body.availableColumns.map((column) => column.key)).not.toContain('id');
+
+    const contacts = await request(makeApp()).get('/api/table-column-prefs/contacts');
+    expect(contacts.body.availableColumns.map((column) => column.key)).not.toContain('id');
+  });
+
   test('first-ever generic Leads load uses the compact calling-focused default', async () => {
     const res = await request(makeApp()).get('/api/table-column-prefs/leads');
 

@@ -13,7 +13,6 @@
 
 const CONTACT_ID_CHILDREN = [
   ["leadCustomFieldValue", "contactId"],
-  ["webFormSubmission", "contactId"],
   ["savedContactViewMember", "contactId"],
   ["activity", "contactId"],
   ["deal", "contactId"],
@@ -163,6 +162,22 @@ async function removeContactsFromAssignmentProfiles(tx, ids) {
 async function deleteContactsDependents(tx, ids) {
   const contactId = ids.length === 1 ? ids[0] : { in: ids };
   await removeContactsFromAssignmentProfiles(tx, ids);
+
+  // Generic Web Form submissions are historical snapshots owned by the
+  // form, not disposable Contact details. Detach them so the Generic CRM
+  // form-leads popup can retain the submitted values and mark the row red
+  // after its Lead is deleted. Other verticals retain the existing cleanup
+  // policy. The schema relation is nullable/onDelete:SetNull; doing this
+  // explicitly keeps the behavior deterministic before Contact deletion.
+  if (tx.webFormSubmission?.updateMany && tx.webFormSubmission?.deleteMany) {
+    await optionalDeleteMany(() => tx.webFormSubmission.updateMany({
+      where: { contactId, scope: "generic" },
+      data: { contactId: null },
+    }));
+    await optionalDeleteMany(() => tx.webFormSubmission.deleteMany({
+      where: { contactId, scope: { not: "generic" } },
+    }));
+  }
 
   // TMC parent links have two required Contact foreign keys, so they need a
   // compound OR rather than the simple contactId loop below.

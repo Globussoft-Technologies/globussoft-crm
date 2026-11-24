@@ -403,6 +403,8 @@ export default function ColumnPicker({
     .filter(matchesSearch);
   const hidden = filtered.filter((c) => !shownKeys.has(c.key));
   const deletableHidden = hidden.filter((column) => deletableColumns.some((item) => item.key === column.key));
+  const hasSelectedDeleteFields = selectedDeleteKeys.length > 0;
+  const showGenericLeadClearSelection = tableKey === "leads" && Boolean(density);
 
   return (
     <div ref={wrapRef} className={density ? 'leads-view-control' : undefined} style={{ position: "relative", display: "inline-block" }}>
@@ -577,11 +579,12 @@ export default function ColumnPicker({
                   {deletableHidden.length > 0 && (
                     <button
                       type="button"
-                      onClick={() => setSelectedDeleteKeys((current) => current.length === deletableHidden.length ? [] : deletableHidden.map((column) => column.key))}
+                      onClick={() => setSelectedDeleteKeys(hasSelectedDeleteFields ? [] : deletableHidden.map((column) => column.key))}
                       className="btn-secondary"
+                      aria-label={hasSelectedDeleteFields ? "Clear field deletion selection" : "Select all hidden fields for deletion"}
                       style={{ fontSize: "0.7rem", padding: "0.2rem 0.45rem" }}
                     >
-                      {selectedDeleteKeys.length === deletableHidden.length ? "Clear selection" : "Select all"}
+                      {hasSelectedDeleteFields ? "Clear selection" : "Select all"}
                     </button>
                   )}
                 </div>
@@ -636,7 +639,24 @@ export default function ColumnPicker({
               <div style={{ padding: "0.75rem", fontSize: "0.85rem", color: "var(--text-secondary)" }}>No matching fields.</div>
             )}
           </div>
-          {onManageFields && <button type="button" onClick={() => { setOpen(false); onManageFields(); }} style={{ textAlign: 'left', padding: '12px 16px', border: 0, borderTop: '1px solid var(--border-color)', background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '.78rem' }}>Manage lead fields</button>}
+          {(onManageFields || showGenericLeadClearSelection) && (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", padding: "0 0.75rem", borderTop: "1px solid var(--border-color)" }}>
+              {onManageFields
+                ? <button type="button" onClick={() => { setOpen(false); onManageFields(); }} style={{ textAlign: 'left', padding: '12px 4px', border: 0, background: 'transparent', color: 'var(--text-primary)', cursor: 'pointer', fontSize: '.78rem' }}>Manage lead fields</button>
+                : <span />}
+              {showGenericLeadClearSelection && hasSelectedDeleteFields && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedDeleteKeys([])}
+                  className="btn-secondary"
+                  aria-label="Clear selected fields for deletion"
+                  style={{ fontSize: "0.7rem", padding: "0.2rem 0.45rem" }}
+                >
+                  Clear selection
+                </button>
+              )}
+            </div>
+          )}
           <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", padding: "0.6rem 0.75rem", borderTop: "1px solid var(--border-color)" }}>
             <button type="button" onClick={handleReset} disabled={saving} className="btn-secondary" style={{ fontSize: "0.8rem", padding: "0.4rem 0.8rem" }}>
               Reset

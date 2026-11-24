@@ -83,6 +83,7 @@ const SYSTEM_FIELD_GROUPS = [
   {
     name: "Basic Information",
     fields: [
+      { id: "id", label: "Lead ID", fieldType: "number", readOnly: true },
       { id: "email", label: "Email", fieldType: "text", required: true, quickAdd: true, unique: true },
       { id: "name", label: "Full name", fieldType: "text", quickAdd: true },
       { id: "company", label: "Company", fieldType: "text", quickAdd: true },
@@ -163,7 +164,7 @@ const LEAD_DETAIL_FIELD_KEYS = new Set([
 const TABLE_CONTROL_FIELD_KEYS = new Set(["actions"]);
 const TELEPHONE_FIELD_KEYS = new Set(["phone", "whatsappPhone"]);
 const ATTRIBUTION_FIELD_KEYS = new Set(["firstTouchSource", "lastTouchSource"]);
-const NUMBER_FIELD_KEYS = new Set(["aiScore", "companySize", "callifiedScore"]);
+const NUMBER_FIELD_KEYS = new Set(["id", "aiScore", "companySize", "callifiedScore"]);
 const DATE_FIELD_KEYS = new Set(["createdAt", "lastUpdated", "submittedAt", "birthDate", "anniversary"]);
 const URL_FIELD_KEYS = new Set(["website", "linkedin", "pageUrl", "referrerUrl", "landingPageUrl"]);
 const OPTION_FIELD_KEYS = new Set(["source", "status", "assignedTo"]);
@@ -171,7 +172,7 @@ const AUTOMATIC_FIELD_KEYS = new Set([
   ...UTM_FIELD_KEYS,
   ...WEB_ATTRIBUTION_FIELD_KEYS,
   ...CALLIFIED_FIELD_KEYS,
-  "aiScore", "createdAt", "lastUpdated", "location", "pickupLocation", "plotAssign",
+  "id", "aiScore", "createdAt", "lastUpdated", "location", "pickupLocation", "plotAssign",
   "overallPickupStatus", "actions",
 ]);
 
@@ -194,6 +195,15 @@ function inferSystemFieldType(key) {
   if (key === "tags") return "multiselect";
   if (key === "note") return "textarea";
   return "text";
+}
+
+function normalizeFieldKey(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 50);
 }
 
 function sortFieldsBySavedOrder(fields, savedOrder) {
@@ -664,6 +674,7 @@ export default function LeadFields({
   const [newPlaceholder, setNewPlaceholder] = useState("");
   const [newRequired, setNewRequired] = useState(false);
   const [newFieldGroup, setNewFieldGroup] = useState("Custom Fields");
+  const [newLabelError, setNewLabelError] = useState("");
   const [savingNew, setSavingNew] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
   const [reordering, setReordering] = useState(false);
@@ -775,14 +786,38 @@ export default function LeadFields({
     setNewPlaceholder("");
     setNewRequired(false);
     setNewFieldGroup("Custom Fields");
+    setNewLabelError("");
+  };
+
+  const validateNewFieldLabel = () => {
+    if (!(showSystemFields && tenant?.vertical === "generic")) return true;
+    const trimmedLabel = newLabel.trim();
+    if (!trimmedLabel) {
+      setNewLabelError("Label is required.");
+      return false;
+    }
+    const candidateKey = normalizeFieldKey(trimmedLabel);
+    const systemFields = buildSystemFieldGroups(tableColumnCatalog, fieldConfig.fieldOrder)
+      .flatMap((group) => group.fields);
+    const duplicateExists = [...systemFields, ...fields].some((field) => (
+      [field.id, field.fieldKey, field.label]
+        .map(normalizeFieldKey)
+        .filter(Boolean)
+        .includes(candidateKey)
+    ));
+    setNewLabelError(duplicateExists ? "A field with this name already exists." : "");
+    return !duplicateExists;
   };
 
   const handleCreate = async () => {
     const trimmedLabel = newLabel.trim();
     if (!trimmedLabel) {
-      notify.error("Label is required");
+      if (showSystemFields && tenant?.vertical === "generic") setNewLabelError("Label is required.");
+      else notify.error("Label is required");
       return;
     }
+    const isGenericFieldConfig = showSystemFields && tenant?.vertical === "generic";
+    if (isGenericFieldConfig && !validateNewFieldLabel()) return;
     if (FIELD_TYPES_WITH_OPTIONS.has(newFieldType)) {
       const opts = newOptionsText.split(",").map((o) => o.trim()).filter(Boolean);
       if (!opts.length) {
@@ -807,6 +842,7 @@ export default function LeadFields({
       const created = await fetchApi("/api/lead-custom-fields", {
         method: "POST",
         body: JSON.stringify(body),
+        ...(isGenericFieldConfig ? { silent: true } : {}),
       });
       if (showSystemFields && created?.id && newFieldGroup !== "Custom Fields") {
         await persistFieldConfig({
@@ -821,7 +857,11 @@ export default function LeadFields({
       resetCreateForm();
       await load({ silent: true });
     } catch (err) {
-      notify.error(err?.message || "Failed to create field");
+      if (isGenericFieldConfig && ["DUPLICATE_FIELD_KEY", "RESERVED_FIELD_KEY"].includes(err?.code)) {
+        setNewLabelError("A field with this name already exists.");
+      } else {
+        notify.error(err?.message || "Failed to create field");
+      }
     } finally {
       setSavingNew(false);
     }
@@ -1296,6 +1336,7 @@ export default function LeadFields({
 
     const openCreateField = (groupKey = "Custom Fields") => {
       setNewFieldGroup(groupKey);
+      setNewLabelError("");
       setCreating(true);
     };
 
@@ -1393,7 +1434,7 @@ export default function LeadFields({
               <button type="button" className="field-config-icon-button" onClick={resetCreateForm} aria-label="Close add field">×</button>
             </div>
             <div className="field-config-create-grid">
-              <FormField label="Label" htmlFor="fc-new-label"><input id="fc-new-label" className="input-field" value={newLabel} onChange={(event) => setNewLabel(event.target.value)} placeholder="e.g. Referral Source" maxLength={80} /></FormField>
+              <FormField label="Label" htmlFor="fc-new-label" error={newLabelError}><input id="fc-new-label" className="input-field" value={newLabel} onChange={(event) => { setNewLabel(event.target.value); if (newLabelError) setNewLabelError(""); }} onBlur={validateNewFieldLabel} placeholder="e.g. Referral Source" maxLength={80} aria-invalid={Boolean(newLabelError)} /></FormField>
               <FormField label="Field type" htmlFor="fc-new-type"><select id="fc-new-type" className="input-field" value={newFieldType} onChange={(event) => setNewFieldType(event.target.value)}>{FIELD_TYPE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></FormField>
               <FormField label="Group" htmlFor="fc-new-group"><select id="fc-new-group" className="input-field" value={newFieldGroup} onChange={(event) => setNewFieldGroup(event.target.value)}><option value="Custom Fields">Custom Fields</option>{fieldConfig.customGroups.map((group) => <option key={group.id} value={group.id}>{group.name}</option>)}</select></FormField>
               {FIELD_TYPES_WITH_OPTIONS.has(newFieldType) ? <FormField label="Choices" htmlFor="fc-new-options"><input id="fc-new-options" className="input-field" value={newOptionsText} onChange={(event) => setNewOptionsText(event.target.value)} placeholder="Google, Referral, Event" /></FormField> : null}

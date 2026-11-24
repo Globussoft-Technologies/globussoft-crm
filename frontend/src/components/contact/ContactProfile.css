@@ -335,18 +335,21 @@ body[data-vertical="generic"] .cp-ov-side .cp-timeline { flex: 0 1 auto; height:
 .cp-lifecycle-row--generic .cp-generic-status-new { --cp-stage-bg: #e8eaed; --cp-stage-current: #cbd5e1; }
 .cp-lifecycle-row--generic .cp-generic-status-contacted { --cp-stage-bg: #dbeafe; --cp-stage-current: #93c5fd; }
 .cp-lifecycle-row--generic .cp-generic-status-interested { --cp-stage-bg: #dbeafe; --cp-stage-current: #60a5fa; }
+.cp-lifecycle-row--generic .cp-generic-status-interested-unqualified { --cp-stage-bg: #dbeafe; --cp-stage-current: #60a5fa; }
 .cp-lifecycle-row--generic .cp-generic-status-qualified-lost { --cp-stage-bg: #ede9fe; --cp-stage-current: #c4b5fd; }
 .cp-lifecycle-row--generic .cp-generic-status-junk-unqualified { --cp-stage-bg: #fef3c7; --cp-stage-current: #fcd34d; }
 .cp-lifecycle-row--generic .cp-generic-status-won-churned { --cp-stage-bg: #dcfce7; --cp-stage-current: #86efac; }
 .cp-lifecycle-row--generic .cp-generic-status-new,
 .cp-lifecycle-row--generic .cp-generic-status-contacted,
 .cp-lifecycle-row--generic .cp-generic-status-interested,
+.cp-lifecycle-row--generic .cp-generic-status-interested-unqualified,
 .cp-lifecycle-row--generic .cp-generic-status-qualified-lost,
 .cp-lifecycle-row--generic .cp-generic-status-junk-unqualified,
 .cp-lifecycle-row--generic .cp-generic-status-won-churned { background: var(--cp-stage-bg); color: #243b57; }
 .cp-lifecycle-row--generic .cp-chev.current.cp-generic-status-new,
 .cp-lifecycle-row--generic .cp-chev.current.cp-generic-status-contacted,
 .cp-lifecycle-row--generic .cp-chev.current.cp-generic-status-interested,
+.cp-lifecycle-row--generic .cp-chev.current.cp-generic-status-interested-unqualified,
 .cp-lifecycle-row--generic .cp-chev.current.cp-generic-status-qualified-lost,
 .cp-lifecycle-row--generic .cp-chev.current.cp-generic-status-junk-unqualified,
 .cp-lifecycle-row--generic .cp-chev.current.cp-generic-status-won-churned { background: var(--cp-stage-current); color: #172f4d; font-weight: 700; }

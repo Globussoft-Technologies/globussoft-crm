@@ -112,6 +112,7 @@ const GENERIC_CONTACT_FIELD_OPTIONS = [
   label: GENERIC_TABLE_FIELD_LABELS[item.value] || item.label,
 }));
 const GENERIC_AUTOMATIC_TABLE_FIELDS = [
+  ["contactId", "Lead ID"],
   ["pageUrl", "Page URL"],
   ["pageTitle", "Page Title"],
   ["pageSource", "Page Source"],
@@ -144,6 +145,17 @@ const GENERIC_AUTOMATIC_TABLE_FIELDS = [
   ["operatingSystem", "Operating System"],
   ["deviceType", "Device Type"],
 ].map(([value, label]) => ({ value, label }));
+
+const normalizeGenericFieldIdentity = (value) => String(value || "")
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, "_")
+  .replace(/^_+|_+$/g, "");
+const GENERIC_RESERVED_FIELD_IDENTITIES = new Set(
+  [...GENERIC_CONTACT_FIELD_OPTIONS, ...GENERIC_AUTOMATIC_TABLE_FIELDS]
+    .flatMap((field) => [field.value, field.label])
+    .map(normalizeGenericFieldIdentity),
+);
 
 const CONTACT_FIELD_LABELS = Object.fromEntries(ALL_CONTACT_FIELD_OPTIONS.map((item) => [item.value, item.label]));
 
@@ -6533,8 +6545,19 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], scope =
 
 
   const leadItems = (() => {
-    const seen = new Set((leadFields || []).map((item) => item.fieldKey));
-    const effective = [...(leadFields || []), ...FALLBACK_LEAD_CUSTOM_FIELDS.filter((item) => !seen.has(item.fieldKey))];
+    const safeLeadFields = scope === "generic"
+      ? (leadFields || []).filter((item) => (
+        !GENERIC_RESERVED_FIELD_IDENTITIES.has(normalizeGenericFieldIdentity(item.fieldKey))
+        && !GENERIC_RESERVED_FIELD_IDENTITIES.has(normalizeGenericFieldIdentity(item.label))
+      ))
+      : (leadFields || []);
+    const seen = new Set(safeLeadFields.map((item) => item.fieldKey));
+    const effective = [...safeLeadFields, ...FALLBACK_LEAD_CUSTOM_FIELDS.filter((item) => (
+      !seen.has(item.fieldKey)
+      && (scope !== "generic"
+        || (!GENERIC_RESERVED_FIELD_IDENTITIES.has(normalizeGenericFieldIdentity(item.fieldKey))
+          && !GENERIC_RESERVED_FIELD_IDENTITIES.has(normalizeGenericFieldIdentity(item.label))))
+    ))];
     return effective
       .filter((item) => matches(item.label, item.fieldKey))
       .map((item) => ({
@@ -21188,6 +21211,8 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
           onClose={() => setLeadFieldModalOpen(false)}
           onCreated={handleLeadFieldCreated}
           notify={notify}
+          existingFields={leadFields}
+          reservedFields={[...GENERIC_CONTACT_FIELD_OPTIONS, ...GENERIC_AUTOMATIC_TABLE_FIELDS]}
         />
       ) : null}
     </div>

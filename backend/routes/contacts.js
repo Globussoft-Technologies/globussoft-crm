@@ -76,6 +76,7 @@ function canonicalAttachmentUrl(fileUrl) {
 // actual first/last result. Keep this allowlist explicit so a query parameter
 // can never become an arbitrary Prisma property.
 const CONTACT_LIST_SORTS = Object.freeze({
+  id: (direction) => ({ id: direction }),
   name: (direction) => ({ name: direction }),
   email: (direction) => ({ email: direction }),
   phone: (direction) => ({ phone: direction }),
@@ -379,6 +380,51 @@ const WELLNESS_CONTACT_LIFECYCLE_STAGES = {
   lost_lead: { label: "Lost Lead", status: "Churned", negative: true },
 };
 
+// Generic CRM status compatibility. Existing rows may still contain the
+// pre-v3.9 lifecycle values; filters must treat them as their replacement
+// values until the idempotent boot backfill has updated every Generic tenant.
+const GENERIC_STATUS_ALIASES = Object.freeze({
+  New: ["New", "Lead"],
+  Contacted: ["Contacted", "Prospect"],
+  Interested: ["Interested"],
+  Unqualified: ["Unqualified", "Junk"],
+  Qualified: ["Qualified"],
+  Lost: ["Lost"],
+  Won: ["Won", "Customer"],
+  Churned: ["Churned"],
+});
+const GENERIC_PERSISTED_STATUS_BY_LABEL = Object.freeze({
+  New: "Lead",
+});
+const GENERIC_STATUS_LABEL_BY_VALUE = Object.freeze(
+  Object.fromEntries(
+    Object.entries(GENERIC_STATUS_ALIASES).flatMap(([label, values]) =>
+      values.map((value) => [value.toLowerCase(), label]),
+    ),
+  ),
+);
+
+function genericStatusAliases(values) {
+  return [...new Set(values.flatMap((raw) => {
+    const value = String(raw || "").trim();
+    const label = GENERIC_STATUS_LABEL_BY_VALUE[value.toLowerCase()] || value;
+    return GENERIC_STATUS_ALIASES[label] || [value];
+  }).filter(Boolean))];
+}
+
+function normalizeGenericPersistedStatus(status) {
+  const value = String(status || "").trim();
+  return GENERIC_PERSISTED_STATUS_BY_LABEL[value] || value;
+}
+
+function buildGenericStatusFilterClause(operator, values) {
+  const aliases = genericStatusAliases(values);
+  if (aliases.length === 0) return null;
+  if (operator === "contains") return { status: { in: aliases } };
+  if (operator === "not_contains") return { status: { notIn: aliases } };
+  return null;
+}
+
 function validateContactInput(
   body,
   { isUpdate = false, requireEmail = !isUpdate, allowedStatuses = LEGACY_CONTACT_STATUSES } = {},
@@ -611,6 +657,7 @@ async function canReassignLead(req, contact) {
 //              mirror the Lead Score dropdown Contacts.jsx already ships
 //              (SCORE_BUCKETS), so both surfaces offer the same choices.
 const FILTERABLE_FIELDS = {
+  id: { column: "id", kind: "number", label: "Lead ID", required: true, verticals: ["generic"] },
   name: { column: "name", kind: "text", label: "Name", required: true },
   firstName: { column: "name", kind: "text", label: "First Name", required: true, verticals: ["generic"], namePart: "first" },
   lastName: { column: "name", kind: "text", label: "Last Name", required: true, verticals: ["generic"], namePart: "last" },
@@ -1899,6 +1946,12 @@ router.get("/", async (req, res) => {
         // same normalization as the table and direct query filter.
         if (
           (req.user.vertical || "generic") === "generic" &&
+          f.field === "status" &&
+          ["contains", "not_contains"].includes(f.operator)
+        ) {
+          clause = buildGenericStatusFilterClause(f.operator, rawValues);
+        } else if (
+          (req.user.vertical || "generic") === "generic" &&
           f.field === "callifiedLeadStatus" &&
           f.operator === "contains" &&
           rawValues.some((value) => String(value) === CALL_STATUS.YET_TO_CALL)
@@ -2491,6 +2544,13 @@ router.get("/filter-values/:field", async (req, res) => {
         .filter((option) => !normalizedSearch || option.label.toLowerCase().includes(normalizedSearch));
       return res.json({ values });
     }
+    if (req.params.field === "status" && genericLeadsPageScope) {
+      const normalizedSearch = valueSearch.toLowerCase();
+      const values = Object.keys(GENERIC_STATUS_ALIASES)
+        .filter((status) => !normalizedSearch || status.toLowerCase().includes(normalizedSearch))
+        .map((status) => ({ value: status, label: status }));
+      return res.json({ values });
+    }
     if (req.params.field === "territoryId") {
       const territories = await prisma.territory.findMany({
         where: { tenantId },
@@ -2985,6 +3045,9 @@ router.post("/", requireContactOrLeadWrite, async (req, res) => {
           ? req.body.name.trim()
           : req.body.name,
     };
+    if (isGenericCrmRequest(req) && normalised.status) {
+      normalised.status = normalizeGenericPersistedStatus(normalised.status);
+    }
     if (isGenericCrmRequest(req) && normalised.phone) {
       normalised.phone = normalizeGenericCrmPhone(normalised.phone);
     }
@@ -3012,12 +3075,12 @@ router.post("/", requireContactOrLeadWrite, async (req, res) => {
     // Explicit assignedToId still wins, and non-generic contact creation keeps the existing creator default.
     const isGenericLeadAwaitingCall =
       (req.user.vertical || "generic") === "generic" &&
-      normalised.status === (isGenericCrmRequest(req) ? "New" : "Lead") &&
+      normalised.status === "Lead" &&
       (!normalised.callifiedLeadStatus ||
         normalised.callifiedLeadStatus === "yet_to_call");
     const shouldSkipInitialAssignee =
       isGenericLeadAwaitingCall ||
-      (skipInitialAssignee && normalised.status === (isGenericCrmRequest(req) ? "New" : "Lead"));
+      (skipInitialAssignee && normalised.status === "Lead");
     if (normalised.assignedToId == null && !shouldSkipInitialAssignee) {
       normalised.assignedToId = req.user.userId;
     }
@@ -3789,6 +3852,9 @@ const updateContactById = async (req, res) => {
     if (inputErr) return res.status(inputErr.status).json(inputErr);
     // PRD Gap §1.1a/§1.1d — coerce date strings to Date objects (mirrors POST handler).
     const updateData = { ...req.body };
+    if (isGenericCrmRequest(req) && updateData.status) {
+      updateData.status = normalizeGenericPersistedStatus(updateData.status);
+    }
     if (isGenericCrmRequest(req) && updateData.phone) {
       updateData.phone = normalizeGenericCrmPhone(updateData.phone);
     }
@@ -4047,8 +4113,8 @@ const updateContactById = async (req, res) => {
     // rule author can subscribe specifically to conversion events.
     try {
       if (
-        existing.status === "Lead" &&
-        (contact.status === "Customer" || contact.status === "Prospect") &&
+        ["Lead", "New"].includes(existing.status) &&
+        ["Customer", "Prospect", "Won", "Contacted"].includes(contact.status) &&
         existing.status !== contact.status
       ) {
         require("../lib/eventBus").emitEvent(
@@ -4222,16 +4288,19 @@ router.post("/import-csv", requireContactOrLeadWrite, async (req, res) => {
           errors.push(`Row ${rowNum}: invalid email (${email})`);
           continue;
         }
-        const status = String(row.status || "Lead").trim();
+        const submittedStatus = String(row.status || "Lead").trim();
         const allowedStatuses = isGenericCrmRequest(req)
           ? new Set(GENERIC_ACCEPTED_CONTACT_STATUSES)
           : ALLOWED_STATUSES;
-        if (!allowedStatuses.has(status)) {
+        if (!allowedStatuses.has(submittedStatus)) {
           errors.push(
-            `Row ${rowNum}: invalid status "${status}" (allowed: ${[...allowedStatuses].join(", ")})`,
+            `Row ${rowNum}: invalid status "${submittedStatus}" (allowed: ${[...allowedStatuses].join(", ")})`,
           );
           continue;
         }
+        const status = isGenericCrmRequest(req)
+          ? normalizeGenericPersistedStatus(submittedStatus)
+          : submittedStatus;
 
         // email is globally unique, so any tenant collision skips
         const existing = await prisma.contact.findFirst({ where: { email } });

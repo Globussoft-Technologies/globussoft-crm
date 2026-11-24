@@ -2678,6 +2678,9 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(sourceBadge.style.backgroundColor).toBe('var(--source-badge-bg, rgba(139, 92, 246, 0.16))');
     expect(sourceBadge.style.color).toBe('var(--source-badge-text, var(--text-primary))');
     expect(sourceBadge.style.border).toBe('1px solid var(--border-color)');
+    expect(screen.queryByRole('button', { name: /Edit Source for/i })).toBeNull();
+    fireEvent.click(sourceBadge);
+    expect(screen.queryByRole('combobox', { name: /Edit Source for/i })).toBeNull();
   });
 
   it('keeps source pills and assignment controls aligned inside their columns', async () => {
@@ -3039,6 +3042,32 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(within(emptyDialog).getByRole('status')).toHaveTextContent(
       'Add filters to narrow down the contacts you want to see.',
     );
+  });
+
+  it('offers Lead ID in the Generic CRM filter field picker', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: ['name'],
+          // Simulate a rolling deploy where this catalogue is still old.
+          availableColumns: [{ key: 'name', label: 'Name' }],
+        });
+      }
+      if (url === '/api/contacts/filter-fields' && opts?.silent === true) {
+        return Promise.resolve({
+          fields: [{ field: 'callifiedLeadStatus', label: 'Call Status', kind: 'text' }],
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH);
+    await screen.findByText('Alice Smith');
+    fireEvent.click(screen.getByRole('button', { name: /^Filter by$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /^Filters$/i });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
+    fireEvent.change(within(dialog).getByPlaceholderText('Add a field to filter'), { target: { value: 'lead' } });
+    expect(within(dialog).getByRole('button', { name: 'Lead ID' })).toBeInTheDocument();
   });
 
   it('shows Generic CRM lifecycle stages under Status', async () => {
@@ -5242,6 +5271,36 @@ describe('Leads Web Form column (generic CRM only)', () => {
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
+  it('shows duplicate Lead Field errors below the Label input', async () => {
+    const baseFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/lead-custom-fields' && opts?.method === 'POST') {
+        const error = new Error('A built-in field with this name already exists');
+        error.code = 'RESERVED_FIELD_KEY';
+        return Promise.reject(error);
+      }
+      return baseFetch(url, opts);
+    });
+    renderLeads(genericAuth);
+    await screen.findByText('Form Lead');
+
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage lead fields' }));
+    const dialog = await screen.findByRole('dialog', { name: /Add Lead Field/i });
+    const labelInput = within(dialog).getByPlaceholderText('e.g. Referral Source');
+    fireEvent.change(labelInput, { target: { value: 'Phone' } });
+    fireEvent.blur(labelInput);
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('A field with this name already exists.');
+    expect(labelInput).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.click(within(dialog).getByRole('button', { name: /Save Field/i }));
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      '/api/lead-custom-fields',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(notifyError).not.toHaveBeenCalledWith('A built-in field with this name already exists');
+  });
+
   it('opens the tenant-scoped field manager from Travel CRM Lead Fields', async () => {
     renderLeads(travelAuth);
     await screen.findByText('Form Lead');
@@ -5384,7 +5443,7 @@ describe('Leads extended Freshsales-parity columns', () => {
     expect(screen.getByText('Aarav')).toBeInTheDocument();
     expect(screen.getByText('Sharma')).toBeInTheDocument();
     expect(screen.getByText('Chief Executive')).toBeInTheDocument();
-    expect(await screen.findByText('New')).toBeInTheDocument();
+    expect(await screen.findAllByText('New')).toHaveLength(2);
     expect(screen.getByText('Logistics')).toBeInTheDocument();
     expect(screen.getByText('Invalid employee count', { exact: true })).toBeInTheDocument();
     expect(screen.getByText('Met at expo')).toBeInTheDocument();
@@ -5436,9 +5495,20 @@ describe('Leads extended Freshsales-parity columns', () => {
     });
 
     renderLeads(genericAuth);
-    await screen.findByText('New');
-    fireEvent.click(screen.getByRole('button', { name: 'Edit Status for Aarav Sharma' }));
-    fireEvent.change(screen.getByRole('combobox', { name: 'Edit Status for Aarav Sharma' }), {
+    const statusSelect = await screen.findByRole('combobox', { name: 'Edit Status for Aarav Sharma' });
+    expect(within(statusSelect).getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'Select',
+      'New',
+      'Contacted',
+      'Interested',
+      'Unqualified',
+      'Qualified',
+      'Lost',
+      'Won',
+      'Churned',
+    ]);
+    expect(statusSelect).toHaveValue('Lead');
+    fireEvent.change(statusSelect, {
       target: { value: 'Won' },
     });
 

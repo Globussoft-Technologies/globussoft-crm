@@ -780,6 +780,11 @@ describe('WebForms builder page', () => {
 
     expect(await screen.findByText('CONTACT FIELDS')).toBeInTheDocument();
 
+    const picker = screen.getByPlaceholderText('Type to search').closest('.wf-field-picker');
+    const leadIdItem = within(picker).getByText('Lead ID').closest('.wf-field-picker-item');
+    expect(within(leadIdItem).getByText('automatic')).toBeInTheDocument();
+    expect(leadIdItem.tagName).toBe('DIV');
+
     expect(screen.queryByText('Contact and lead custom fields')).toBeNull();
 
     expect(screen.getByText('Submit source')).toBeInTheDocument();
@@ -901,6 +906,53 @@ describe('WebForms builder page', () => {
     expect(within(addedItem).getByText('Added')).toBeInTheDocument();
   }, 10000); // Multi-dialog integration flow needs headroom on loaded CI runners.
 
+  test('shows duplicate field API errors below the Generic lead-field label', async () => {
+    renderPage(FORM_FIXTURE, [], undefined, (baseFetch) => {
+      fetchApiMock.mockImplementation((url, opts) => {
+        if (url === '/api/lead-custom-fields' && opts?.method === 'POST') {
+          const error = new Error('A built-in field with this name already exists');
+          error.code = 'RESERVED_FIELD_KEY';
+          return Promise.reject(error);
+        }
+        return baseFetch(url, opts);
+      });
+    });
+
+    await openBuilder();
+    fireEvent.click(screen.getByRole('button', { name: /Add contact fields/i }));
+    const picker = screen.getByPlaceholderText('Type to search').closest('.wf-field-picker');
+    fireEvent.click(within(picker).getByRole('button', { name: /Add lead custom field/i }));
+
+    const dialog = await screen.findByRole('dialog', { name: /Add Lead Field/i });
+    const labelInput = within(dialog).getByPlaceholderText('e.g. Referral Source');
+    fireEvent.change(labelInput, { target: { value: 'Phone' } });
+    fireEvent.blur(labelInput);
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('A field with this name already exists.');
+    expect(labelInput).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.click(within(dialog).getByRole('button', { name: /Save Field/i }));
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      '/api/lead-custom-fields',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(notifySuccess).not.toHaveBeenCalledWith('Field created');
+  });
+
+  test('hides legacy custom fields that collide with Generic built-in fields', async () => {
+    renderPage(FORM_FIXTURE, [
+      { id: 9, fieldKey: 'phone', label: 'Phone', fieldType: 'text' },
+      { id: 10, fieldKey: 'company_phone', label: 'Company phone', fieldType: 'text' },
+    ]);
+
+    await openBuilder();
+    fireEvent.click(screen.getByRole('button', { name: /Add contact fields/i }));
+    const picker = screen.getByPlaceholderText('Type to search').closest('.wf-field-picker');
+
+    expect(within(picker).getByRole('button', { name: /^Phonephone$/i })).toBeInTheDocument();
+    expect(within(picker).queryByRole('button', { name: /^Phonecustom$/i })).toBeNull();
+    expect(within(picker).getByRole('button', { name: /^Company phonecustom$/i })).toBeInTheDocument();
+  });
+
   test('does not show the lead-field plus action in the Travel form picker', async () => {
     renderTravelPage();
     await openBuilder();
@@ -910,6 +962,7 @@ describe('WebForms builder page', () => {
     const picker = search.closest('.wf-field-picker');
     expect(picker).not.toBeNull();
     expect(within(picker).getByText('CONTACT FIELDS')).toBeInTheDocument();
+    expect(within(picker).queryByText('Lead ID')).toBeNull();
     expect(within(picker).queryByRole('button', { name: /Add lead custom field/i })).toBeNull();
   }, 10000); // Loaded CI runners can exceed 5s rendering this multi-step builder flow.
 

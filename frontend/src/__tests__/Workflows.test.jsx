@@ -715,4 +715,31 @@ describe("Workflows page", () => {
     expect(screen.getByRole("checkbox", { name: "UTM Source" })).toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: "Custom field 198" })).not.toBeInTheDocument();
   });
+
+  it("offers Lead ID in Generic CRM workflow conditions and webhook fields", async () => {
+    const user = userEvent.setup();
+    fetchApiMock.mockImplementation((path) => {
+      if (path === "/api/table-column-prefs/leads") {
+        return Promise.resolve({
+          availableColumns: [
+            { key: "id", label: "Lead ID", webhookField: "contactId", filterField: "id", filterKind: "number" },
+            { key: "name", label: "Name" },
+          ],
+          visible: ["name"],
+        });
+      }
+      return mockApi(path);
+    });
+
+    render(<AuthContext.Provider value={{ tenant: { vertical: "generic" } }}><Workflows /></AuthContext.Provider>);
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/table-column-prefs/leads", { silent: true }));
+    await user.click(screen.getByRole("button", { name: /create workflow/i }));
+    await user.click(screen.getByRole("combobox", { name: "Condition 1 field 1" }));
+    expect(within(screen.getByRole("listbox", { name: "Condition 1 field 1" }))
+      .getByRole("option", { name: "Lead ID" })).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByRole("combobox", { name: "Action 1" }), "send_webhook");
+    await user.click(screen.getByRole("button", { name: /edit webhook settings/i }));
+    expect(screen.getByRole("checkbox", { name: "Lead ID" })).toBeInTheDocument();
+  });
 });

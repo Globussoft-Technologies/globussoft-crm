@@ -34,6 +34,7 @@ router.use(async (req, res, next) => {
         code: "VERTICAL_NOT_SUPPORTED",
       });
     }
+    res.locals.tenantVertical = tenant.vertical;
     next();
   } catch (err) {
     console.error("[lead-custom-fields] vertical-check error:", err && err.message);
@@ -53,6 +54,34 @@ function slugifyLabel(label) {
     .replace(/^_+|_+$/g, "")
     .slice(0, 50);
 }
+
+// Generic CRM built-in fields and custom fields share several consumers that
+// address fields by key (Leads columns, Web Forms, imports, and quick-add).
+// A custom definition using one of these keys would shadow the built-in field
+// in key-indexed consumers. Include both canonical keys and displayed aliases
+// so labels such as "Full name" cannot recreate the built-in `name` field.
+const GENERIC_RESERVED_FIELD_KEYS = new Set([
+  "name", "full name", "email", "phone", "mobile", "whatsappPhone", "whatsapp number", "whatsapp phone",
+  "company", "aiScore", "lead score", "source", "webForm", "web form", "lifecycleStage", "lifecycleStageKey",
+  "lifecycle stage", "medium", "location", "pickupLocation", "pickup location", "plotAssign", "plot assign",
+  "overallPickupStatus", "overall status", "tags", "assignedTo", "assignedToId", "assigned to", "sales owner",
+  "createdAt", "created", "campaign", "callified campaign", "callStatus", "call status", "callifiedAi",
+  "callified ai call", "callifiedScore", "callified score", "status", "title", "job title", "firstName",
+  "first name", "lastName", "last name", "website", "website url", "linkedin", "industry", "service type",
+  "companySize", "company size", "no of employee", "subBrand", "sub-brand", "description", "note", "stateCode",
+  "state", "lastUpdated", "last updated", "firstTouchSource", "first touch source", "lastTouchSource",
+  "last touch source", "pageUrl", "page url", "pageTitle", "page title", "pageSource", "page source",
+  "referrerUrl", "referrer url", "landingPageUrl", "landing page url", "currentDomain", "current domain",
+  "formName", "form name", "utm_source", "utm source", "utm_medium", "utm medium", "utm_campaign",
+  "utm campaign", "utm_id", "utm id", "utm_term", "utm term", "utm_content", "utm content", "gclid",
+  "google click id", "gbraid", "google braid id", "wbraid", "google wbraid id", "fbclid", "meta click id",
+  "fbc", "meta click cookie", "fbp", "meta browser id", "campaign_id", "campaign id", "adset_id", "ad set id",
+  "ad_id", "ad id", "campaign_name", "campaign name", "adset_name", "ad set name", "ad_name", "ad name",
+  "placement", "site_source_name", "site source name", "submittedAt", "submission timestamp", "browser",
+  "operatingSystem", "operating system", "deviceType", "device type", "treatmentOfInterest",
+  "treatment of interest", "birthDate", "birth date", "anniversary", "gst", "gstin", "billingStateCode",
+  "billing state code", "actions",
+].map(slugifyLabel));
 
 // GET /api/lead-custom-fields — list this tenant's field definitions.
 // Open to all authenticated roles (USER/MANAGER need this to render the
@@ -134,6 +163,13 @@ router.post("/", adminOnly, async (req, res) => {
       });
     }
 
+    if (res.locals.tenantVertical === "generic" && GENERIC_RESERVED_FIELD_KEYS.has(fieldKey)) {
+      return res.status(409).json({
+        error: "A built-in field with this name already exists",
+        code: "RESERVED_FIELD_KEY",
+      });
+    }
+
     const existing = await prisma.leadCustomFieldDefinition.findUnique({
       where: { tenantId_fieldKey: { tenantId: req.user.tenantId, fieldKey } },
     });
@@ -165,6 +201,12 @@ router.post("/", adminOnly, async (req, res) => {
 
     res.status(201).json({ ...created, options: optionsJson ? JSON.parse(optionsJson) : null });
   } catch (err) {
+    if (err?.code === "P2002") {
+      return res.status(409).json({
+        error: "A field with this name already exists",
+        code: "DUPLICATE_FIELD_KEY",
+      });
+    }
     console.error("[lead-custom-fields] create error:", err && err.message);
     res.status(500).json({ error: "Failed to create lead custom field" });
   }
@@ -268,7 +310,9 @@ router.put("/:id", adminOnly, async (req, res) => {
 
 // DELETE /api/lead-custom-fields/:id — remove a field definition (ADMIN only).
 // Cascades to LeadCustomFieldValue rows (onDelete: Cascade in schema) — a
-// deleted field's stored values are removed too, not left orphaned.
+// deleted field's stored values are removed too, not left orphaned. Generic
+// web forms store their selected fields as JSON, so remove the deleted field
+// from those snapshots in the same transaction as well.
 router.delete("/:id", adminOnly, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
@@ -279,7 +323,49 @@ router.delete("/:id", adminOnly, async (req, res) => {
     });
     if (!existing) return res.status(404).json({ error: "Field not found" });
 
-    await prisma.leadCustomFieldDefinition.delete({ where: { id } });
+    const formUpdates = [];
+    if (res.locals.tenantVertical === "generic") {
+      const forms = await prisma.webForm.findMany({
+        where: { tenantId: req.user.tenantId, scope: "generic" },
+        select: { id: true, fieldsJson: true },
+      });
+
+      for (const form of forms) {
+        let fields;
+        try {
+          fields = JSON.parse(form.fieldsJson);
+        } catch (_err) {
+          continue;
+        }
+        if (!Array.isArray(fields)) continue;
+
+        const removedIds = new Set(fields
+          .filter((field) => field?.sourceKind === "lead_custom" && field?.sourceKey === existing.fieldKey)
+          .map((field) => String(field.id || ""))
+          .filter(Boolean));
+        const remainingFields = fields
+          .filter((field) => !(field?.sourceKind === "lead_custom" && field?.sourceKey === existing.fieldKey))
+          .map((field) => {
+            const condition = field?.showWhen;
+            if (!condition) return field;
+            const referencesDeletedField = condition.fieldKey === existing.fieldKey ||
+              (condition.fieldId != null && removedIds.has(String(condition.fieldId)));
+            return referencesDeletedField ? { ...field, showWhen: null } : field;
+          });
+
+        if (remainingFields.length !== fields.length) {
+          formUpdates.push(prisma.webForm.update({
+            where: { id: form.id },
+            data: { fieldsJson: JSON.stringify(remainingFields) },
+          }));
+        }
+      }
+    }
+
+    await prisma.$transaction([
+      ...formUpdates,
+      prisma.leadCustomFieldDefinition.delete({ where: { id } }),
+    ]);
     res.json({ success: true });
   } catch (err) {
     console.error("[lead-custom-fields] delete error:", err && err.message);

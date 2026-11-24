@@ -93,6 +93,7 @@ describe('<Dashboard />', () => {
     expect(screen.getByRole('combobox', { name: 'Dashboard date preset' })).toHaveValue('all');
     expect(screen.getByText('Total Deals').nextElementSibling).toHaveTextContent('3');
     expect(screen.getByText('Total Contacts').nextElementSibling).toHaveTextContent('2');
+    expect(screen.getByText('Total Contacts').closest('a')).toHaveAttribute('href', '/leads');
   });
 
   it('renders dashboard date controls with All time as the default', () => {

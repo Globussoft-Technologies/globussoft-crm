@@ -832,7 +832,9 @@ async function executeReceiverAction(action, enrollment, ctx, stepId = null) {
   }
   if (type === 'change_contact_status') {
     if (action.value) {
-      await prisma.contact.update({ where: { id: enrollment.contactId }, data: { status: String(action.value) } });
+      const submittedStatus = String(action.value);
+      const status = submittedStatus === 'New' ? 'Lead' : submittedStatus;
+      await prisma.contact.update({ where: { id: enrollment.contactId }, data: { status } });
     }
     return {};
   }

@@ -23,6 +23,11 @@ import { InlineField } from './ProfileWidgets';
 import TagPickerPopover from '../../pages/wellness/patients/TagPickerPopover';
 import { fetchApi } from '../../utils/api';
 import { AuthContext } from '../../appContexts';
+import {
+  GENERIC_LEAD_STATUS_EDIT_OPTIONS,
+  genericLeadStatusLabel,
+  genericLeadStatusValue,
+} from '../../utils/genericLeadStatus';
 import './ContactDetailsDrawer.css';
 
 const GROUPS = [{ key: 'basic', label: 'Basic information', openByDefault: true }];
@@ -291,6 +296,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     ? [formatWorkflowLabel(genericWorkflowDetails.currentStage), formatWorkflowLabel(genericWorkflowDetails.currentStatus)].filter(Boolean).join(': ')
     : contact?.overallPickupStatus || contact?.currentStatus || contact?.workflowStatus;
   const genericBasicFields = [
+    { label: 'Lead ID', key: 'leadId', value: contact?.id, readOnly: true },
     { label: 'Name', key: 'name', value: contact?.name },
     { label: 'External ID', key: 'externalId', value: contact?.externalId, readOnly: true },
     { label: 'Email', key: 'email', value: contact?.email },
@@ -310,7 +316,16 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     { label: 'Callified Campaign', key: 'campaign', value: contact?.callifiedCampaignName || contact?.callifiedCampaign?.name || contact?.callifiedCampaignId || customFields.campaign, readOnly: true },
     { label: 'Call Status', key: 'callStatus', value: contact?.callifiedLeadStatus || customFields.callStatus, readOnly: true },
     { label: 'Callified Score', key: 'callifiedScore', value: contact?.callifiedScore ?? customFields.callifiedScore, readOnly: true },
-    { label: 'Status', key: 'status', value: contact?.status },
+    {
+      label: 'Status',
+      key: 'status',
+      value: genericLeadStatusValue(contact?.status),
+      display: genericLeadStatusLabel(contact?.status),
+      type: 'select',
+      options: GENERIC_LEAD_STATUS_EDIT_OPTIONS,
+      editOnDisplayClick: true,
+      saveOnChange: true,
+    },
     { label: 'Job Title', key: 'title', value: contact?.title },
     { label: 'Website URL', key: 'website', value: contact?.website },
     { label: 'LinkedIn', key: 'linkedin', value: contact?.linkedin },
@@ -566,7 +581,16 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
   ) : field.readOnly ? (
     displayValue(field.value)
   ) : (
-    <InlineField value={field.value ?? ''} display={displayValue(field.value)} type={field.type === 'number' ? 'number' : 'text'} options={field.options || []} onSave={(value) => onFieldSave?.(field, value)} />
+    <InlineField
+      value={field.value ?? ''}
+      display={displayValue(field.display ?? field.value)}
+      type={field.key === 'status' ? 'select' : field.type === 'number' ? 'number' : 'text'}
+      options={field.options || []}
+      onSave={(value) => onFieldSave?.(field, value)}
+      editOnDisplayClick={field.editOnDisplayClick}
+      editLabel={field.label}
+      saveOnChange={field.saveOnChange}
+    />
   )}</div>;
 
   const renderFieldSection = (key, label, fields, { telephone = false } = {}) => {

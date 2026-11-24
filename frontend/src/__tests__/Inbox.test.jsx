@@ -70,6 +70,12 @@ const sampleContactTwo = {
   email: "muralidhar@travelstall.in",
 };
 
+const additionalSampleContacts = Array.from({ length: 6 }, (_, index) => ({
+  id: `extra-${index + 1}`,
+  name: `Additional Contact ${index + 1}`,
+  email: `additional-${index + 1}@x.in`,
+}));
+
 const samplePatient = {
   id: "p1",
   name: "Konica Sharma",
@@ -116,7 +122,7 @@ function defaultFetch(url, opts) {
       if (url.includes("folder=all")) return Promise.resolve([sampleSentEmail, sampleInboxEmail]);
       return Promise.resolve([sampleSentEmail, sampleInboxEmail]);
     }
-    if (url === "/api/contacts") return Promise.resolve([sampleContact, sampleContactTwo]);
+    if (url === "/api/contacts") return Promise.resolve([sampleContact, sampleContactTwo, ...additionalSampleContacts]);
     if (url === "/api/wellness/patients") return Promise.resolve({ patients: [samplePatient] });
     if (url === "/api/staff?fields=summary") return Promise.resolve(sampleStaffMembers);
   }
@@ -345,6 +351,19 @@ describe("<Inbox />", () => {
     expect(screen.getByLabelText(/^Bcc:$/)).toBeInTheDocument();
   });
 
+  it("keeps recipient suggestions beyond the first six available in the scrollable list", async () => {
+    const user = userEvent.setup();
+    renderInbox();
+
+    await waitFor(() => expect(screen.getByText("Compose Email")).toBeInTheDocument());
+    await user.click(screen.getByText("Compose Email"));
+    const toInput = screen.getByPlaceholderText(/client@company.com/i);
+    await user.click(toInput);
+
+    expect(screen.getByRole("listbox", { name: "Recipient suggestions" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "additional-6@x.in" })).toBeInTheDocument();
+  });
+
   it("sends the typed subject through /api/communications/send-email", async () => {
     const user = userEvent.setup();
     renderInbox();
@@ -373,6 +392,35 @@ describe("<Inbox />", () => {
       expect(sentBody.subject).toBe("subject-here");
       expect(sentBody.body).toBe("body-here");
     });
+  }, 15_000);
+
+  it("does not show success when SendGrid rejects the sender identity", async () => {
+    const user = userEvent.setup();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (opts?.method === "POST" && url === "/api/communications/send-email") {
+        return Promise.resolve({
+          success: true,
+          delivered: false,
+          reason: "sendgrid_error_403",
+        });
+      }
+      return defaultFetch(url, opts);
+    });
+    renderInbox();
+
+    await waitFor(() => expect(screen.getByText("Compose Email")).toBeInTheDocument());
+    await user.click(screen.getByText("Compose Email"));
+    await user.type(screen.getByPlaceholderText(/client@company.com/i), "failed@example.com");
+    await user.type(screen.getByLabelText(/^Subject:$/), "sender identity check");
+    await user.type(screen.getByPlaceholderText(/write your email here/i), "body");
+    await user.click(screen.getByRole("button", { name: /send email/i }));
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        "Email was not sent because the configured sender address is not verified in SendGrid.",
+      );
+    });
+    expect(notifySuccess).not.toHaveBeenCalledWith("Email sent successfully.");
   }, 15_000);
 
   it("loads subject ideas and sends the restored AI draft flow with the selected subject", async () => {

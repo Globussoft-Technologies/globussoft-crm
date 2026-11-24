@@ -249,9 +249,21 @@ export function EmailModal({ contact, onClose, onDone }) {
         fd.append('body', html);
         if (contact?.id) fd.append('contactId', String(contact.id));
         for (const f of files) fd.append('attachments', f, f.name);
-        await fetchApi('/api/communications/send-email', { method: 'POST', body: fd });
+        const result = await fetchApi('/api/communications/send-email', { method: 'POST', body: fd });
+        if (result?.delivered !== true) {
+          if (result?.reason === 'sendgrid_error_403') {
+            throw new Error('Email was not sent because the configured sender address is not verified in SendGrid.');
+          }
+          throw new Error(result?.error || 'Email was not delivered.');
+        }
       } else {
-        await sendEmail({ to: validTo.join(', '), cc: ccList.join(', ') || undefined, bcc: bccList.join(', ') || undefined, subject: subject.trim(), body: html, contactId: contact?.id });
+        const result = await sendEmail({ to: validTo.join(', '), cc: ccList.join(', ') || undefined, bcc: bccList.join(', ') || undefined, subject: subject.trim(), body: html, contactId: contact?.id });
+        if (result?.delivered !== true) {
+          if (result?.reason === 'sendgrid_error_403') {
+            throw new Error('Email was not sent because the configured sender address is not verified in SendGrid.');
+          }
+          throw new Error(result?.error || 'Email was not delivered.');
+        }
       }
       if (tenantVertical !== 'generic') {
         await postActivity(contact.id, { type: 'Email', description: `Email sent: ${subject.trim()}${trackEmail ? ' (tracked)' : ''}` }).catch(() => null);

@@ -1,12 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Outlet, useNavigate, NavLink, useLocation } from "react-router-dom";
-import { ShieldCheck, Clock, LogOut, BarChart3, Activity, Sun, Moon, Monitor, Bot, CreditCard, Building2, Key, PanelsTopLeft, UsersRound, Eye, TrendingUp, Trash2, ClipboardList } from "lucide-react";
+import { ShieldCheck, Clock, LogOut, BarChart3, Activity, Sun, Moon, Monitor, Bot, CreditCard, Building2, Key, PanelsTopLeft, UsersRound, Eye, TrendingUp, Trash2, ClipboardList, Menu, X } from "lucide-react";
 import {
   getSuperAdminToken,
   getSuperAdminUsername,
   clearSuperAdminSession,
   superAdminFetch,
 } from "../../utils/superAdminApi";
+import "./super-admin.css";
 
 // Sidebar modules. Add a new module by appending one entry here + one
 // <Route> in App.jsx; nothing else in this shell needs to change.
@@ -43,6 +44,8 @@ function isModuleActive(pathname, modulePath) {
 export default function SuperAdminLayout() {
   const navigate = useNavigate();
   const location = useLocation();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const mobileMenuToggleRef = useRef(null);
   const [theme, setTheme] = useState(() => {
     const stored = localStorage.getItem("theme");
     if (stored) return stored;
@@ -82,6 +85,18 @@ export default function SuperAdminLayout() {
     }
   }, [navigate]);
 
+  useEffect(() => {
+    if (!mobileMenuOpen) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") {
+        setMobileMenuOpen(false);
+        mobileMenuToggleRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [mobileMenuOpen]);
+
   const handleLogout = async () => {
     try {
       await superAdminFetch("/auth/logout", { method: "POST" });
@@ -93,24 +108,44 @@ export default function SuperAdminLayout() {
   };
 
   return (
-    <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: "var(--bg-color, #0b0c10)", color: "var(--text-primary, #fff)" }}>
-      <aside
-        style={{
-          width: 220,
-          flexShrink: 0,
-          height: "100%",
-          borderRight: "1px solid var(--border-color, rgba(255,255,255,0.08))",
-          display: "flex",
-          flexDirection: "column",
-          padding: "1.25rem 0.75rem",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 0.5rem", marginBottom: "1.5rem" }}>
+    <div className="super-admin-shell">
+      <header className="super-admin-mobile-header">
+        <div className="super-admin-sidebar__brand">
           <ShieldCheck size={20} color="var(--accent-color, #3b82f6)" />
-          <span style={{ fontWeight: 700, fontSize: "0.95rem" }}>Super Admin</span>
+          <span>Super Admin</span>
+        </div>
+        <button
+          type="button"
+          className="super-admin-mobile-menu-toggle btn-secondary"
+          ref={mobileMenuToggleRef}
+          onClick={() => setMobileMenuOpen((open) => !open)}
+          aria-label={mobileMenuOpen ? "Close navigation menu" : "Open navigation menu"}
+          aria-expanded={mobileMenuOpen}
+          aria-controls="super-admin-navigation"
+        >
+          {mobileMenuOpen ? <X size={19} /> : <Menu size={19} />}
+        </button>
+      </header>
+
+      {mobileMenuOpen && (
+        <button
+          type="button"
+          className="super-admin-mobile-backdrop"
+          onClick={() => {
+            setMobileMenuOpen(false);
+            mobileMenuToggleRef.current?.focus();
+          }}
+          aria-label="Close navigation menu"
+        />
+      )}
+
+      <aside id="super-admin-navigation" className={`super-admin-sidebar${mobileMenuOpen ? " is-open" : ""}`} aria-label="Super admin navigation">
+        <div className="super-admin-sidebar__brand">
+          <ShieldCheck size={20} color="var(--accent-color, #3b82f6)" />
+          <span>Super Admin</span>
         </div>
 
-        <nav style={{ display: "flex", flexDirection: "column", gap: 2, flex: 1, minHeight: 0, overflowY: "auto" }}>
+        <nav className="super-admin-sidebar__nav">
           {MODULES.map((m) => {
             const active = isModuleActive(location.pathname, m.path);
             return (
@@ -118,16 +153,10 @@ export default function SuperAdminLayout() {
                 key={m.path}
                 to={m.path}
                 aria-current={active ? "page" : undefined}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "0.55rem 0.6rem",
-                  borderRadius: 8,
-                  fontSize: "0.85rem",
-                  textDecoration: "none",
-                  color: active ? "var(--accent-color, #3b82f6)" : "var(--text-primary, #fff)",
-                  background: active ? "rgba(59,130,246,0.12)" : "transparent",
+                className="super-admin-sidebar__link"
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  mobileMenuToggleRef.current?.focus();
                 }}
               >
                 <m.icon size={16} />
@@ -137,15 +166,14 @@ export default function SuperAdminLayout() {
           })}
         </nav>
 
-        <div style={{ borderTop: "1px solid var(--border-color, rgba(255,255,255,0.08))", paddingTop: "0.75rem", marginTop: "0.75rem" }}>
-          <div style={{ fontSize: "0.75rem", color: "var(--text-secondary, #9aa0ab)", padding: "0 0.5rem", marginBottom: "0.5rem", wordBreak: "break-all" }}>
+        <div className="super-admin-sidebar__footer">
+          <div className="super-admin-sidebar__username">
             {getSuperAdminUsername()}
           </div>
-          <div style={{ display: "flex", gap: 6 }}>
+          <div className="super-admin-sidebar__actions">
             <button
               onClick={handleLogout}
-              className="btn-secondary"
-              style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: "0.8rem" }}
+              className="btn-secondary super-admin-sidebar__logout"
             >
               <LogOut size={14} /> Log out
             </button>
@@ -155,10 +183,9 @@ export default function SuperAdminLayout() {
               return (
                 <button
                   onClick={toggleTheme}
-                  className="btn-secondary"
+                  className="btn-secondary super-admin-sidebar__theme-toggle"
                   title={label}
                   aria-label={label}
-                  style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", padding: "0 0.5rem" }}
                 >
                   <ThemeIcon size={14} />
                 </button>
@@ -168,7 +195,7 @@ export default function SuperAdminLayout() {
         </div>
       </aside>
 
-      <main style={{ flex: "1 1 auto", minWidth: 0, minHeight: 0, padding: "1.75rem", overflow: "auto" }}>
+      <main className="super-admin-main">
         <Outlet />
       </main>
     </div>

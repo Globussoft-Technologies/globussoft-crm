@@ -236,7 +236,7 @@ export default function SuperAdminApiAnalytics() {
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 6, marginBottom: "1rem", borderBottom: "1px solid var(--border-color, rgba(255,255,255,0.08))" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: "1rem", borderBottom: "1px solid var(--border-color, rgba(255,255,255,0.08))" }}>
         {[
           { key: "overview", label: "Overview" },
           { key: "calls", label: "Call Log" },

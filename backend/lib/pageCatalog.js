@@ -370,9 +370,9 @@ const PAGE_CATALOG = [
   {
     path: '/converted-leads',
     label: 'Converted Leads',
-    // Cross-vertical  description was wellness-flavored ("converted to
-    // patients / customers"). Travel converts leads to bookings; generic
-    // CRM converts to deals. Use neutral wording.
+    // Legacy status queue remains available to Generic and Travel tenants.
+    // Wellness manages its clinic-specific journey stages from each lead.
+    vertical: ['generic', 'travel'],
     description: 'Leads that converted to customers',
     category: 'Leads & Revenue',
     requiredPermissions: [{ module: 'leads', action: 'read' }],

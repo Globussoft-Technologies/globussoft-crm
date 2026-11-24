@@ -32,11 +32,20 @@ const {
   buildVisitInvoiceLineItems,
   resolveServiceAmount,
 } = require("../lib/inventoryConsumption");
+const { computeCouponDiscount } = require("../lib/walletCodes");
+const { loadCouponForApply } = require("../lib/couponApply");
 
 const WELLNESS_PAYMENT_MODES = new Set([
   "cash",
-  "upi",
   "card",
+  "online",
+  "upi",
+  "pay_later",
+  "wallet",
+  "razorpay",
+  "stripe",
+  "wallet_redemption",
+  "cashback_redemption",
   "bank_transfer",
   "other",
 ]);
@@ -74,6 +83,18 @@ const INVOICE_SETTING_KEYS = [
   "tax.rate",
   "businessAddress",
 ];
+
+function parseCouponServiceIds(value) {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? [...new Set(parsed.map(Number).filter((id) => Number.isInteger(id) && id > 0))]
+      : [];
+  } catch (_error) {
+    return [];
+  }
+}
 
 function isTravelRequest(req) {
   return req.user?.vertical === "travel";
@@ -192,6 +213,95 @@ function hasInvoiceLineItemSnapshot(invoice) {
   return Array.isArray(parseInvoiceJson(invoice?.lineItemsJson, null));
 }
 
+function importedWellnessInvoiceLineItems(invoice) {
+  const imported = parseInvoiceJson(invoice?.lineItemsJson, null);
+  if (!imported || Array.isArray(imported) || typeof imported !== "object") return [];
+  const source = imported.source && typeof imported.source === "object" && !Array.isArray(imported.source)
+    ? imported.source
+    : imported;
+  const groups = [
+    { type: "service", nameKeys: ["services", "Services"], countKeys: ["Total Services Sold", "totalServicesSold"] },
+    { type: "product", nameKeys: ["products", "Products"], countKeys: ["Total Products Sold", "totalProductsSold"] },
+    { type: "package", nameKeys: ["packages", "Packages"], countKeys: ["Total Packages Sold", "totalPackagesSold"] },
+    { type: "membership", nameKeys: ["membership", "Membership"], countKeys: ["Total Memberships Sold", "totalMembershipsSold"] },
+    { type: "giftcard", nameKeys: ["giftcard", "gift_card", "Gift Card", "Gift Cards"], countKeys: ["Total Gift Cards Sold", "totalGiftCardsSold"] },
+  ];
+  const lineItems = [];
+
+  for (const group of groups) {
+    const namesValue = group.nameKeys
+      .map((key) => imported[key] || source[key])
+      .find((value) => value != null && String(value).trim());
+    const namesText = String(namesValue || "").trim();
+    if (!namesText) continue;
+
+    const countValue = group.countKeys
+      .map((key) => source[key] ?? imported[key])
+      .find((value) => value != null && String(value).trim() !== "");
+    const totalQuantity = Number.parseInt(countValue, 10);
+    const parsedNames = namesText.split(/\s*,\s*/).filter(Boolean);
+    const canSplitNames = parsedNames.length > 1 &&
+      (!Number.isFinite(totalQuantity) || totalQuantity <= 0 || totalQuantity === parsedNames.length);
+    const names = canSplitNames ? parsedNames : [namesText];
+    const quantityPerName = names.length > 1
+      ? 1
+      : Number.isFinite(totalQuantity) && totalQuantity > 0
+        ? totalQuantity
+        : 1;
+
+    for (const name of names) {
+      lineItems.push({
+        type: group.type,
+        itemId: null,
+        name: name.trim(),
+        quantity: quantityPerName,
+        // The import stores category names and aggregate counts, not reliable
+        // per-item prices. Keep those unknown rather than inventing amounts.
+        unitPrice: null,
+        amount: null,
+      });
+    }
+  }
+
+  return lineItems;
+}
+
+const WELLNESS_IMPORTED_PAYMENT_FIELDS = [
+  "Cash",
+  "Card",
+  "Online",
+  "UPI",
+  "Pay Later",
+  "Wallet",
+  "Other",
+  "Razorpay",
+  "Stripe",
+  "Wallet Redemption",
+  "Cashback Redemption",
+];
+
+function withWellnessImportedPaymentSplit(invoice) {
+  const lineItems = parseInvoiceJson(invoice?.lineItemsJson, null);
+  const source =
+    lineItems && !Array.isArray(lineItems) && typeof lineItems === "object"
+      ? lineItems.source
+      : null;
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return invoice;
+  }
+
+  const importedPaymentSplit = {};
+  for (const field of WELLNESS_IMPORTED_PAYMENT_FIELDS) {
+    const value = source[field];
+    if (value != null && String(value).trim() !== "") {
+      importedPaymentSplit[field] = value;
+    }
+  }
+  return Object.keys(importedPaymentSplit).length > 0
+    ? { ...invoice, importedPaymentSplit }
+    : invoice;
+}
+
 /**
  * Hydrate wellness visit invoices from the clinical source rows. This is
  * intentionally read-time compatible with legacy invoices whose snapshot was
@@ -200,89 +310,113 @@ function hasInvoiceLineItemSnapshot(invoice) {
  */
 async function hydrateWellnessInvoiceRows(invoices, tenantId) {
   if (!Array.isArray(invoices) || invoices.length === 0) return invoices;
-  if (!prisma.visit?.findMany || !prisma.serviceConsumption?.findMany) {
-    return invoices;
-  }
+  // Keep the imported payment split as response metadata before replacing an
+  // imported source object with the generated clinical line-item snapshot.
+  // This only decorates the response row; it never writes to the invoice.
+  const invoicesWithPaymentSplit = invoices.map(withWellnessImportedPaymentSplit);
+  const importedItemsByInvoiceId = new Map(
+    invoicesWithPaymentSplit.map((invoice) => [
+      invoice.id,
+      importedWellnessInvoiceLineItems(invoice),
+    ]),
+  );
 
   const visitIds = [
     ...new Set(
-      invoices
+      invoicesWithPaymentSplit
         .map((invoice) => Number(invoice.visitId))
         .filter((id) => Number.isInteger(id) && id > 0),
     ),
   ];
-  if (visitIds.length === 0) return invoices;
+  let hydrated = invoicesWithPaymentSplit;
+  if (
+    visitIds.length > 0 &&
+    prisma.visit?.findMany &&
+    prisma.serviceConsumption?.findMany
+  ) {
+    const [visits, consumptions] = await Promise.all([
+      prisma.visit.findMany({
+        where: { tenantId, id: { in: visitIds } },
+        select: {
+          id: true,
+          serviceId: true,
+          amountCharged: true,
+          couponBreakdown: true,
+          service: { select: { id: true, name: true, basePrice: true } },
+        },
+      }),
+      prisma.serviceConsumption.findMany({
+        where: { tenantId, visitId: { in: visitIds }, isActive: true },
+        select: {
+          id: true,
+          visitId: true,
+          productName: true,
+          qty: true,
+          unitCost: true,
+          usageValue: true,
+          salePrice: true,
+          productId: true,
+          drugId: true,
+          unit: true,
+          productCode: true,
+          transactionType: true,
+          sourceType: true,
+          prescriptionId: true,
+          prescriptionLine: true,
+        },
+        orderBy: { id: "asc" },
+      }),
+    ]);
 
-  const [visits, consumptions] = await Promise.all([
-    prisma.visit.findMany({
-      where: { tenantId, id: { in: visitIds } },
-      select: {
-        id: true,
-        serviceId: true,
-        amountCharged: true,
-        couponBreakdown: true,
-        service: { select: { id: true, name: true, basePrice: true } },
-      },
-    }),
-    prisma.serviceConsumption.findMany({
-      where: { tenantId, visitId: { in: visitIds }, isActive: true },
-      select: {
-        id: true,
-        visitId: true,
-        productName: true,
-        qty: true,
-        unitCost: true,
-        usageValue: true,
-        salePrice: true,
-        productId: true,
-        drugId: true,
-        unit: true,
-        productCode: true,
-        transactionType: true,
-        sourceType: true,
-        prescriptionId: true,
-        prescriptionLine: true,
-      },
-      orderBy: { id: "asc" },
-    }),
-  ]);
+    const visitById = new Map(visits.map((visit) => [visit.id, visit]));
+    const consumptionsByVisitId = new Map();
+    for (const row of consumptions) {
+      const rows = consumptionsByVisitId.get(row.visitId) || [];
+      rows.push(row);
+      consumptionsByVisitId.set(row.visitId, rows);
+    }
 
-  const visitById = new Map(visits.map((visit) => [visit.id, visit]));
-  const consumptionsByVisitId = new Map();
-  for (const row of consumptions) {
-    const rows = consumptionsByVisitId.get(row.visitId) || [];
-    rows.push(row);
-    consumptionsByVisitId.set(row.visitId, rows);
+    hydrated = invoicesWithPaymentSplit.map((invoice) => {
+      // Issued invoices are immutable accounting snapshots. Only legacy rows
+      // without a stored lineItemsJson array are hydrated from clinical data.
+      if (hasInvoiceLineItemSnapshot(invoice)) return invoice;
+      const visit = visitById.get(invoice.visitId);
+      if (!visit) return invoice;
+      const rows = consumptionsByVisitId.get(visit.id) || [];
+      const inventoryTotal = rows.reduce((sum, row) => {
+        const qty = Number(row.qty) || 0;
+        const value = Number(row.usageValue);
+        return sum + (value > 0 ? value : qty * (Number(row.unitCost) || Number(row.salePrice) || 0));
+      }, 0);
+      const serviceAmount = resolveServiceAmount({
+        visit,
+        servicePrice: Number(visit.service?.basePrice) || 0,
+        inventoryTotal,
+        storedAmount: Number(visit.amountCharged) || Number(invoice.amount) || 0,
+      });
+      const lineItems = buildVisitInvoiceLineItems({
+        visit,
+        service: visit.service,
+        consumptions: rows,
+        serviceAmount,
+      });
+      const importedItems = importedItemsByInvoiceId.get(invoice.id) || [];
+      const generatedTypes = new Set(lineItems.map((item) => String(item.type || "").toLowerCase()));
+      lineItems.push(...importedItems.filter((item) => !generatedTypes.has(item.type)));
+      return lineItems.length > 0
+        ? { ...invoice, lineItemsJson: JSON.stringify(lineItems) }
+        : invoice;
+    });
   }
 
-  const hydrated = invoices.map((invoice) => {
-    // Issued invoices are immutable accounting snapshots. Only legacy rows
-    // without any stored lineItemsJson may be hydrated from live clinical
-    // data; otherwise later catalogue or prescription edits would rewrite a
-    // historical invoice merely by viewing or downloading it.
+  // Imported package, membership, and gift-card rows may not have a visit or
+  // inventory-consumption record. Still convert their saved source fields to
+  // typed response line items so the invoice ledger can display them.
+  hydrated = hydrated.map((invoice) => {
     if (hasInvoiceLineItemSnapshot(invoice)) return invoice;
-    const visit = visitById.get(invoice.visitId);
-    if (!visit) return invoice;
-    const rows = consumptionsByVisitId.get(visit.id) || [];
-    const inventoryTotal = rows.reduce((sum, row) => {
-      const qty = Number(row.qty) || 0;
-      const value = Number(row.usageValue);
-      return sum + (value > 0 ? value : qty * (Number(row.unitCost) || Number(row.salePrice) || 0));
-    }, 0);
-    const serviceAmount = resolveServiceAmount({
-      visit,
-      servicePrice: Number(visit.service?.basePrice) || 0,
-      inventoryTotal,
-      storedAmount: Number(visit.amountCharged) || Number(invoice.amount) || 0,
-    });
-    const lineItems = buildVisitInvoiceLineItems({
-      visit,
-      service: visit.service,
-      consumptions: rows,
-      serviceAmount,
-    });
-    return lineItems.length > 0
-      ? { ...invoice, lineItemsJson: JSON.stringify(lineItems) }
+    const importedItems = importedItemsByInvoiceId.get(invoice.id) || [];
+    return importedItems.length > 0
+      ? { ...invoice, lineItemsJson: JSON.stringify(importedItems) }
       : invoice;
   });
 
@@ -306,8 +440,21 @@ async function hydrateWellnessInvoiceRows(invoices, tenantId) {
     },
   });
   const paymentsByInvoiceId = new Map();
+  const packageItemByInvoiceId = new Map();
   for (const payment of payments) {
     const rows = paymentsByInvoiceId.get(payment.invoiceId) || [];
+    const metadata = parseInvoiceJson(payment.metadata, {}) || {};
+    if (metadata.kind === "package_payment") {
+      const amount = Number(payment.amount) || 0;
+      packageItemByInvoiceId.set(payment.invoiceId, {
+        type: "package",
+        itemId: Number(metadata.packageId) || null,
+        name: metadata.packageName || "Package",
+        quantity: 1,
+        unitPrice: amount,
+        amount,
+      });
+    }
     const { metadata: _metadata, ...safePayment } = payment;
     rows.push({
       ...safePayment,
@@ -316,15 +463,35 @@ async function hydrateWellnessInvoiceRows(invoices, tenantId) {
     paymentsByInvoiceId.set(payment.invoiceId, rows);
   }
   return hydrated.map((invoice) => {
+    // Older package checkout invoices were created before their line item was
+    // snapshotted. Reconstruct the display item from that invoice's own payment
+    // metadata, without changing either persisted record or current catalogue.
+    const packageItem = packageItemByInvoiceId.get(invoice.id);
+    const invoiceWithItems = !hasInvoiceLineItemSnapshot(invoice) && packageItem
+      ? { ...invoice, lineItemsJson: JSON.stringify([packageItem]) }
+      : invoice;
     const paymentDetails = paymentsByInvoiceId.get(invoice.id) || [];
-    const successfulPayment = paymentDetails.find(
+    const successfulPayments = paymentDetails.filter(
       (payment) => String(payment.status || "").toUpperCase() === "SUCCESS",
     );
+    const amountByPaymentMode = new Map();
+    for (const payment of successfulPayments) {
+      const mode = String(payment.paymentMode || "").trim().toLowerCase();
+      const amount = Number(payment.amount) || 0;
+      if (!mode || amount <= 0) continue;
+      amountByPaymentMode.set(mode, (amountByPaymentMode.get(mode) || 0) + amount);
+    }
+    const paymentBreakdown = [...amountByPaymentMode].map(([mode, amount]) => ({
+      mode,
+      amount: Math.round((amount + Number.EPSILON) * 100) / 100,
+    }));
     return {
-      ...invoice,
+      ...invoiceWithItems,
       paymentDetails,
-      paymentMode:
-        successfulPayment?.paymentMode || invoice.paymentMode || null,
+      ...(paymentBreakdown.length > 0 ? { paymentBreakdown } : {}),
+      paymentMode: paymentBreakdown.length > 1
+        ? "combined"
+        : paymentBreakdown[0]?.mode || invoice.paymentMode || null,
     };
   });
 }
@@ -1211,6 +1378,10 @@ router.post(
       }
       let resolvedContactId = contactId ? parseInt(contactId, 10) : null;
       let wellnessData = {};
+      let wellnessPaymentAllocations = [];
+      let wellnessCouponIds = [];
+      let hasWellnessPaymentAllocations = false;
+      let wellnessPaymentTotal = 0;
 
       if (wellness) {
         // A wellness invoice's contact is derived from the selected patient;
@@ -1328,15 +1499,51 @@ router.post(
             code: "INVALID_GSTIN",
           });
         }
-        const paymentMode = String(
-          req.body.paymentMode || "cash",
-        ).toLowerCase();
-        if (!WELLNESS_PAYMENT_MODES.has(paymentMode)) {
-          return res.status(400).json({
-            error:
-              "paymentMode must be cash, upi, card, bank_transfer, or other",
-            code: "INVALID_PAYMENT_MODE",
-          });
+        hasWellnessPaymentAllocations = Object.prototype.hasOwnProperty.call(
+          req.body,
+          "paymentAllocations",
+        );
+        let paymentMode;
+        if (hasWellnessPaymentAllocations) {
+          const requestedPayments = req.body.paymentAllocations;
+          if (
+            !Array.isArray(requestedPayments) ||
+            requestedPayments.length > WELLNESS_PAYMENT_MODES.size
+          ) {
+            return res.status(400).json({
+              error: "paymentAllocations must contain valid payment methods",
+              code: "INVALID_PAYMENT_ALLOCATIONS",
+            });
+          }
+          for (const allocation of requestedPayments) {
+            const mode = String(allocation?.mode || "").trim().toLowerCase();
+            const amount = Number(allocation?.amount);
+            if (
+              !WELLNESS_PAYMENT_MODES.has(mode) ||
+              !Number.isFinite(amount) ||
+              amount <= 0 ||
+              amount > 1e10 ||
+              Math.abs(amount - Math.round(amount * 100) / 100) > 1e-9
+            ) {
+              return res.status(400).json({
+                error: "Each payment allocation needs a valid method and positive amount",
+                code: "INVALID_PAYMENT_ALLOCATIONS",
+              });
+            }
+            wellnessPaymentAllocations.push({ mode, amount });
+          }
+          const selectedModes = [...new Set(wellnessPaymentAllocations.map((item) => item.mode))];
+          paymentMode = selectedModes.length > 1
+            ? "combined"
+            : selectedModes[0] || null;
+        } else {
+          paymentMode = String(req.body.paymentMode || "cash").toLowerCase();
+          if (!WELLNESS_PAYMENT_MODES.has(paymentMode)) {
+            return res.status(400).json({
+              error: "paymentMode must be a supported wellness payment method",
+              code: "INVALID_PAYMENT_MODE",
+            });
+          }
         }
 
         let lineItems = req.body.lineItems;
@@ -1363,26 +1570,40 @@ router.post(
           itemId: parseInt(item?.itemId, 10),
           quantity: Number(item?.quantity),
           unitPrice:
-            item?.unitPrice === "" || item?.unitPrice == null
+            String(item?.type || "").toLowerCase() === "coupon" || item?.unitPrice === "" || item?.unitPrice == null
               ? null
               : Number(item.unitPrice),
         }));
+        const requestedCoupons = requestedItems.filter((item) => item.type === "coupon");
         if (
           requestedItems.some(
             (item) =>
-              !["service", "product"].includes(item.type) ||
+              !["service", "product", "package", "membership", "giftcard", "coupon"].includes(item.type) ||
               !Number.isInteger(item.itemId) ||
               item.itemId <= 0 ||
               !Number.isFinite(item.quantity) ||
               item.quantity <= 0 ||
               item.quantity > 10000 ||
+              (item.type === "coupon" && item.quantity !== 1) ||
               (item.unitPrice !== null &&
                 (!Number.isFinite(item.unitPrice) || item.unitPrice < 0)),
           )
         ) {
           return res.status(400).json({
-            error: "Each line item needs a valid product/service and quantity",
+            error: "Each line item needs a valid catalog item and quantity",
             code: "INVALID_LINE_ITEM",
+          });
+        }
+        if (requestedCoupons.length > 1) {
+          return res.status(400).json({
+            error: "Only one coupon can be applied to an invoice",
+            code: "MULTIPLE_COUPONS_NOT_ALLOWED",
+          });
+        }
+        if (requestedCoupons.length && selectedVisit) {
+          return res.status(400).json({
+            error: "A coupon cannot be added to an invoice linked to a visit; the visit total already includes its final charge",
+            code: "COUPON_NOT_ALLOWED_WITH_VISIT",
           });
         }
 
@@ -1400,7 +1621,12 @@ router.post(
               .map((item) => item.itemId),
           ),
         ];
-        const [services, products] = await Promise.all([
+        const packageIds = [...new Set(requestedItems.filter((item) => item.type === "package").map((item) => item.itemId))];
+        const membershipPlanIds = [...new Set(requestedItems.filter((item) => item.type === "membership").map((item) => item.itemId))];
+        const giftCardIds = [...new Set(requestedItems.filter((item) => item.type === "giftcard").map((item) => item.itemId))];
+        const couponIds = [...new Set(requestedCoupons.map((item) => item.itemId))];
+        const now = new Date();
+        const [services, products, packages, membershipPlans, giftCards, coupons] = await Promise.all([
           serviceIds.length
             ? prisma.service.findMany({
                 where: {
@@ -1431,18 +1657,66 @@ router.post(
                 },
               })
             : [],
+          packageIds.length
+            ? prisma.servicePackage.findMany({
+                where: {
+                  tenantId: req.user.tenantId,
+                  id: { in: packageIds },
+                  isActive: true,
+                  OR: [{ sellByDate: null }, { sellByDate: { gte: now } }],
+                },
+                select: { id: true, name: true, price: true, taxPercent: true, currency: true },
+              })
+            : [],
+          membershipPlanIds.length
+            ? prisma.membershipPlan.findMany({
+                where: { tenantId: req.user.tenantId, id: { in: membershipPlanIds }, isActive: true },
+                select: { id: true, name: true, price: true, currency: true },
+              })
+            : [],
+          giftCardIds.length
+            ? prisma.giftCard.findMany({
+                where: {
+                  tenantId: req.user.tenantId,
+                  id: { in: giftCardIds },
+                  status: "active",
+                  issuedTo: null,
+                  redeemedAt: null,
+                  price: { not: null },
+                  OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+                },
+                select: { id: true, name: true, amount: true, price: true, currency: true, expiresAt: true },
+              })
+            : [],
+          couponIds.length
+            ? prisma.coupon.findMany({
+                where: { tenantId: req.user.tenantId, id: { in: couponIds } },
+              })
+            : [],
         ]);
         const serviceById = new Map(services.map((item) => [item.id, item]));
         const productById = new Map(products.map((item) => [item.id, item]));
-        const normalizedItems = requestedItems.map((item) => {
-          const catalogItem = (
-            item.type === "service" ? serviceById : productById
-          ).get(item.itemId);
+        const packageById = new Map(packages.map((item) => [item.id, item]));
+        const membershipById = new Map(membershipPlans.map((item) => [item.id, item]));
+        const giftCardById = new Map(giftCards.map((item) => [item.id, item]));
+        const couponById = new Map(coupons.map((item) => [item.id, item]));
+        const baseRequestedItems = requestedItems.filter((item) => item.type !== "coupon");
+        const normalizedBaseItems = baseRequestedItems.map((item) => {
+          const mapByType = {
+            service: serviceById,
+            product: productById,
+            package: packageById,
+            membership: membershipById,
+            giftcard: giftCardById,
+          };
+          const catalogItem = mapByType[item.type]?.get(item.itemId);
           if (!catalogItem) return null;
-          const catalogPrice =
-            item.type === "service"
-              ? (catalogItem.discountedPrice ?? catalogItem.basePrice)
-              : (catalogItem.discountedPrice ?? catalogItem.price);
+          let catalogPrice = catalogItem.price;
+          if (item.type === "service") catalogPrice = catalogItem.discountedPrice ?? catalogItem.basePrice;
+          if (item.type === "product") catalogPrice = catalogItem.discountedPrice ?? catalogItem.price;
+          if (item.type === "package") {
+            catalogPrice = Number(catalogItem.price) * (1 + Number(catalogItem.taxPercent || 0) / 100);
+          }
           const unitPrice =
             item.unitPrice == null ? Number(catalogPrice) : item.unitPrice;
           if (!Number.isFinite(unitPrice) || unitPrice < 0) return null;
@@ -1451,30 +1725,81 @@ router.post(
           return {
             type: item.type,
             itemId: item.itemId,
-            name: sanitizeText(catalogItem.name),
+            name: sanitizeText(catalogItem.name || catalogItem.code || `${item.type} ${item.itemId}`),
             quantity: normalizedQuantity,
             unitPrice: normalizedUnitPrice,
             amount:
               Math.round(normalizedQuantity * normalizedUnitPrice * 100) / 100,
+            ...(item.type === "package" && Number(catalogItem.taxPercent) > 0
+              ? { taxPercent: Number(catalogItem.taxPercent) }
+              : {}),
           };
         });
-        if (normalizedItems.some((item) => !item)) {
+        if (normalizedBaseItems.some((item) => !item)) {
           return res.status(400).json({
-            error: "One or more selected products/services are unavailable",
+            error: "One or more selected invoice items are unavailable",
             code: "INVALID_LINE_ITEM",
           });
         }
-        const reconciledItems = applyVisitFinalBillToLineItems(
-          normalizedItems,
+        const reconciledBaseItems = applyVisitFinalBillToLineItems(
+          normalizedBaseItems,
           selectedVisit,
         );
-        if (!reconciledItems) {
+        if (!reconciledBaseItems) {
           return res.status(400).json({
             error:
               "The visit final bill cannot be reconciled with these line items at the supported precision",
             code: "FINAL_BILL_RECONCILIATION_FAILED",
           });
         }
+        const couponLineItems = [];
+        for (const couponItem of requestedCoupons) {
+          const selectedCoupon = couponById.get(couponItem.itemId);
+          if (!selectedCoupon) {
+            return res.status(400).json({
+              error: "The selected coupon is unavailable",
+              code: "INVALID_COUPON",
+            });
+          }
+          const couponLookup = await loadCouponForApply(req.user.tenantId, selectedCoupon.code);
+          if (couponLookup.error) {
+            return res.status(couponLookup.error.status).json({
+              error: couponLookup.error.message,
+              code: couponLookup.error.code,
+            });
+          }
+          const serviceAllowlist = parseCouponServiceIds(couponLookup.coupon.serviceIds);
+          const eligibleItems = serviceAllowlist.length
+            ? reconciledBaseItems.filter(
+                (item) => item.type === "service" && serviceAllowlist.includes(Number(item.itemId)),
+              )
+            : reconciledBaseItems;
+          const couponBase = eligibleItems.reduce((sum, item) => sum + item.amount, 0);
+          const couponServiceId = serviceAllowlist.length ? Number(eligibleItems[0]?.itemId) : null;
+          const discount = computeCouponDiscount(
+            couponLookup.coupon,
+            couponBase,
+            couponServiceId,
+          );
+          if (!discount.applied || discount.discount <= 0) {
+            return res.status(409).json({
+              error: "The selected coupon does not apply to these invoice items",
+              code: "COUPON_NOT_APPLICABLE",
+            });
+          }
+          const discountAmount = Math.round(discount.discount * 100) / 100;
+          couponLineItems.push({
+            type: "coupon",
+            itemId: selectedCoupon.id,
+            name: sanitizeText(`Coupon ${couponLookup.coupon.code}`),
+            code: couponLookup.coupon.code,
+            quantity: 1,
+            unitPrice: -discountAmount,
+            amount: -discountAmount,
+          });
+          wellnessCouponIds.push(selectedCoupon.id);
+        }
+        const reconciledItems = [...reconciledBaseItems, ...couponLineItems];
         const lineItemsTotal =
           Math.round(
             reconciledItems.reduce((sum, item) => sum + item.amount, 0) * 100,
@@ -1497,6 +1822,24 @@ router.post(
             error: "Line item total must have at most 2 decimal places",
             code: "INVALID_AMOUNT_PRECISION",
           });
+        }
+        if (hasWellnessPaymentAllocations) {
+          const requestedPaymentTotal = wellnessPaymentAllocations.reduce(
+            (sum, allocation) => sum + allocation.amount,
+            0,
+          );
+          if (
+            Math.round((requestedPaymentTotal + Number.EPSILON) * 100) >
+            Math.round((lineItemsTotal + Number.EPSILON) * 100)
+          ) {
+            return res.status(400).json({
+              error: "The amount received cannot exceed the invoice total",
+              code: "PAYMENT_EXCEEDS_INVOICE_TOTAL",
+            });
+          }
+          wellnessPaymentTotal = Math.round(
+            (requestedPaymentTotal + Number.EPSILON) * 100,
+          ) / 100;
         }
 
         if (!resolvedContactId) {
@@ -1557,6 +1900,12 @@ router.post(
           shippingAddress: optionalInvoiceText(req.body.shippingAddress),
           paymentMode,
           lineItemsJson: sanitizeJsonForStringColumn(reconciledItems),
+          ...(hasWellnessPaymentAllocations
+            ? {
+                amountPaid: wellnessPaymentTotal,
+                balance: Math.round((lineItemsTotal - wellnessPaymentTotal + Number.EPSILON) * 100) / 100,
+              }
+            : {}),
         };
         // Wellness totals are derived from the validated rows, with a selected
         // visit's persisted final bill taking precedence over its catalogue
@@ -1591,34 +1940,75 @@ router.post(
       const tenantCurrency = requestedCurrency || (await prisma.tenant.findUnique({
         where: { id: req.user.tenantId }, select: { defaultCurrency: true },
       }))?.defaultCurrency || "USD";
+      const invoiceAmountToSave = Math.round((resolvedInvoiceAmount ?? amt) * 100) / 100;
+      const wellnessBalance = Math.round(
+        (invoiceAmountToSave - wellnessPaymentTotal + Number.EPSILON) * 100,
+      ) / 100;
+      const paymentReceivedAt = wellnessPaymentAllocations.length > 0 ? new Date() : null;
       const baseData = {
         invoiceNum: invNum,
-        amount: Math.round((resolvedInvoiceAmount ?? amt) * 100) / 100, // #198: store to-the-paise; reject was above
+        amount: invoiceAmountToSave, // #198: store to-the-paise; reject was above
         currency: tenantCurrency,
         dueDate: due,
         contactId: resolvedContactId,
         dealId: dealId ? parseInt(dealId) : null,
         tenantId: req.user.tenantId,
+        ...(wellness && hasWellnessPaymentAllocations
+          ? {
+              status: wellnessBalance <= 0 ? "PAID" : "UNPAID",
+              paidAt: wellnessBalance <= 0 ? paymentReceivedAt : null,
+            }
+          : {}),
         ...wellnessData,
       };
-      let invoice;
-      try {
-        invoice = await prisma.invoice.create({
-          data: { ...baseData, subBrand },
-          include: { contact: true, deal: true },
-        });
-      } catch (e) {
-        // Graceful degrade: if the Invoice.subBrand column isn't migrated yet,
-        // create the invoice WITHOUT the tag so the flow still works (the contact
-        // still carries the brand). Re-run `npx prisma db push` to persist the tag.
-        if (/subBrand/i.test(String(e && e.message))) {
-          invoice = await prisma.invoice.create({
-            data: baseData,
+      const createInvoiceRow = async (client) => {
+        try {
+          return await client.invoice.create({
+            data: { ...baseData, subBrand },
             include: { contact: true, deal: true },
           });
-        } else {
+        } catch (e) {
+          // Graceful degrade: if Invoice.subBrand isn't migrated yet, create
+          // without that optional tag; the contact still carries the brand.
+          if (/subBrand/i.test(String(e && e.message))) {
+            return client.invoice.create({
+              data: baseData,
+              include: { contact: true, deal: true },
+            });
+          }
           throw e;
         }
+      };
+      let invoice;
+      if (wellnessPaymentAllocations.length > 0 || wellnessCouponIds.length > 0) {
+        invoice = await prisma.$transaction(async (tx) => {
+          const createdInvoice = await createInvoiceRow(tx);
+          for (const allocation of wellnessPaymentAllocations) {
+            await tx.payment.create({
+              data: {
+                invoiceId: createdInvoice.id,
+                contactId: createdInvoice.contactId,
+                description: `Payment received for invoice ${createdInvoice.invoiceNum}`,
+                amount: allocation.amount,
+                currency: tenantCurrency,
+                gateway: "manual",
+                status: "SUCCESS",
+                paidAt: paymentReceivedAt,
+                metadata: sanitizeJsonForStringColumn({ paymentMode: allocation.mode }),
+                tenantId: req.user.tenantId,
+              },
+            });
+          }
+          for (const couponId of wellnessCouponIds) {
+            await tx.coupon.update({
+              where: { id: couponId },
+              data: { redemptionCount: { increment: 1 } },
+            });
+          }
+          return createdInvoice;
+        });
+      } else {
+        invoice = await createInvoiceRow(prisma);
       }
       // #179: audit invoice creation.
       await writeAudit(

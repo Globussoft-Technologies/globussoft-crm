@@ -3675,7 +3675,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     )).toBe(true));
   });
 
-  it('hides prospect conversion for Generic CRM but keeps it for Travel CRM', async () => {
+  it('hides prospect conversion for Generic and Wellness but keeps it for Travel', async () => {
     const genericRender = renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
@@ -3683,6 +3683,19 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(screen.queryByRole('button', { name: 'Convert Alice Smith to Prospect' })).not.toBeInTheDocument();
 
     genericRender.unmount();
+    const wellnessRender = renderLeads({
+      ...ADMIN_AUTH,
+      tenant: { id: 3, vertical: 'wellness', name: 'Enhanced Wellness' },
+    });
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    expect(screen.queryAllByTitle('Convert to Prospect')).toHaveLength(0);
+    expect(screen.queryByRole('button', { name: 'Convert Alice Smith to Prospect' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Alice Smith' }));
+    const wellnessPreview = screen.getByRole('dialog', { name: 'Lead preview' });
+    expect(within(wellnessPreview).queryByRole('button', { name: 'Convert to Prospect' })).not.toBeInTheDocument();
+
+    wellnessRender.unmount();
     renderLeads({
       ...ADMIN_AUTH,
       tenant: { id: 2, vertical: 'travel', name: 'Travel CRM' },

@@ -1248,6 +1248,46 @@ describe("POST /api/billing — create invoice (#158 #177 #198)", () => {
 });
 
 describe("billing response vertical isolation", () => {
+  test("wellness invoice hydration keeps imported mixed payments separate from generated service lines", async () => {
+    const importedLineItemsJson = JSON.stringify({
+      source: { Cash: "6,200", UPI: "75", "Customer Name": "Dipika" },
+    });
+    const storedInvoice = {
+      id: 2145,
+      invoiceNum: "INV-002145",
+      amount: 6275,
+      amountPaid: 6275,
+      status: "PAID",
+      tenantId: 1,
+      visitId: 2145,
+      lineItemsJson: importedLineItemsJson,
+      contact: { id: 11, name: "Dipika" },
+      deal: null,
+    };
+    prisma.invoice.findMany.mockResolvedValue([storedInvoice]);
+    prisma.visit.findMany.mockResolvedValue([
+      {
+        id: 2145,
+        serviceId: 21,
+        amountCharged: 6275,
+        couponBreakdown: null,
+        service: { id: 21, name: "Dr Consultation", basePrice: 6275 },
+      },
+    ]);
+    prisma.serviceConsumption.findMany.mockResolvedValue([]);
+    prisma.payment.findMany.mockResolvedValue([]);
+
+    const res = await request(makeApp({ vertical: "wellness" })).get("/api/billing");
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].invoiceNum).toBe("INV-002145");
+    expect(JSON.parse(res.body[0].lineItemsJson)).toEqual([
+      expect.objectContaining({ type: "service", name: "Dr Consultation" }),
+    ]);
+    expect(res.body[0].importedPaymentSplit).toEqual({ Cash: "6,200", UPI: "75" });
+    expect(storedInvoice.lineItemsJson).toBe(importedLineItemsJson);
+  });
+
   test("wellness visit invoices hydrate service, inventory/drug lines, quantities and payment details", async () => {
     prisma.invoice.findMany.mockResolvedValue([
       {

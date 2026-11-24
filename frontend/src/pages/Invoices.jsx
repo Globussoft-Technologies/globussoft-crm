@@ -20,6 +20,7 @@ import {
   Package,
   ChevronLeft,
   ChevronRight,
+  Search,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../utils/api";
 import { useNotify } from "../utils/notify";
@@ -399,6 +400,13 @@ const WELLNESS_PAYMENT_MODES = [
   { value: "cash", label: "Cash" },
   { value: "upi", label: "UPI" },
   { value: "card", label: "Card" },
+  { value: "online", label: "Online" },
+  { value: "pay_later", label: "Pay later" },
+  { value: "wallet", label: "Wallet" },
+  { value: "razorpay", label: "Razorpay" },
+  { value: "stripe", label: "Stripe" },
+  { value: "wallet_redemption", label: "Wallet redemption" },
+  { value: "cashback_redemption", label: "Cashback redemption" },
   { value: "bank_transfer", label: "Bank transfer" },
   { value: "other", label: "Other" },
 ];
@@ -409,6 +417,80 @@ const createEmptyLineItem = () => ({
   quantity: 1,
   unitPrice: "",
 });
+
+function invoiceCouponServiceIds(coupon) {
+  if (!coupon?.serviceIds) return [];
+  try {
+    const parsed = JSON.parse(coupon.serviceIds);
+    return Array.isArray(parsed)
+      ? parsed.map(Number).filter((id) => Number.isInteger(id) && id > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function invoiceCouponDiscount(coupon, lineItems) {
+  if (!coupon || !Array.isArray(lineItems)) return 0;
+  const serviceIds = invoiceCouponServiceIds(coupon);
+  const baseAmount = lineItems.reduce((total, item) => {
+    if (item.type === "coupon") return total;
+    if (serviceIds.length && (item.type !== "service" || !serviceIds.includes(Number(item.itemId)))) {
+      return total;
+    }
+    const amount = (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0);
+    return total + Math.round(amount * 100) / 100;
+  }, 0);
+  const value = Number(coupon.discountValue) || 0;
+  if (baseAmount <= 0 || value <= 0) return 0;
+  const discount = String(coupon.discountType).toUpperCase() === "PERCENT"
+    ? baseAmount * Math.min(100, value) / 100
+    : Math.min(value, baseAmount);
+  return Math.round(discount * 100) / 100;
+}
+
+function invoiceItemsTotal(lineItems, coupons) {
+  if (!Array.isArray(lineItems)) return 0;
+  const subtotal = lineItems.reduce((total, item) => {
+    if (item.type === "coupon") return total;
+    const amount = (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0);
+    return total + Math.round(amount * 100) / 100;
+  }, 0);
+  const discount = lineItems.reduce((total, item) => {
+    if (item.type !== "coupon") return total;
+    const coupon = coupons.find((row) => String(row.id) === String(item.itemId));
+    return total + invoiceCouponDiscount(coupon, lineItems);
+  }, 0);
+  return Math.round((subtotal - discount + Number.EPSILON) * 100) / 100;
+}
+
+function invoiceCatalogPrice(type, item) {
+  if (!item) return null;
+  if (type === "service") return item.discountedPrice ?? item.basePrice;
+  if (type === "product") return item.discountedPrice ?? item.price;
+  if (type === "package") {
+    const price = Number(item.price) || 0;
+    const taxPercent = Number(item.taxPercent) || 0;
+    return Math.round(price * (1 + taxPercent / 100) * 100) / 100;
+  }
+  return item.price;
+}
+
+function invoiceLineTypeLabel(type) {
+  const labels = {
+    service: "service",
+    product: "product",
+    package: "package",
+    membership: "membership",
+    membershipplan: "membership",
+    giftcard: "gift card",
+    coupon: "discount",
+    discount: "discount",
+  };
+  const rawType = String(type || "").trim();
+  const normalizedType = rawType.toLowerCase().replace(/[_-]+/g, "");
+  return labels[normalizedType] || rawType || "item";
+}
 
 // A completed visit can have a final bill that differs from the service
 // catalogue price (for example, after additional charges or taxes). Keep the
@@ -462,7 +544,8 @@ const createInvoiceForm = (subBrand = "", currency = "USD") => ({
   gstin: "",
   billingAddress: "",
   shippingAddress: "",
-  paymentMode: "cash",
+  paymentMode: "",
+  paymentAllocations: [{ mode: "cash", amount: "" }],
   lineItems: [createEmptyLineItem()],
 });
 
@@ -577,6 +660,12 @@ export default function Invoices() {
   const [visits, setVisits] = useState([]);
   const [services, setServices] = useState([]);
   const [products, setProducts] = useState([]);
+  const [servicePackages, setServicePackages] = useState([]);
+  const [membershipPlans, setMembershipPlans] = useState([]);
+  const [giftCards, setGiftCards] = useState([]);
+  const [coupons, setCoupons] = useState([]);
+  const [patientInvoiceAssets, setPatientInvoiceAssets] = useState({ memberships: [], packages: [], giftCards: [] });
+  const [isLoadingInvoiceCatalogs, setIsLoadingInvoiceCatalogs] = useState(false);
   const [patientSearch, setPatientSearch] = useState("");
   const [productSearch, setProductSearch] = useState("");
   const [isLoadingPatients, setIsLoadingPatients] = useState(false);
@@ -590,6 +679,7 @@ export default function Invoices() {
   const invoicesLoadedRef = useRef(false);
   const patientLookupRequestRef = useRef(0);
   const productLookupRequestRef = useRef(0);
+  const invoiceCatalogRequestRef = useRef(0);
   const selectedPatientIdRef = useRef("");
   const selectedProductIdsRef = useRef(new Set());
   const [linkModal, setLinkModal] = useState(null); // { inv, url } | null
@@ -607,6 +697,7 @@ export default function Invoices() {
   const [recurInvoice, setRecurInvoice] = useState(null);
   const [recurFreq, setRecurFreq] = useState("monthly");
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [invoiceSearch, setInvoiceSearch] = useState("");
   const [summaryFilter, setSummaryFilter] = useState("ALL");
   const [columnFilters, setColumnFilters] = useState(EMPTY_INVOICE_COLUMN_FILTERS);
   const [activeColumnFilter, setActiveColumnFilter] = useState(null);
@@ -988,8 +1079,32 @@ export default function Invoices() {
 
   const filteredInvoices = useMemo(() => {
     let rows = invoices;
+    const searchQuery = invoiceSearch.trim().toLowerCase();
     if (hasReportInvoiceFilter) {
       rows = rows.filter((inv) => reportInvoiceIds.has(Number(inv.id)));
+    }
+    if (searchQuery) {
+      rows = rows.filter((inv) => {
+        const lineItemText = getInvoiceLineItems(inv)
+          .flatMap((item) => [item.name, item.type, item.code])
+          .filter(Boolean)
+          .join(" ");
+        const searchableText = [
+          inv.invoiceNum,
+          inv.id,
+          inv.customerName,
+          inv.customerPhone,
+          inv.customerEmail,
+          inv.contact?.name,
+          inv.contact?.email,
+          inv.contact?.phone,
+          inv.deal?.title,
+          inv.paymentMode,
+          inv.status,
+          lineItemText,
+        ].filter(Boolean).join(" ").toLowerCase();
+        return searchableText.includes(searchQuery);
+      });
     }
     if (statusFilter !== "ALL") {
       rows = rows.filter((inv) => inv.status === statusFilter);
@@ -1032,14 +1147,14 @@ export default function Invoices() {
       });
     }
     return rows;
-  }, [invoices, statusFilter, summaryFilter, hasReportInvoiceFilter, reportInvoiceIds, isGeneric, columnFilters]);
+  }, [invoices, invoiceSearch, statusFilter, summaryFilter, hasReportInvoiceFilter, reportInvoiceIds, isGeneric, columnFilters]);
 
   const hasColumnFilters = isGeneric && Object.entries(columnFilters).some(
     ([key, value]) => ["status", "currency", "dueDatePreset", "issuedDatePreset"].includes(key)
       ? value !== "ALL"
       : Boolean(value),
   );
-  const hasAnyInvoiceFilter = hasColumnFilters || summaryFilter !== "ALL" || statusFilter !== "ALL" || dateRange !== "ALL";
+  const hasAnyInvoiceFilter = hasColumnFilters || summaryFilter !== "ALL" || statusFilter !== "ALL" || dateRange !== "ALL" || Boolean(invoiceSearch.trim());
 
   const invoiceTotalPages = Math.max(
     1,
@@ -1051,7 +1166,7 @@ export default function Invoices() {
   // rows being removed while the user is on the last page.
   useEffect(() => {
     setInvoicePage(1);
-  }, [statusFilter, summaryFilter, dateRange, customFrom, customTo, reportInvoiceIds, columnFilters]);
+  }, [invoiceSearch, statusFilter, summaryFilter, dateRange, customFrom, customTo, reportInvoiceIds, columnFilters]);
 
   useEffect(() => {
     setInvoicePage((page) => Math.min(Math.max(page, 1), invoiceTotalPages));
@@ -1079,21 +1194,162 @@ export default function Invoices() {
     setNewInvoice((prev) => ({ ...prev, [field]: value }));
   };
 
-  const catalogForType = (type) => (type === "product" ? products : services);
+  const handlePaymentAllocationChange = (index, field, value) => {
+    setNewInvoice((prev) => {
+      const paymentAllocations = [...(prev.paymentAllocations || [])];
+      const allocation = { ...paymentAllocations[index], [field]: value };
+      if (field === "amount" && value !== "") {
+        const invoiceTotal = invoiceItemsTotal(prev.lineItems || [], coupons);
+        const otherPayments = paymentAllocations.reduce(
+          (total, item, itemIndex) =>
+            itemIndex === index ? total : total + Math.max(0, Number(item.amount) || 0),
+          0,
+        );
+        const remaining = Math.max(0, invoiceTotal - otherPayments);
+        const requestedAmount = Number(value);
+        if (Number.isFinite(requestedAmount) && requestedAmount > remaining) {
+          allocation.amount = remaining.toFixed(2);
+        }
+      }
+      paymentAllocations[index] = allocation;
+      return { ...prev, paymentAllocations };
+    });
+  };
+
+  const addPaymentAllocation = () => {
+    setNewInvoice((prev) => {
+      const paymentAllocations = prev.paymentAllocations || [];
+      const usedModes = new Set(paymentAllocations.map((allocation) => allocation.mode));
+      const nextMode = WELLNESS_PAYMENT_MODES.find((mode) => !usedModes.has(mode.value))?.value;
+      if (!nextMode) return prev;
+      return {
+        ...prev,
+        paymentAllocations: [...paymentAllocations, { mode: nextMode, amount: "" }],
+      };
+    });
+  };
+
+  const removePaymentAllocation = (index) => {
+    setNewInvoice((prev) => {
+      const paymentAllocations = (prev.paymentAllocations || []).filter((_, itemIndex) => itemIndex !== index);
+      return {
+        ...prev,
+        paymentAllocations: paymentAllocations.length
+          ? paymentAllocations
+          : [{ mode: "cash", amount: "" }],
+      };
+    });
+  };
+
+  const loadInvoiceCatalogs = async (patientId) => {
+    const requestId = ++invoiceCatalogRequestRef.current;
+    setIsLoadingInvoiceCatalogs(true);
+    const endpoints = [
+      ["packages", "/api/wellness/packages?isActive=true&sellableOnly=true"],
+      ["membership plans", "/api/wellness/membership-plans"],
+      ["gift cards", "/api/wellness/giftcards/storefront"],
+      ["coupons", "/api/wellness/coupons?isActive=true&limit=200"],
+      ["patient memberships", `/api/wellness/patients/${encodeURIComponent(patientId)}/memberships`],
+      ["patient packages", `/api/wellness/treatment-plans?patientId=${encodeURIComponent(patientId)}`],
+      ["patient gift cards", `/api/wellness/giftcards?issuedTo=${encodeURIComponent(patientId)}&limit=500`],
+    ];
+    const results = await Promise.allSettled(endpoints.map(([, url]) => fetchApi(url)));
+    if (requestId !== invoiceCatalogRequestRef.current) return;
+
+    const unpack = (result, key) => {
+      if (result.status !== "fulfilled") return [];
+      const value = result.value;
+      if (Array.isArray(value)) return value;
+      return Array.isArray(value?.[key]) ? value[key] : [];
+    };
+    setServicePackages(unpack(results[0], "packages"));
+    setMembershipPlans(unpack(results[1], "plans"));
+    setGiftCards(unpack(results[2], "giftCards"));
+    setCoupons(unpack(results[3], "coupons"));
+    setPatientInvoiceAssets({
+      memberships: unpack(results[4], "memberships"),
+      packages: unpack(results[5], "treatmentPlans"),
+      giftCards: unpack(results[6], "giftCards"),
+    });
+    const failed = results.flatMap((result, index) =>
+      result.status === "rejected" ? [endpoints[index][0]] : [],
+    );
+    if (failed.length) notify.error(`Could not load invoice options: ${failed.join(", ")}`);
+    setIsLoadingInvoiceCatalogs(false);
+  };
+
+  const catalogForType = (type) => {
+    switch (type) {
+      case "product": return products;
+      case "package": return servicePackages;
+      case "membership": return membershipPlans;
+      case "giftcard": return giftCards;
+      case "coupon": return coupons;
+      default: return services;
+    }
+  };
+
+  const patientAssignedInvoiceAssetLabels = [
+    ...(patientInvoiceAssets.memberships || []).map((membership) =>
+      `${membership.plan?.name || "Membership"} (${membership.status || "assigned"})`,
+    ),
+    ...(patientInvoiceAssets.packages || [])
+      .filter((plan) => plan.servicePackageId)
+      .map((plan) => `${plan.name || "Package"} (${plan.status || "assigned"})`),
+    ...(patientInvoiceAssets.giftCards || []).map((giftCard) =>
+      `${giftCard.name || "Gift card"} (${giftCard.status || "issued"})`,
+    ),
+  ];
+
+  const invoiceCatalogOptionLabel = (type, option) => {
+    if (type === "coupon") {
+      return `${option.code} (${option.discountType === "PERCENT" ? `${option.discountValue}% off` : `${formatCurrency(option.discountValue, newInvoice.currency)} off`})`;
+    }
+    const alreadyAssigned = type === "membership"
+      ? patientInvoiceAssets.memberships.some((membership) =>
+          Number(membership.planId) === Number(option.id) && membership.status === "active",
+        )
+      : type === "package"
+        ? patientInvoiceAssets.packages.some((plan) =>
+            Number(plan.servicePackageId) === Number(option.id) && ["active", "paused"].includes(plan.status),
+          )
+        : false;
+    const priceDetails = type === "giftcard"
+      ? ` · Gift value ${formatCurrency(option.amount, option.currency || newInvoice.currency)} · Price ${formatCurrency(option.price, option.currency || newInvoice.currency)}`
+      : type === "package" && Number(option.taxPercent) > 0
+        ? ` · ${Number(option.taxPercent)}% tax included in price`
+        : "";
+    return `${option.name || option.code || `${type} #${option.id}`}${priceDetails}${alreadyAssigned ? " · Already assigned" : ""}`;
+  };
 
   const wellnessInvoiceTotal = useMemo(
+    () => invoiceItemsTotal(newInvoice.lineItems || [], coupons),
+    [newInvoice.lineItems, coupons],
+  );
+  const wellnessPaymentTotal = useMemo(
     () =>
-      (newInvoice.lineItems || []).reduce(
-        (total, item) =>
-          total + (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0),
+      (newInvoice.paymentAllocations || []).reduce(
+        (total, allocation) => total + Math.max(0, Number(allocation.amount) || 0),
         0,
       ),
-    [newInvoice.lineItems],
+    [newInvoice.paymentAllocations],
   );
 
   const handlePatientChange = async (value) => {
     const patient = patients.find((item) => String(item.id) === String(value));
     const requestId = ++visitRequestRef.current;
+    if (value) {
+      setPatientInvoiceAssets({ memberships: [], packages: [], giftCards: [] });
+      loadInvoiceCatalogs(value);
+    } else {
+      invoiceCatalogRequestRef.current += 1;
+      setServicePackages([]);
+      setMembershipPlans([]);
+      setGiftCards([]);
+      setCoupons([]);
+      setPatientInvoiceAssets({ memberships: [], packages: [], giftCards: [] });
+      setIsLoadingInvoiceCatalogs(false);
+    }
     setVisits([]);
     setIsLoadingVisits(Boolean(value));
     setNewInvoice((prev) => ({
@@ -1108,6 +1364,8 @@ export default function Invoices() {
       gstin: patient?.gst || "",
       billingAddress: patient?.billingAddress || patient?.address || "",
       shippingAddress: patient?.shippingAddress || "",
+      paymentMode: "",
+      paymentAllocations: [{ mode: "cash", amount: "" }],
       lineItems: [createEmptyLineItem()],
     }));
 
@@ -1220,15 +1478,16 @@ export default function Invoices() {
       if (field === "type") {
         current.itemId = "";
         current.unitPrice = "";
+        if (value === "coupon") current.quantity = 1;
       }
       if (field === "itemId") {
         const catalogItem = catalogForType(current.type).find(
           (item) => String(item.id) === String(value),
         );
-        const price = current.type === "service"
-          ? catalogItem?.discountedPrice ?? catalogItem?.basePrice
-          : catalogItem?.discountedPrice ?? catalogItem?.price;
-        current.unitPrice = catalogItem ? String(Number(price) || 0) : "";
+        const price = invoiceCatalogPrice(current.type, catalogItem);
+        current.unitPrice = current.type === "coupon"
+          ? ""
+          : catalogItem ? String(Number(price) || 0) : "";
       }
       lineItems[index] = current;
       return { ...prev, lineItems };
@@ -1255,6 +1514,11 @@ export default function Invoices() {
   const createInvoice = async (e) => {
     e.preventDefault();
     const today = todayDateInput();
+    const enteredPayments = isWellness
+      ? (newInvoice.paymentAllocations || []).filter(
+          (allocation) => String(allocation.amount ?? "").trim() !== "",
+        )
+      : [];
     if (!newInvoice.dueDate) {
       notify.error("Please select a due date");
       return;
@@ -1284,6 +1548,22 @@ export default function Invoices() {
       }
       if (wellnessInvoiceTotal <= 0) {
         notify.error("The invoice total must be greater than zero");
+        return;
+      }
+      if (enteredPayments.some((allocation) => {
+        const amount = Number(allocation.amount);
+        return !Number.isFinite(amount) || amount <= 0
+          || Math.abs(amount - Math.round(amount * 100) / 100) > 1e-9;
+      })) {
+        notify.error("Each received payment must be a positive amount with up to 2 decimal places");
+        return;
+      }
+      const receivedNow = enteredPayments.reduce(
+        (total, allocation) => total + Number(allocation.amount),
+        0,
+      );
+      if (Math.round((receivedNow + Number.EPSILON) * 100) > Math.round((wellnessInvoiceTotal + Number.EPSILON) * 100)) {
+        notify.error("The amount received cannot exceed the invoice total");
         return;
       }
       const selectedVisit = visits.find(
@@ -1323,8 +1603,18 @@ export default function Invoices() {
                 gstin: newInvoice.gstin,
                 billingAddress: newInvoice.billingAddress,
                 shippingAddress: newInvoice.shippingAddress,
-                paymentMode: newInvoice.paymentMode,
-                lineItems: newInvoice.lineItems.filter((item) => item.itemId),
+                paymentMode: enteredPayments.length > 0
+                  ? [...new Set(enteredPayments.map((allocation) => allocation.mode))].length > 1
+                    ? "combined"
+                    : enteredPayments[0].mode
+                  : newInvoice.paymentAllocations?.[0]?.mode,
+                paymentAllocations: enteredPayments.map((allocation) => ({
+                  mode: allocation.mode,
+                  amount: Number(allocation.amount),
+                })),
+                lineItems: newInvoice.lineItems
+                  .filter((item) => item.itemId)
+                  .map((item) => item.type === "coupon" ? { ...item, unitPrice: null, quantity: 1 } : item),
               }
             : {}),
         }),
@@ -2115,6 +2405,11 @@ export default function Invoices() {
                         Loading items recorded for this visit...
                       </span>
                     )}
+                    {newInvoice.patientId && !isLoadingInvoiceCatalogs && patientAssignedInvoiceAssetLabels.length > 0 && (
+                      <div style={{ marginTop: "0.55rem", fontSize: "0.72rem", color: "var(--text-secondary)" }}>
+                        Patient's existing items: {patientAssignedInvoiceAssetLabels.join(", ")}
+                      </div>
+                    )}
                   </div>
 
                   <div
@@ -2358,7 +2653,7 @@ export default function Invoices() {
                       style={{ margin: 0, display: "flex", alignItems: "center", gap: "0.45rem", fontSize: "1rem" }}
                     >
                       <Package size={18} color="var(--primary-color, var(--accent-color))" />
-                      Products &amp; Services
+                      Invoice items
                     </h4>
                     <button
                       type="button"
@@ -2373,7 +2668,15 @@ export default function Invoices() {
                   <div className="invoice-line-items-list" style={{ display: "flex", flexDirection: "column", gap: "0.65rem" }}>
                     {newInvoice.lineItems.map((item, index) => {
                       const options = catalogForType(item.type);
-                      const lineTotal = (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0);
+                      const selectedCoupon = item.type === "coupon"
+                        ? coupons.find((coupon) => String(coupon.id) === String(item.itemId))
+                        : null;
+                      const lineTotal = item.type === "coupon"
+                        ? -invoiceCouponDiscount(selectedCoupon, newInvoice.lineItems || [])
+                        : (Number(item.quantity) || 0) * (Number(item.unitPrice) || 0);
+                      const hasCouponLine = (newInvoice.lineItems || []).some(
+                        (line, lineIndex) => lineIndex !== index && line.type === "coupon",
+                      );
                       return (
                         <div
                           key={`invoice-line-${index}`}
@@ -2392,11 +2695,15 @@ export default function Invoices() {
                             >
                               <option value="service">Service</option>
                               <option value="product">Product</option>
+                              <option value="package">Package</option>
+                              <option value="membership">Membership</option>
+                              <option value="giftcard">Gift card</option>
+                              <option value="coupon" disabled={Boolean(newInvoice.visitId) || hasCouponLine}>Coupon / discount</option>
                             </select>
                           </div>
                           <div>
                             <label style={{ display: "block", fontSize: "0.72rem", marginBottom: "0.3rem", color: "var(--text-secondary)" }}>
-                              Product / Service
+                              {item.type === "coupon" ? "Coupon" : "Item"}
                             </label>
                             {item.type === "product" ? (
                               <SearchableSingleSelect
@@ -2418,13 +2725,16 @@ export default function Invoices() {
                                 required
                                 value={item.itemId}
                                 onChange={(e) => handleLineItemChange(index, "itemId", e.target.value)}
+                                disabled={isLoadingInvoiceCatalogs}
                                 aria-label={`Line item ${index + 1} product or service`}
                                 style={{ background: "var(--input-bg)", padding: "0.55rem 0.45rem" }}
                               >
-                                <option value="">Select {item.type}</option>
+                                <option value="">
+                                  {isLoadingInvoiceCatalogs ? "Loading invoice options..." : `Select ${item.type}`}
+                                </option>
                                 {options.map((option) => (
                                   <option key={option.id} value={option.id}>
-                                    {option.name}
+                                    {invoiceCatalogOptionLabel(item.type, option)}
                                   </option>
                                 ))}
                               </select>
@@ -2440,7 +2750,8 @@ export default function Invoices() {
                               step="0.01"
                               required
                               className="input-field"
-                              value={item.quantity}
+                              value={item.type === "coupon" ? 1 : item.quantity}
+                              disabled={item.type === "coupon"}
                               onChange={(e) => handleLineItemChange(index, "quantity", e.target.value)}
                               aria-label={`Line item ${index + 1} quantity`}
                             />
@@ -2451,16 +2762,18 @@ export default function Invoices() {
                             </label>
                             <input
                               type="number"
-                              min="0"
+                              min={item.type === "coupon" ? undefined : "0"}
                               step="0.01"
                               required
                               className="input-field"
-                              value={item.unitPrice}
+                              value={item.type === "coupon" ? lineTotal.toFixed(2) : item.unitPrice}
+                              readOnly={item.type === "coupon"}
+                              disabled={item.type === "coupon"}
                               onChange={(e) => handleLineItemChange(index, "unitPrice", e.target.value)}
                               aria-label={`Line item ${index + 1} unit price`}
                             />
                             <span style={{ display: "block", fontSize: "0.68rem", color: "var(--text-secondary)", marginTop: "0.2rem" }}>
-                              {formatCurrency(lineTotal, newInvoice.currency)}
+                              {item.type === "coupon" ? `Discount ${formatCurrency(Math.abs(lineTotal), newInvoice.currency)}` : formatCurrency(lineTotal, newInvoice.currency)}
                             </span>
                           </div>
                           <button
@@ -2570,31 +2883,110 @@ export default function Invoices() {
               </div>
 
               {isWellness && (
-                <div>
-                  <label
-                    style={{
-                      display: "block",
-                      fontSize: "0.875rem",
-                      marginBottom: "0.5rem",
-                      color: "var(--text-secondary)",
-                    }}
-                  >
-                    Payment Mode
-                  </label>
-                  <select
-                    className="input-field"
-                    value={newInvoice.paymentMode}
-                    onChange={(e) => handleFieldChange("paymentMode", e.target.value)}
-                    style={{ background: "var(--input-bg)" }}
-                    aria-label="Payment mode"
-                  >
-                    {WELLNESS_PAYMENT_MODES.map((mode) => (
-                      <option key={mode.value} value={mode.value}>
-                        {mode.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <section
+                  aria-labelledby="invoice-payment-allocation-heading"
+                  style={{
+                    padding: "1rem",
+                    borderRadius: "12px",
+                    border: "1px solid var(--border-color)",
+                    background: "var(--subtle-bg-2)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "0.7rem",
+                  }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+                    <h4 id="invoice-payment-allocation-heading" style={{ margin: 0, fontSize: "1rem" }}>
+                      Payments received now
+                    </h4>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={addPaymentAllocation}
+                      disabled={(newInvoice.paymentAllocations || []).length >= WELLNESS_PAYMENT_MODES.length}
+                      style={{ display: "inline-flex", alignItems: "center", gap: "0.35rem", padding: "0.45rem 0.65rem", fontSize: "0.78rem" }}
+                    >
+                      <Plus size={14} /> Add another payment method
+                    </button>
+                  </div>
+                  {(newInvoice.paymentAllocations || []).map((allocation, index) => {
+                    const selectedMode = WELLNESS_PAYMENT_MODES.find((mode) => mode.value === allocation.mode);
+                    const otherPayments = newInvoice.paymentAllocations.reduce(
+                      (total, item, itemIndex) => itemIndex === index
+                        ? total
+                        : total + Math.max(0, Number(item.amount) || 0),
+                      0,
+                    );
+                    const remainingForMethod = Math.max(0, wellnessInvoiceTotal - otherPayments);
+                    return (
+                      <div
+                        key={`invoice-payment-${index}`}
+                        style={{ display: "grid", gridTemplateColumns: "minmax(140px, 1fr) minmax(140px, 1fr) auto", gap: "0.65rem", alignItems: "end" }}
+                      >
+                        <div>
+                          <label htmlFor={`invoice-payment-mode-${index}`} style={{ display: "block", fontSize: "0.72rem", marginBottom: "0.3rem", color: "var(--text-secondary)" }}>
+                            Payment mode
+                          </label>
+                          <select
+                            id={`invoice-payment-mode-${index}`}
+                            className="input-field"
+                            value={allocation.mode}
+                            onChange={(e) => handlePaymentAllocationChange(index, "mode", e.target.value)}
+                            style={{ background: "var(--input-bg)", padding: "0.55rem 0.45rem" }}
+                            aria-label={`Payment mode ${index + 1}`}
+                          >
+                            {WELLNESS_PAYMENT_MODES.map((mode) => (
+                              <option
+                                key={mode.value}
+                                value={mode.value}
+                                disabled={(newInvoice.paymentAllocations || []).some(
+                                  (other, otherIndex) => otherIndex !== index && other.mode === mode.value,
+                                )}
+                              >
+                                {mode.label}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label htmlFor={`invoice-payment-amount-${index}`} style={{ display: "block", fontSize: "0.72rem", marginBottom: "0.3rem", color: "var(--text-secondary)" }}>
+                            Amount received
+                          </label>
+                          <input
+                            id={`invoice-payment-amount-${index}`}
+                            type="number"
+                            min="0"
+                            max={remainingForMethod.toFixed(2)}
+                            step="0.01"
+                            className="input-field"
+                            placeholder="0.00"
+                            value={allocation.amount}
+                            onChange={(e) => handlePaymentAllocationChange(index, "amount", e.target.value)}
+                            aria-label={`Amount received by ${selectedMode?.label || "payment method"}`}
+                          />
+                        </div>
+                        {(newInvoice.paymentAllocations || []).length > 1 && (
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => removePaymentAllocation(index)}
+                            aria-label={`Remove ${selectedMode?.label || "payment method"}`}
+                            style={{ padding: "0.55rem 0.7rem" }}
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <div style={{ color: wellnessPaymentTotal > wellnessInvoiceTotal ? "var(--danger-color, #b42318)" : "var(--text-secondary)", fontSize: "0.82rem" }}>
+                    Received {formatCurrency(wellnessPaymentTotal, newInvoice.currency)} of {formatCurrency(wellnessInvoiceTotal, newInvoice.currency)}
+                    {" · "}Balance due {formatCurrency(Math.max(0, wellnessInvoiceTotal - wellnessPaymentTotal), newInvoice.currency)}
+                  </div>
+                  <div style={{ color: "var(--text-secondary)", fontSize: "0.75rem" }}>
+                    Leave the amount blank when no payment is received yet. The received total cannot exceed the invoice total.
+                  </div>
+                </section>
               )}
 
               <div>
@@ -2661,24 +3053,47 @@ export default function Invoices() {
             <Receipt size={20} color="var(--success-color)" /> Invoice Ledger
             {isRefreshingInvoices && <span className="pickup-module-refresh-status" role="status">Refreshing data…</span>}
           </h3>
-          {isGeneric && hasAnyInvoiceFilter && (
-            <button
-              type="button"
-              className="btn-secondary invoice-ledger-clear-filters"
-              onClick={() => {
-                setStatusFilter("ALL");
-                setSummaryFilter("ALL");
-                setDateRange("ALL");
-                setCustomFrom("");
-                setCustomTo("");
-                setColumnFilters(EMPTY_INVOICE_COLUMN_FILTERS);
-                setActiveColumnFilter(null);
-              }}
-            >
-              <X size={14} aria-hidden="true" />
-              Clear filters
-            </button>
-          )}
+          <div className="invoice-ledger-heading-actions">
+            <div className="invoice-ledger-search" role="search">
+              <Search size={16} aria-hidden="true" />
+              <input
+                className="naked-input"
+                type="text"
+                value={invoiceSearch}
+                onChange={(event) => setInvoiceSearch(event.target.value)}
+                placeholder="Search invoice #, customer, phone, or item"
+                aria-label="Search invoices by invoice number, customer, phone, or item"
+              />
+              {invoiceSearch && (
+                <button
+                  type="button"
+                  onClick={() => setInvoiceSearch("")}
+                  aria-label="Clear invoice search"
+                >
+                  <X size={14} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+            {isGeneric && hasAnyInvoiceFilter && (
+              <button
+                type="button"
+                className="btn-secondary invoice-ledger-clear-filters"
+                onClick={() => {
+                  setStatusFilter("ALL");
+                  setSummaryFilter("ALL");
+                  setDateRange("ALL");
+                  setCustomFrom("");
+                  setCustomTo("");
+                  setInvoiceSearch("");
+                  setColumnFilters(EMPTY_INVOICE_COLUMN_FILTERS);
+                  setActiveColumnFilter(null);
+                }}
+              >
+                <X size={14} aria-hidden="true" />
+                Clear filters
+              </button>
+            )}
+          </div>
         </div>
 
         {isLoadingInvoices ? (
@@ -2788,7 +3203,7 @@ export default function Invoices() {
                             letterSpacing: "0.05em",
                           }}
                         >
-                          Products / Services
+                          Invoice Items
                         </th>
                         <th
                           style={{
@@ -3038,7 +3453,7 @@ export default function Invoices() {
                     const displayAmount = convertLedgerAmount(inv.amount, invoiceCurrency);
                     const displayAmountPaid = convertLedgerAmount(amountPaid, invoiceCurrency);
                     const displayBalanceDue = convertLedgerAmount(balanceDue, invoiceCurrency);
-                    const isPartiallyPaid = isGeneric
+                    const isPartiallyPaid = (isGeneric || isWellness)
                       && inv.status === "UNPAID"
                       && amountPaid > 0
                       && balanceDue > 0;
@@ -3108,12 +3523,12 @@ export default function Invoices() {
                               <div key={`${item.type || "item"}-${item.itemId || index}`} style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
                                 {item.name || "Unnamed inventory item"}
                                 <span style={{ fontSize: "0.7rem", marginLeft: "0.35rem" }}>
-                                  ({item.type || "item"})
+                                  ({invoiceLineTypeLabel(item.type)})
                                 </span>
                               </div>
                             ))
                           ) : (
-                            "No products or services"
+                            "No invoice items"
                           )}
                         </td>
                       )}
@@ -3168,13 +3583,17 @@ export default function Invoices() {
                       </td>
                       {isWellness && (
                         <td style={{ padding: "0.75rem 0.4rem", color: "var(--text-secondary)", whiteSpace: "normal", overflowWrap: "anywhere" }}>
-                          <div>{formatPaymentMode(inv.paymentMode, inv.amount)}</div>
-                          {(inv.paymentMode === "combined" || inv.paymentMode === "other") && importedPaymentBreakdown.length > 0 && (
+                          <div>{importedPaymentBreakdown.length > 0 ? "Mixed payment" : formatPaymentMode(inv.paymentMode, inv.amount)}</div>
+                          {importedPaymentBreakdown.length > 0 && (
                             <div
-                              title={importedPaymentBreakdown.map((item) => `${item.mode}: ${formatCurrency(item.amount, invoiceCurrency)}`).join(" · ")}
-                              style={{ maxWidth: 210, marginTop: "0.2rem", fontSize: "0.68rem", lineHeight: 1.3 }}
+                              title={importedPaymentBreakdown.map((item) => `${item.mode}: ${formatCurrency(item.amount, invoiceCurrency)}`).join("\n")}
+                              style={{ maxWidth: 210, marginTop: "0.2rem", fontSize: "0.68rem", lineHeight: 1.3, display: "flex", flexDirection: "column", alignItems: "flex-start" }}
                             >
-                              {importedPaymentBreakdown.map((item) => `${item.mode}: ${formatCurrency(item.amount, invoiceCurrency)}`).join(" · ")}
+                              {importedPaymentBreakdown.map((item) => (
+                                <div key={item.mode}>
+                                  {item.mode}: {formatCurrency(item.amount, invoiceCurrency)}
+                                </div>
+                              ))}
                             </div>
                           )}
                         </td>

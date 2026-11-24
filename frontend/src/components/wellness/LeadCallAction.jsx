@@ -2,12 +2,9 @@ import { PhoneCall } from 'lucide-react';
 import CallifiedCallDialog from '../CallifiedCallDialog';
 
 /**
- * Callified calling UI for the lead lists — All Leads and Converted Leads.
- *
- * Both pages are views over Contact filtered by status, so both render these
- * same controls and both call through /api/wellness/callified/leads/:leadId/*.
- * Shared here rather than written twice, so the two lists cannot drift apart.
- * The wellness + configured gate lives in hooks/useLeadCalling.js.
+ * Callified calling UI for the Wellness All Leads page. The same controls
+ * call through /api/wellness/callified/leads/:leadId/*, with the wellness +
+ * configured gate handled by hooks/useLeadCalling.js.
  */
 
 /**

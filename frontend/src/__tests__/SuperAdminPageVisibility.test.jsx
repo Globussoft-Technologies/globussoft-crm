@@ -1,7 +1,14 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import SuperAdminPageVisibility from "../pages/superadmin/SuperAdminPageVisibility";
 import { superAdminFetch } from "../utils/superAdminApi";
+
+const superAdminStyles = readFileSync(
+  resolve(process.cwd(), "src/pages/superadmin/super-admin.css"),
+  "utf8",
+);
 
 vi.mock("../utils/superAdminApi", () => ({
   superAdminFetch: vi.fn(),
@@ -36,6 +43,15 @@ beforeEach(() => {
 });
 
 describe("SuperAdminPageVisibility", () => {
+  test("stacks organization controls and wraps the summary at constrained widths", () => {
+    expect(superAdminStyles).toMatch(
+      /@media \(max-width: 1120px\)\s*\{[\s\S]*?\.super-admin-page-visibility__controls\s*\{\s*grid-template-columns: minmax\(0, 1fr\);/,
+    );
+    expect(superAdminStyles).toMatch(
+      /\.super-admin-page-visibility__count\s*\{[^}]*white-space: normal;[^}]*overflow-wrap: anywhere;/,
+    );
+  });
+
   test("shows each organization's real CRM vertical", async () => {
     superAdminFetch.mockImplementation((path) => {
       if (path.startsWith("/tenant-management/tenants/1/page-visibility")) {

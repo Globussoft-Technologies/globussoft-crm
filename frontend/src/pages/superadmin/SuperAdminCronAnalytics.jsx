@@ -57,8 +57,8 @@ function Card({ title, children, right }) {
         background: "var(--card-bg, rgba(255,255,255,0.02))",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.75rem" }}>
-        <h3 style={{ fontSize: "0.85rem", fontWeight: 700, margin: 0 }}>{title}</h3>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem", minWidth: 0, marginBottom: "0.75rem" }}>
+        <h3 style={{ minWidth: 0, fontSize: "0.85rem", fontWeight: 700, margin: 0 }}>{title}</h3>
         {right}
       </div>
       {children}

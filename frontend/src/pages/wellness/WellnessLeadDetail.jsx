@@ -26,11 +26,22 @@ const WELLNESS_STAGES = [
 const WELLNESS_PRIMARY_STAGES = WELLNESS_STAGES.filter((stage) => stage.kind === 'primary');
 const WELLNESS_ALTERNATIVE_STAGES = WELLNESS_STAGES.filter((stage) => stage.kind === 'alternative');
 const WELLNESS_STAGE_BY_KEY = new Map(WELLNESS_STAGES.map((stage) => [stage.key, stage]));
+const ACTIVITY_PAGE_SIZE = 20;
+const APPOINTMENT_PAGE_SIZE = 20;
 
 const getList = (value) => Array.isArray(value) ? value : [];
 const getApiList = (value, key) => Array.isArray(value)
   ? value
   : getList(value?.[key] || value?.users || value?.data);
+const mapVisitToAppointment = (visit) => ({
+  id: visit.id,
+  patientId: visit.patientId,
+  serviceName: visit.service?.name || visit.serviceName || 'General appointment',
+  doctorName: visit.doctor?.name || visit.doctorName || 'Practitioner pending',
+  appointmentDate: visit.visitDate || visit.appointmentDate,
+  status: visit.status,
+  reason: visit.reason,
+});
 const fetchLinkedPatients = async (contactId) => {
   const pageSize = 200;
   const loadPage = (offset) => fetchApi(
@@ -57,6 +68,8 @@ export default function WellnessLeadDetail() {
   const canAssignOwner = permissionsReady && (hasPermission('contacts', 'update') || hasPermission('leads', 'update'));
   const [contact, setContact] = useState(null);
   const [patients, setPatients] = useState([]);
+  const [appointmentPreview, setAppointmentPreview] = useState(null);
+  const [appointmentTotal, setAppointmentTotal] = useState(null);
   const [locations, setLocations] = useState([]);
   const [staff, setStaff] = useState([]);
   const [activities, setActivities] = useState([]);
@@ -67,6 +80,8 @@ export default function WellnessLeadDetail() {
   const [activeTab, setActiveTab] = useState('overview');
   const [selectedStage, setSelectedStage] = useState('');
   const [openStageMenu, setOpenStageMenu] = useState('');
+  const [pendingStageChange, setPendingStageChange] = useState(null);
+  const [stageChangeReasonError, setStageChangeReasonError] = useState('');
   const [editing, setEditing] = useState(false);
   const [noteDraft, setNoteDraft] = useState('');
   const [savingNote, setSavingNote] = useState(false);
@@ -92,9 +107,14 @@ export default function WellnessLeadDetail() {
   const completedThrough = currentAlternative
     ? WELLNESS_PRIMARY_STAGES.findIndex((stage) => stage.key === currentAlternative.choiceFor)
     : currentPrimaryIndex;
-  const noteActivities = useMemo(() => activities.filter((item) => item.type === 'Note'), [activities]);
-  const otherActivities = useMemo(() => activities.filter((item) => item.type !== 'Note'), [activities]);
   const appointments = useMemo(() => getList(contact?.appointments).slice().sort((a, b) => new Date(a.appointmentDate) - new Date(b.appointmentDate)), [contact?.appointments]);
+  const contactUpcomingAppointments = useMemo(() => appointments.filter((appointment) => {
+    const appointmentTime = new Date(appointment.appointmentDate).getTime();
+    return Number.isFinite(appointmentTime)
+      && appointmentTime >= Date.now()
+      && !['cancelled', 'completed', 'no-show'].includes(String(appointment.status || '').toLowerCase());
+  }), [appointments]);
+  const upcomingAppointments = appointmentPreview || contactUpcomingAppointments;
 
   useEffect(() => {
     if (!openStageMenu) return undefined;
@@ -118,17 +138,18 @@ export default function WellnessLeadDetail() {
     setPatientsLoading(true);
     setError('');
     setPatientAccessError('');
-    const [contactResult, patientsResult, locationsResult, staffResult] = await Promise.allSettled([
+    const [contactResult, patientsResult, locationsResult, staffResult, appointmentsResult] = await Promise.allSettled([
       fetchApi(`/api/contacts/${id}`),
       fetchLinkedPatients(id),
       fetchApi('/api/wellness/locations', { silent: true }),
       fetchApi('/api/staff?fields=summary', { silent: true }),
+      fetchApi(`/api/wellness/visits?contactId=${encodeURIComponent(id)}&upcoming=true&page=1&limit=1&paginate=true&sortBy=asc`, { silent: true }),
     ]);
     if (requestId !== loadRequestRef.current) return;
     if (contactResult.status === 'fulfilled') {
       const nextContact = contactResult.value;
       setContact(nextContact);
-      setActivities(getList(nextContact?.activities));
+      setActivities([]);
     } else {
       setContact(null);
       setError(contactResult.reason?.body?.error || 'Unable to load this lead.');
@@ -142,6 +163,13 @@ export default function WellnessLeadDetail() {
     }
     setLocations(locationsResult.status === 'fulfilled' ? getApiList(locationsResult.value, 'locations') : []);
     setStaff(staffResult.status === 'fulfilled' ? getApiList(staffResult.value, 'staff') : []);
+    if (appointmentsResult.status === 'fulfilled' && Array.isArray(appointmentsResult.value?.visits)) {
+      setAppointmentPreview(appointmentsResult.value.visits.map(mapVisitToAppointment));
+      setAppointmentTotal(Number(appointmentsResult.value.pagination?.total) || 0);
+    } else {
+      setAppointmentPreview(null);
+      setAppointmentTotal(null);
+    }
     setLoading(false);
     setPatientsLoading(false);
   }, [id]);
@@ -149,7 +177,12 @@ export default function WellnessLeadDetail() {
   useEffect(() => {
     setContact(null);
     setPatients([]);
+    setAppointmentPreview(null);
+    setAppointmentTotal(null);
+    setActivities([]);
     setSelectedStage('');
+    setPendingStageChange(null);
+    setStageChangeReasonError('');
     const requestedTab = new URLSearchParams(location.search).get('tab');
     const normalizedTab = requestedTab === 'deals' ? 'appointments' : requestedTab;
     setActiveTab(['overview', 'details', 'patients', 'appointments', 'activity', 'notes'].includes(normalizedTab) ? normalizedTab : 'overview');
@@ -157,14 +190,14 @@ export default function WellnessLeadDetail() {
     return () => { loadRequestRef.current += 1; };
   }, [id, location.search, load]);
 
-  const updateStage = async (stage) => {
-    if (!contact || savingStatus) return;
+  const updateStage = async (stage, transitionReason = '') => {
+    if (!contact || savingStatus) return false;
     const previousStage = currentStage;
     if (
       currentStage === stage.key &&
       contact.lifecycleStageKey === stage.key &&
       contact.status === stage.status
-    ) return;
+    ) return false;
     setSelectedStage(stage.key);
     setSavingStatus(true);
     try {
@@ -173,10 +206,16 @@ export default function WellnessLeadDetail() {
         body: JSON.stringify({
           status: stage.status,
           lifecycleStageKey: stage.key,
-          ...(stage.status === 'Churned' ? { lifecycleTransitionReason: `Patient journey status: ${stage.label}` } : {}),
+          ...(transitionReason.trim() ? { lifecycleTransitionReason: transitionReason.trim() } : {}),
         }),
       });
       setContact((current) => ({ ...current, ...updated, status: updated?.status || stage.status, lifecycleStageKey: updated?.lifecycleStageKey || stage.key }));
+      if (updated?.lifecycleActivity) {
+        setActivities((current) => [
+          updated.lifecycleActivity,
+          ...current.filter((activity) => activity.id !== updated.lifecycleActivity.id),
+        ]);
+      }
       if (stage.status === 'Customer') {
         const linkedPatients = await fetchLinkedPatients(id).catch(() => null);
         if (linkedPatients) {
@@ -185,12 +224,45 @@ export default function WellnessLeadDetail() {
         }
       }
       notify.success('Lead stage updated.');
+      return true;
     } catch (requestError) {
       setSelectedStage(previousStage);
       notify.error(requestError?.body?.error || 'Unable to update the lead stage.');
+      return false;
     } finally {
       setSavingStatus(false);
     }
+  };
+
+  const requestStageChange = (stage) => {
+    setOpenStageMenu('');
+    if (stage.key === currentStage) return;
+    const getProgressIndex = (key) => {
+      const current = WELLNESS_STAGE_BY_KEY.get(key);
+      const primaryKey = current?.choiceFor || key;
+      return WELLNESS_PRIMARY_STAGES.findIndex((item) => item.key === primaryKey);
+    };
+    const isBackward = getProgressIndex(stage.key) < getProgressIndex(currentStage);
+    const requiresReason = stage.kind === 'alternative' || isBackward;
+    if (!requiresReason) {
+      updateStage(stage);
+      return;
+    }
+    setStageChangeReasonError('');
+    setPendingStageChange({ stage, isBackward, reason: '' });
+  };
+
+  const confirmStageChange = async (event) => {
+    event.preventDefault();
+    if (!pendingStageChange) return;
+    const reason = pendingStageChange.reason.trim();
+    if (!reason) {
+      setStageChangeReasonError('Enter a reason before changing this stage.');
+      return;
+    }
+    setStageChangeReasonError('');
+    const saved = await updateStage(pendingStageChange.stage, reason);
+    if (saved) setPendingStageChange(null);
   };
 
   const addNote = async (event) => {
@@ -342,7 +414,7 @@ export default function WellnessLeadDetail() {
                     className="wellness-lead-stage-main"
                     aria-current={isCurrent ? 'step' : undefined}
                     disabled={savingStatus}
-                    onClick={() => { setOpenStageMenu(''); updateStage(stage); }}
+                    onClick={() => requestStageChange(stage)}
                   >
                     <span>{stage.label}</span>
                     {selectedAlternative && <small>{selectedAlternative.label}</small>}
@@ -370,7 +442,7 @@ export default function WellnessLeadDetail() {
                               key={option.key}
                               aria-current={currentStage === option.key ? 'step' : undefined}
                               disabled={savingStatus}
-                              onClick={() => { setOpenStageMenu(''); updateStage(option); }}
+                              onClick={() => requestStageChange(option)}
                             >
                               {option.label}
                             </button>
@@ -408,7 +480,7 @@ export default function WellnessLeadDetail() {
             <h2>Patient summary</h2>
             <div className="wellness-lead-summary-grid">
               <SummaryTile label="Linked records" value={patientsLoading ? '…' : patients.length} />
-              <SummaryTile label="Upcoming appointments" value={appointments.length} />
+              <SummaryTile label="Upcoming appointments" value={appointmentTotal ?? upcomingAppointments.length} />
               <SummaryTile label="Patient status" value={currentStageLabel} />
               <SummaryTile label="Lead score" value={contact.aiScore != null ? `${contact.aiScore}/100` : '—'} />
             </div>
@@ -443,21 +515,8 @@ export default function WellnessLeadDetail() {
               </section>
 
               <section className="wellness-lead-overview-block">
-                <div className="wellness-lead-block-heading"><div><span className="wellness-lead-overline">Linked clinical records</span><h2>Patients</h2></div></div>
-                {patientsLoading ? <div className="wellness-lead-empty">Loading linked patient records…</div> : patients.length ? (
-                  <div className="wellness-lead-patient-list">
-                    {patients.slice(0, 3).map((patient) => <PatientMiniCard key={patient.id} patient={patient} onOpen={() => setActiveTab('patients')} />)}
-                    {patients.length > 3 && <p className="wellness-lead-muted">And {patients.length - 3} more linked patient records.</p>}
-                  </div>
-                ) : (
-                  <div className="wellness-lead-empty">No patient record is linked to this lead yet. Linked patient charts will appear here.</div>
-                )}
-                {patientAccessError && <p className="wellness-lead-inline-error" role="alert">{patientAccessError}</p>}
-              </section>
-
-              <section className="wellness-lead-overview-block">
                 <div className="wellness-lead-block-heading"><div><span className="wellness-lead-overline">Care schedule</span><h2>Next appointments</h2></div><button className="wellness-lead-link-button" type="button" onClick={() => setActiveTab('appointments')}><CalendarDays size={14} /> View appointments</button></div>
-                <AppointmentList appointments={appointments.slice(0, 4)} contactName={contact.name} patients={patients} />
+                <AppointmentList appointments={upcomingAppointments.slice(0, 1)} contactName={contact.name} patients={patients} />
               </section>
             </div>
           )}
@@ -494,33 +553,71 @@ export default function WellnessLeadDetail() {
           )}
 
           {activeTab === 'appointments' && (
-            <div className="wellness-lead-tab-content">
+            <div className="wellness-lead-tab-content wellness-lead-scroll-tab">
               <div className="wellness-lead-block-heading"><div><span className="wellness-lead-overline">Care schedule</span><h2>Upcoming appointments</h2></div></div>
-              <AppointmentList appointments={appointments} contactName={contact.name} patients={patients} />
-              {patients.length > 0 && <p className="wellness-lead-muted">Completed visits and the full visit history are available in each patient’s chart under Patient records.</p>}
+              <AppointmentsInfiniteList contactId={contact.id} contactName={contact.name} patients={patients} />
             </div>
           )}
 
           {activeTab === 'activity' && (
-            <div className="wellness-lead-tab-content">
+            <div className="wellness-lead-tab-content wellness-lead-scroll-tab">
               <div className="wellness-lead-block-heading"><div><span className="wellness-lead-overline">Lead history</span><h2>Activities</h2></div></div>
-              <ActivityList activities={otherActivities} />
+              <ActivityList contactId={contact.id} recentActivities={activities} mode="activity" />
             </div>
           )}
 
           {activeTab === 'notes' && (
-            <div className="wellness-lead-tab-content">
+            <div className="wellness-lead-tab-content wellness-lead-scroll-tab">
               <div className="wellness-lead-block-heading"><div><span className="wellness-lead-overline">Care team notes</span><h2>Notes</h2></div></div>
               <form className="wellness-lead-note-composer" onSubmit={addNote}>
                 <label className="wellness-lead-sr-only" htmlFor="wellness-lead-note">Add a note</label>
                 <textarea id="wellness-lead-note" rows={3} value={noteDraft} onChange={(event) => setNoteDraft(event.target.value)} placeholder="Add a note about this lead or follow-up…" />
                 <button className="wellness-lead-button wellness-lead-button-primary" type="submit" disabled={!noteDraft.trim() || savingNote}>{savingNote ? 'Saving…' : <><Plus size={15} /> Add note</>}</button>
               </form>
-              <ActivityList activities={noteActivities} empty="No notes have been added yet." />
+              <ActivityList contactId={contact.id} recentActivities={activities} mode="notes" empty="No notes have been added yet." />
             </div>
           )}
         </section>
       </div>
+
+      {pendingStageChange && (
+        <div className="wellness-lead-dialog-backdrop">
+          <form
+            className="wellness-lead-reason-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="wellness-lead-stage-reason-title"
+            onSubmit={confirmStageChange}
+          >
+            <h2 id="wellness-lead-stage-reason-title">Reason required</h2>
+            <p>
+              {pendingStageChange.isBackward
+                ? `You are moving this lead backward to ${pendingStageChange.stage.label}. Enter a reason to continue; it will be saved in lead activity.`
+                : `Enter a reason for selecting ${pendingStageChange.stage.label}. This will be saved in lead activity.`}
+            </p>
+            <label htmlFor="wellness-lead-stage-reason">Reason</label>
+            <textarea
+              id="wellness-lead-stage-reason"
+              aria-label="Reason for stage change"
+              autoFocus
+              maxLength={500}
+              rows={4}
+              value={pendingStageChange.reason}
+              onChange={(event) => {
+                setPendingStageChange((current) => ({ ...current, reason: event.target.value }));
+                if (stageChangeReasonError) setStageChangeReasonError('');
+              }}
+              placeholder="Enter the reason for this stage change"
+              disabled={savingStatus}
+            />
+            {stageChangeReasonError && <div className="wellness-lead-inline-error" role="alert">{stageChangeReasonError}</div>}
+            <div className="wellness-lead-reason-actions">
+              <button className="wellness-lead-button" type="button" disabled={savingStatus} onClick={() => setPendingStageChange(null)}>Cancel</button>
+              <button className="wellness-lead-button wellness-lead-button-primary" type="submit" disabled={savingStatus}>{savingStatus ? 'Saving…' : 'Confirm stage change'}</button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {editing && <EditContactModal contact={contact} customFieldDefs={[]} onClose={() => setEditing(false)} onSaved={(updated) => { setContact((current) => ({ ...current, ...updated })); setEditing(false); }} />}
     </main>
@@ -537,22 +634,6 @@ function InfoCard({ label, value }) {
 
 function SummaryTile({ label, value }) {
   return <div className="wellness-lead-summary-tile"><span>{label}</span><strong>{value}</strong></div>;
-}
-
-function PatientMiniCard({ patient, onOpen }) {
-  const context = [
-    patient.source ? `Source: ${patient.source}` : null,
-    patient.lastVisitDate ? `Last visit: ${formatDate(patient.lastVisitDate)}` : null,
-  ].filter(Boolean).join(' · ');
-  return (
-    <button className="wellness-lead-patient-mini" type="button" onClick={onOpen} aria-label={`Open chart for ${patient.displayName || patient.name || 'patient'}`}>
-      <div className="wellness-lead-patient-avatar">{getInitials(patient.displayName || patient.name)}</div>
-      <div className="wellness-lead-patient-mini-main">
-        <strong>{patient.displayName || patient.name || 'Patient'}</strong>
-        <span>{context || 'View linked patient record'}</span>
-      </div>
-    </button>
-  );
 }
 
 function AppointmentList({ appointments, contactName, patients = [] }) {
@@ -574,16 +655,202 @@ function AppointmentList({ appointments, contactName, patients = [] }) {
   );
 }
 
-function ActivityList({ activities, empty = 'No activities recorded yet.' }) {
-  if (!activities.length) return <div className="wellness-lead-empty">{empty}</div>;
+function AppointmentsInfiniteList({ contactId, contactName, patients = [] }) {
+  const [appointments, setAppointments] = useState([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const scrollRef = useRef(null);
+  const loadingRef = useRef(false);
+  const pageRef = useRef(0);
+  const totalPagesRef = useRef(1);
+  const requestVersionRef = useRef(0);
+
+  const fetchPage = useCallback(async (page) => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    const requestVersion = requestVersionRef.current;
+    setLoading(true);
+    setLoadError('');
+    try {
+      const result = await fetchApi(
+        `/api/wellness/visits?contactId=${encodeURIComponent(contactId)}&upcoming=true&page=${page}&limit=${APPOINTMENT_PAGE_SIZE}&paginate=true&sortBy=asc`,
+        { silent: true },
+      );
+      if (requestVersion !== requestVersionRef.current) return;
+      const rows = getList(result?.visits).map(mapVisitToAppointment);
+      setAppointments((current) => {
+        const currentIds = new Set(current.map((appointment) => String(appointment.id)));
+        return [...current, ...rows.filter((appointment) => !currentIds.has(String(appointment.id)))];
+      });
+      pageRef.current = page;
+      const totalPages = Math.max(1, Number(result?.pagination?.pages) || 1);
+      totalPagesRef.current = totalPages;
+      setHasMore(Boolean(result?.pagination?.hasNext) && page < totalPages);
+    } catch {
+      if (requestVersion === requestVersionRef.current) setLoadError('Unable to load appointments. Try again.');
+    } finally {
+      if (requestVersion === requestVersionRef.current) {
+        loadingRef.current = false;
+        setLoading(false);
+      }
+    }
+  }, [contactId]);
+
+  useEffect(() => {
+    requestVersionRef.current += 1;
+    loadingRef.current = false;
+    pageRef.current = 0;
+    totalPagesRef.current = 1;
+    setAppointments([]);
+    setHasMore(false);
+    setLoadError('');
+    fetchPage(1);
+    return () => {
+      requestVersionRef.current += 1;
+      loadingRef.current = false;
+    };
+  }, [fetchPage]);
+
+  const loadNextPage = useCallback(() => {
+    if (!hasMore || loading || loadingRef.current || pageRef.current >= totalPagesRef.current) return;
+    fetchPage(pageRef.current + 1);
+  }, [fetchPage, hasMore, loading]);
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element || element.clientHeight === 0 || element.scrollHeight > element.clientHeight || !hasMore || loading) return;
+    loadNextPage();
+  }, [appointments.length, hasMore, loadNextPage, loading]);
+
+  const handleScroll = (event) => {
+    const element = event.currentTarget;
+    if (element.scrollHeight - element.scrollTop - element.clientHeight < 120) loadNextPage();
+  };
+
   return (
-    <div className="wellness-lead-activity-list">
-      {activities.map((activity) => (
-        <article className="wellness-lead-activity" key={activity.id}>
-          <div className="wellness-lead-activity-icon">{activity.type === 'Note' ? <StickyNote size={16} /> : <ClipboardList size={16} />}</div>
-          <div><strong>{activity.type || 'Activity'}</strong><p>{activity.description || 'No description'}</p><small>{activity.user?.name || activity.user?.email || 'System'} · {formatDateTime(activity.createdAt)}</small></div>
-        </article>
-      ))}
+    <div className="wellness-lead-infinite-scroll" ref={scrollRef} role="region" aria-label="Upcoming appointments list" tabIndex={0} onScroll={handleScroll} aria-busy={loading}>
+      {appointments.length ? <AppointmentList appointments={appointments} contactName={contactName} patients={patients} /> : !loading && !loadError ? (
+        <div className="wellness-lead-empty">No upcoming appointments for {contactName}.</div>
+      ) : null}
+      {loading && <div className="wellness-lead-scroll-status" role="status">Loading appointments…</div>}
+      {loadError && <div className="wellness-lead-scroll-error" role="alert">{loadError}<button type="button" onClick={() => fetchPage(Math.max(1, pageRef.current + 1))}>Retry</button></div>}
+      {hasMore && !loading && !loadError && <div className="wellness-lead-scroll-status" aria-hidden="true">Scroll for more</div>}
     </div>
   );
+}
+
+function ActivityList({ contactId, recentActivities = [], mode = 'activity', empty = 'No activities recorded yet.' }) {
+  const [loadedActivities, setLoadedActivities] = useState([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const scrollRef = useRef(null);
+  const loadingRef = useRef(false);
+  const pageRef = useRef(0);
+  const totalPagesRef = useRef(1);
+  const requestVersionRef = useRef(0);
+
+  const fetchPage = useCallback(async (page, replace = false) => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    const requestVersion = requestVersionRef.current;
+    setLoading(true);
+    setLoadError('');
+    const typeQuery = mode === 'notes' ? '&type=Note' : '&excludeType=Note';
+    try {
+      const result = await fetchApi(
+        `/api/contacts/${contactId}/activities?page=${page}&limit=${ACTIVITY_PAGE_SIZE}${typeQuery}`,
+        { silent: true },
+      );
+      if (requestVersion !== requestVersionRef.current) return;
+      const rows = getList(result?.data);
+      setLoadedActivities((current) => mergeActivityRows(replace ? [] : current, rows));
+      const totalPages = Math.max(1, Number(result?.totalPages) || 1);
+      pageRef.current = page;
+      totalPagesRef.current = totalPages;
+      setHasMore(page < totalPages);
+    } catch {
+      if (requestVersion === requestVersionRef.current) {
+        setLoadError(`Unable to load ${mode === 'notes' ? 'notes' : 'activities'}. Try again.`);
+      }
+    } finally {
+      if (requestVersion === requestVersionRef.current) {
+        loadingRef.current = false;
+        setLoading(false);
+      }
+    }
+  }, [contactId, mode]);
+
+  useEffect(() => {
+    requestVersionRef.current += 1;
+    loadingRef.current = false;
+    pageRef.current = 0;
+    totalPagesRef.current = 1;
+    setLoadedActivities([]);
+    setHasMore(false);
+    setLoadError('');
+    fetchPage(1, true);
+    return () => {
+      requestVersionRef.current += 1;
+      loadingRef.current = false;
+    };
+  }, [fetchPage]);
+
+  const visibleRecentActivities = useMemo(
+    () => recentActivities.filter((activity) => (mode === 'notes' ? activity.type === 'Note' : activity.type !== 'Note')),
+    [mode, recentActivities],
+  );
+  const visibleActivities = useMemo(
+    () => mergeActivityRows(loadedActivities, visibleRecentActivities),
+    [loadedActivities, visibleRecentActivities],
+  );
+
+  const loadNextPage = () => {
+    if (!hasMore || loading || loadingRef.current || pageRef.current >= totalPagesRef.current) return;
+    fetchPage(pageRef.current + 1);
+  };
+  const handleScroll = (event) => {
+    const element = event.currentTarget;
+    if (element.scrollHeight - element.scrollTop - element.clientHeight < 120) loadNextPage();
+  };
+
+  return (
+    <div className="wellness-lead-infinite-scroll" ref={scrollRef} role="region" aria-label={mode === 'notes' ? 'Notes list' : 'Activity list'} tabIndex={0} onScroll={handleScroll} aria-busy={loading}>
+      {visibleActivities.length ? (
+        <div className="wellness-lead-activity-list">
+          {visibleActivities.map((activity) => (
+            <article className="wellness-lead-activity" key={activity.id}>
+              <div className="wellness-lead-activity-icon">{activity.type === 'Note' ? <StickyNote size={16} /> : <ClipboardList size={16} />}</div>
+              <div><strong>{activity.type || 'Activity'}</strong><p>{activity.description || 'No description'}</p><small>{activity.user?.name || activity.user?.email || (activity.userId ? `User #${activity.userId}` : 'System')} · {formatDateTime(activity.createdAt)}</small></div>
+            </article>
+          ))}
+        </div>
+      ) : !loading && !loadError ? (
+        mode === 'notes' ? (
+          <div className="wellness-lead-empty-panel wellness-lead-notes-empty">
+            <FileText size={38} aria-hidden="true" />
+            <strong>No notes yet</strong>
+            <span>Add the first note to keep track of important updates, follow-ups, or discussions about this lead.</span>
+          </div>
+        ) : <div className="wellness-lead-empty">{empty}</div>
+      ) : null}
+      {loading && <div className="wellness-lead-scroll-status" role="status">Loading {mode === 'notes' ? 'notes' : 'activities'}…</div>}
+      {loadError && <div className="wellness-lead-scroll-error" role="alert">{loadError}<button type="button" onClick={() => fetchPage(Math.max(1, pageRef.current + 1), pageRef.current === 0)}>Retry</button></div>}
+      {hasMore && !loading && !loadError && <div className="wellness-lead-scroll-status" aria-hidden="true">Scroll for more</div>}
+    </div>
+  );
+}
+
+function mergeActivityRows(current, incoming) {
+  const rowsById = new Map();
+  [...current, ...incoming].forEach((activity, index) => {
+    const key = activity.id == null ? `activity-${index}-${activity.createdAt || ''}` : String(activity.id);
+    rowsById.set(key, activity);
+  });
+  return [...rowsById.values()].sort((left, right) => {
+    const timeDifference = new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime();
+    if (Number.isFinite(timeDifference) && timeDifference !== 0) return timeDifference;
+    return String(right.id || '').localeCompare(String(left.id || ''), undefined, { numeric: true });
+  });
 }

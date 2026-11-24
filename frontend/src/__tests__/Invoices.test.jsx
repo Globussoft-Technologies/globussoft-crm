@@ -1610,6 +1610,43 @@ describe('<Invoices /> — wellness customer invoice form', () => {
     const wellnessUnpaidBadge = screen.getAllByText('Unpaid').find((node) => node.closest('tr'));
     expect(wellnessUnpaidBadge.getAttribute('style')).toMatch(/border:\s*0px?\s+solid\s+transparent/i);
   });
+
+  it('shows the imported mixed payment split alongside the generated service for INV-002145', async () => {
+    const invoice = {
+      id: 2145,
+      invoiceNum: 'INV-002145',
+      amount: 6275,
+      amountPaid: 6275,
+      balance: 0,
+      status: 'PAID',
+      dueDate: '2026-10-29',
+      issuedDate: '2026-10-29',
+      patientId: 11,
+      customerName: 'Dipika',
+      paymentMode: 'combined',
+      lineItemsJson: JSON.stringify([
+        { type: 'service', itemId: 21, name: 'Dr Consultation', quantity: 1, unitPrice: 6275, amount: 6275 },
+      ]),
+      importedPaymentSplit: { Cash: 6200, UPI: 75 },
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve([invoice]);
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    renderInvoices(ADMIN_USER, { vertical: 'wellness', defaultCurrency: 'INR' });
+
+    const invoiceNumber = await screen.findByText('INV-002145');
+    const row = invoiceNumber.closest('tr');
+    expect(row).toHaveTextContent('Dr Consultation');
+    expect(row).toHaveTextContent('Mixed payment');
+    expect(row).toHaveTextContent(/Cash: ₹6?,?200\.00/);
+    expect(row).toHaveTextContent(/UPI: ₹75\.00/);
+    expect(screen.getByText('Cash: ₹6200.00')).toBeInTheDocument();
+    expect(screen.getByText('UPI: ₹75.00')).toBeInTheDocument();
+  });
 });
 
 describe('<Invoices /> — server-side date filter', () => {

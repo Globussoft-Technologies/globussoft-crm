@@ -275,7 +275,7 @@ export default function SuperAdminApiKeyManagement() {
                     {providerLabel(key.providerId)} · {key.model || providerDefaultModel(key.providerId)} · {key.apiKey || "••••••"} · {key.baseUrl || "default provider URL"}
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", alignItems: "center", minWidth: 0 }}>
                   <button
                     title={key.isEnabled ? "Disable key" : "Enable key"}
                     onClick={() => handleToggleEnabled(key)}

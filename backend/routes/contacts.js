@@ -379,6 +379,24 @@ const WELLNESS_CONTACT_LIFECYCLE_STAGES = {
   not_qualified: { label: "Not Qualified", status: "Churned", negative: true },
   lost_lead: { label: "Lost Lead", status: "Churned", negative: true },
 };
+const WELLNESS_CONTACT_LIFECYCLE_STAGE_INDEX = {
+  new: 0,
+  contacted: 1,
+  interested: 2,
+  not_interested: 2,
+  qualified: 3,
+  not_qualified: 3,
+  booked: 4,
+  lost_lead: 4,
+  active_patient: 5,
+};
+const WELLNESS_CONTACT_STATUS_STAGE_INDEX = {
+  Lead: 0,
+  Prospect: 1,
+  Customer: 5,
+  Churned: 4,
+  Junk: 3,
+};
 
 // Generic CRM status compatibility. Existing rows may still contain the
 // pre-v3.9 lifecycle values; filters must treat them as their replacement
@@ -3529,11 +3547,18 @@ router.get("/:id/activities", async (req, res) => {
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 10, 100));
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const where = { contactId: id, tenantId: req.user.tenantId };
+    const requestedType = typeof req.query.type === "string" ? req.query.type.trim().slice(0, 80) : "";
+    const excludedType = typeof req.query.excludeType === "string" ? req.query.excludeType.trim().slice(0, 80) : "";
+    const activityWhere = { ...where };
+    if (requestedType) activityWhere.type = requestedType;
+    else if (excludedType) activityWhere.type = { not: excludedType };
     const tenant = await prisma.tenant.findUnique({
       where: { id: req.user.tenantId },
       select: { vertical: true },
     });
     const isGeneric = tenant?.vertical === "generic";
+    const includeCallLogs = isGeneric && (!requestedType || requestedType === "Call") && excludedType !== "Call";
+    const includeTasks = isGeneric && (!requestedType || requestedType === "Task") && excludedType !== "Task";
     const offset = (page - 1) * limit;
     const mergeWindow = offset + limit;
     const callLogWhere = {
@@ -3548,7 +3573,7 @@ router.get("/:id/activities", async (req, res) => {
     };
     const [activityRows, activityTotal, callLogs, callLogTotal, taskRows, taskTotal] = await Promise.all([
       prisma.activity.findMany({
-        where,
+        where: activityWhere,
         include: {
           user: { select: { id: true, name: true, email: true } },
         },
@@ -3556,23 +3581,23 @@ router.get("/:id/activities", async (req, res) => {
         take: isGeneric ? mergeWindow : limit,
         skip: isGeneric ? 0 : offset,
       }),
-      prisma.activity.count({ where }),
-      isGeneric
+      prisma.activity.count({ where: activityWhere }),
+      includeCallLogs
         ? prisma.callLog.findMany({
             where: callLogWhere,
             orderBy: [{ createdAt: "desc" }, { id: "desc" }],
             take: mergeWindow,
           })
         : Promise.resolve([]),
-      isGeneric ? prisma.callLog.count({ where: callLogWhere }) : Promise.resolve(0),
-      isGeneric
+      includeCallLogs ? prisma.callLog.count({ where: callLogWhere }) : Promise.resolve(0),
+      includeTasks
         ? prisma.task.findMany({
             where: taskWhere,
             orderBy: [{ createdAt: "desc" }, { id: "desc" }],
             take: mergeWindow,
           })
         : Promise.resolve([]),
-      isGeneric ? prisma.task.count({ where: taskWhere }) : Promise.resolve(0),
+      includeTasks ? prisma.task.count({ where: taskWhere }) : Promise.resolve(0),
     ]);
     let merged = activityRows;
     if (isGeneric) {
@@ -3886,6 +3911,17 @@ const updateContactById = async (req, res) => {
         }
         if (stage.negative && !lifecycleTransitionReason) {
           return res.status(400).json({ error: "A reason is required for a negative patient journey status", code: "NEGATIVE_STAGE_REASON_REQUIRED" });
+        }
+        const currentStageIndex = WELLNESS_CONTACT_LIFECYCLE_STAGE_INDEX[existing.lifecycleStageKey]
+          ?? WELLNESS_CONTACT_STATUS_STAGE_INDEX[existing.status];
+        const nextStageIndex = WELLNESS_CONTACT_LIFECYCLE_STAGE_INDEX[lifecycleStageKey];
+        if (
+          Number.isInteger(currentStageIndex) &&
+          Number.isInteger(nextStageIndex) &&
+          nextStageIndex < currentStageIndex &&
+          !lifecycleTransitionReason
+        ) {
+          return res.status(400).json({ error: "A reason is required when moving backward in the patient journey", code: "BACKWARD_STAGE_REASON_REQUIRED" });
         }
         updateData.status = stage.status;
         updateData.lifecycleStageKey = lifecycleStageKey;

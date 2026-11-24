@@ -6349,10 +6349,8 @@ const Leads = ({ initialListState = null } = {}) => {
   };
 
   const handleConvert = async (id) => {
-    // Bug #283: pipeline is Lead -> Prospect -> Customer -> Churned. The
-    // Convert button must move the lead one step (to Prospect), not jump
-    // straight to Customer. ConvertedLeads.jsx defaults to the "Prospect"
-    // tab, so this is also where the user expects to find the row next.
+    // Travel's legacy CRM pipeline moves a lead one step to Prospect. Wellness
+    // uses its clinic-specific journey stages on lead detail instead.
     const body = { status: "Prospect" };
 
     await fetchApi(`/api/contacts/${id}`, {
@@ -10321,7 +10319,7 @@ const Leads = ({ initialListState = null } = {}) => {
       <button onClick={() => handleLeadViewAction(lead)} title="View lead" aria-label={`View ${lead.name || "lead"}`} style={actionIconBtn}><Eye size={15} /></button>
       {canLeadUpdate && <>
         <button onClick={() => openEdit(lead)} title="Edit lead" style={{ ...actionIconBtn, marginLeft: 6 }}><Pencil size={15} /></button>
-        {!isGeneric && <button onClick={() => handleConvert(lead.id)} title="Convert to Prospect" aria-label={`Convert ${lead.name || "lead"} to Prospect`} style={{ ...actionIconBtn, color: "var(--success-color)", marginLeft: 6 }}><ArrowRightCircle size={15} /></button>}
+        {isTravel && <button onClick={() => handleConvert(lead.id)} title="Convert to Prospect" aria-label={`Convert ${lead.name || "lead"} to Prospect`} style={{ ...actionIconBtn, color: "var(--success-color)", marginLeft: 6 }}><ArrowRightCircle size={15} /></button>}
       </>}
       {canLeadDelete && <button onClick={() => handleDelete(lead)} title="Delete lead" style={{ ...actionIconBtn, color: "var(--danger-color, #f43f5e)", marginLeft: 6 }}><Trash2 size={15} /></button>}
     </td>
@@ -13520,7 +13518,7 @@ const Leads = ({ initialListState = null } = {}) => {
                               >
                                 <Pencil size={15} />
                               </button>
-                              {!isGeneric && <button
+                              {isTravel && <button
                                 onClick={() => handleConvert(lead.id)}
                                 title="Convert to Prospect"
                                 aria-label={`Convert ${lead.name || "lead"} to Prospect`}
@@ -15370,7 +15368,7 @@ const Leads = ({ initialListState = null } = {}) => {
                   >
                     {isTravel ? "Edit contact" : "Edit lead"}
                   </button>
-                  {!isGeneric && <button
+                  {isTravel && <button
                     type="button"
                     className="btn-secondary"
                     onClick={() => handleConvert(previewLeadCurrent.id)}

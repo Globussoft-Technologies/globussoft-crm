@@ -31,12 +31,10 @@ describe("wellness import details", () => {
     expect(getImportedVisitDetails({ notes: JSON.stringify({ source: {} }) })).toBeNull();
   });
 
-  it("returns only positive payment source amounts from imported invoices", () => {
+  it("returns only positive payment amounts from the separate imported split field", () => {
     expect(getImportedInvoicePaymentBreakdown({
       amountPaid: 1700.5,
-      lineItemsJson: JSON.stringify({
-        source: { Cash: "1,200", UPI: "500.50", Card: "0" },
-      }),
+      importedPaymentSplit: { Cash: "1,200", UPI: "500.50", Card: "0" },
     })).toEqual([
       { mode: "Cash", amount: 1200 },
       { mode: "UPI", amount: 500.5 },
@@ -47,14 +45,34 @@ describe("wellness import details", () => {
     expect(getImportedInvoicePaymentBreakdown({
       amountPaid: 1000,
       balance: 700,
-      lineItemsJson: JSON.stringify({
-        source: { Cash: "1,200", UPI: "500.50" },
-      }),
+      importedPaymentSplit: { Cash: "1,200", UPI: "500.50" },
     })).toEqual([]);
   });
 
-  it("returns no payment source details for malformed or unrelated invoice data", () => {
-    expect(getImportedInvoicePaymentBreakdown({ lineItemsJson: "not-json" })).toEqual([]);
-    expect(getImportedInvoicePaymentBreakdown({ lineItemsJson: "[]" })).toEqual([]);
+  it("does not repeat a single payment method as a split", () => {
+    expect(getImportedInvoicePaymentBreakdown({
+      amountPaid: 7350,
+      importedPaymentSplit: { Cash: 7350, UPI: 0 },
+    })).toEqual([]);
+  });
+
+  it("allows a one-paisa tolerance and ignores overwritten line-item JSON", () => {
+    expect(getImportedInvoicePaymentBreakdown({
+      amountPaid: 6275.01,
+      importedPaymentSplit: { Cash: 6200, UPI: 75 },
+      lineItemsJson: JSON.stringify([{ name: "Dr Consultation", amount: 6275 }]),
+    })).toEqual([
+      { mode: "Cash", amount: 6200 },
+      { mode: "UPI", amount: 75 },
+    ]);
+    expect(getImportedInvoicePaymentBreakdown({
+      amountPaid: 6275.02,
+      importedPaymentSplit: { Cash: 6200, UPI: 75 },
+    })).toEqual([]);
+    expect(getImportedInvoicePaymentBreakdown({
+      amountPaid: 6275,
+      lineItemsJson: JSON.stringify({ source: { Cash: 6200, UPI: 75 } }),
+    })).toEqual([]);
+    expect(getImportedInvoicePaymentBreakdown({ importedPaymentSplit: "not-json" })).toEqual([]);
   });
 });

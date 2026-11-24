@@ -523,6 +523,16 @@ describe('Vertical isolation — getCatalogForVertical', () => {
     expect(travelPages.length).toBeGreaterThan(0);
   });
 
+  it('Converted Leads stays available to Generic and Travel but is removed from Wellness', () => {
+    const generic = getCatalogForVertical('generic').map((p) => p.path);
+    const wellness = getCatalogForVertical('wellness').map((p) => p.path);
+    const travel = getCatalogForVertical('travel').map((p) => p.path);
+
+    expect(generic).toContain('/converted-leads');
+    expect(wellness).not.toContain('/converted-leads');
+    expect(travel).toContain('/converted-leads');
+  });
+
   it('travel catalog includes the Web Forms page used by the travel sidebar', () => {
     const forms = getCatalogForVertical('travel').find((p) => p.path === '/travel/forms');
     expect(forms).toMatchObject({
@@ -558,6 +568,23 @@ describe('Vertical isolation — getCatalogForVertical', () => {
 });
 
 describe('Vertical isolation — getAccessiblePages with opts.vertical', () => {
+  it('keeps Converted Leads for Generic and Travel, but excludes it from Wellness', () => {
+    const perms = new Set(['leads.read']);
+    const onGeneric = getAccessiblePages(perms, { vertical: 'generic' });
+    const onWellness = getAccessiblePages(perms, { vertical: 'wellness' });
+    const onTravel = getAccessiblePages(perms, { vertical: 'travel' });
+
+    expect(onGeneric.find((p) => p.path === '/converted-leads')).toBeDefined();
+    expect(onWellness.find((p) => p.path === '/converted-leads')).toBeUndefined();
+    expect(onTravel.find((p) => p.path === '/converted-leads')).toBeDefined();
+
+    const wellnessOwnerPages = getAccessiblePages(new Set(), {
+      isOwner: true,
+      vertical: 'wellness',
+    });
+    expect(wellnessOwnerPages.find((p) => p.path === '/converted-leads')).toBeUndefined();
+  });
+
   it('travel: hides /signatures even when the role holds consents.read', () => {
     const perms = new Set(['consents.read']);
     const onTravel = getAccessiblePages(perms, { vertical: 'travel' });

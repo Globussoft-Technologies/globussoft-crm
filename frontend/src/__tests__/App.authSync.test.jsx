@@ -31,6 +31,51 @@ function setupFetch(mockImpl) {
   return fetchMock;
 }
 
+function setupAuthenticatedVertical(vertical, path) {
+  const profileByVertical = {
+    generic: {
+      id: 1,
+      name: "Generic Admin",
+      email: "admin@globussoft.com",
+      role: "ADMIN",
+      tenant: { id: 1, name: "Default Org", slug: "default-org", vertical: "generic" },
+    },
+    wellness: {
+      id: 31,
+      name: "Rishu (Owner)",
+      email: "rishu@enhancedwellness.in",
+      role: "ADMIN",
+      tenant: { id: 2, name: "Enhanced Wellness", slug: "enhanced-wellness", vertical: "wellness" },
+    },
+    travel: {
+      id: 30,
+      name: "Yasin (Owner)",
+      email: "yasin@travelstall.in",
+      role: "ADMIN",
+      tenant: { id: 3, name: "Travel Stall", slug: "travel-stall", vertical: "travel" },
+    },
+  };
+  sessionStorage.setItem("token", `${vertical}-token`);
+  window.history.pushState({}, vertical, path);
+  return setupFetch((url) => {
+    if (url === "/api/auth/me") {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(profileByVertical[vertical]),
+      });
+    }
+    if (url === "/api/subscriptions/status") {
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ daysRemaining: 30, status: "active" }),
+      });
+    }
+    return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) });
+  });
+}
+
 function createMatchMedia(matches) {
   return function matchMedia() {
     return {
@@ -363,6 +408,33 @@ describe("<App /> — auth-sync on mount", () => {
     await waitFor(() => expect(screen.getByTestId("lazy-route")).toBeInTheDocument());
     expect(window.location.pathname).toBe("/landing-sites");
   });
+
+  it("redirects a Wellness tenant away from Converted Leads to its Wellness landing", async () => {
+    setupAuthenticatedVertical("wellness", "/converted-leads");
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(JSON.parse(localStorage.getItem("tenant") || "{}").vertical).toBe("wellness");
+      expect(window.location.pathname).toBe("/wellness");
+    });
+    await waitFor(() => expect(screen.getByTestId("lazy-route")).toBeInTheDocument());
+  });
+
+  it.each(["generic", "travel"])(
+    "keeps Converted Leads available for the %s vertical",
+    async (vertical) => {
+      setupAuthenticatedVertical(vertical, "/converted-leads");
+
+      render(<App />);
+
+      await waitFor(() => {
+        expect(JSON.parse(localStorage.getItem("tenant") || "{}").vertical).toBe(vertical);
+        expect(window.location.pathname).toBe("/converted-leads");
+      });
+      expect(await screen.findByTestId("lazy-route")).toBeInTheDocument();
+    },
+  );
 
   it("allows a wellness tenant to land on /wellness without falling through to 404", async () => {
     const token = "wellness-token";

@@ -587,7 +587,7 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0, errors: [] });
     expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ description: 'Called about pricing' }),
+      data: expect.objectContaining({ note: 'Called about pricing' }),
     }));
     expect(prisma.activity.create).toHaveBeenCalledTimes(2);
     expect(prisma.activity.create).toHaveBeenCalledWith(expect.objectContaining({

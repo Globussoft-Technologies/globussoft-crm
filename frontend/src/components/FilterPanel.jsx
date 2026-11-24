@@ -485,7 +485,12 @@ export default function FilterPanel({
     setValuesByField({});
     fetchApi(fieldsUrl, { silent: true })
       .then((data) => {
-        const availableFields = Array.isArray(data?.fields) ? data.fields : [];
+        const availableFields = (Array.isArray(data?.fields) ? data.fields : [])
+          .map((field) =>
+            field?.field === "description" && field?.label === "Note"
+              ? { ...field, field: "note" }
+              : field,
+          );
         const filteredFields = allowedFieldKeySet
           ? availableFields.filter((field) =>
               allowedFieldKeySet.has(field.field),

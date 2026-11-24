@@ -7010,9 +7010,17 @@ const Leads = ({ initialListState = null } = {}) => {
           .filter((field) => TRAVEL_TAXONOMY_FIELD_KEYS.has(field.fieldKey))
           .map((field) => `cf_${field.fieldKey}`)
       : [];
-    const next = isTravel ? [...new Set([...preferred, ...travelTaxonomyColumns])] : preferred;
+    const next = isTravel
+      ? [...new Set([...preferred, ...travelTaxonomyColumns])]
+      : preferred;
     return isGeneric
-      ? next.filter((key) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(key))
+      ? [
+          ...new Set(
+            next
+              .map((key) => (key === "description" ? "note" : key))
+              .filter((key) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(key)),
+          ),
+        ]
       : next;
   }, [customFieldDefs, isGeneric, isTravel, visibleColumns]);
   const leadFilterFieldCatalog = useMemo(() => {
@@ -7039,9 +7047,19 @@ const Leads = ({ initialListState = null } = {}) => {
     };
     const catalogColumns = isWellness
       ? wellnessTableColumns
-      : leadColumnCatalog.length
-        ? leadColumnCatalog
-        : preferredVisibleColumns.map((key) => ({ key, label: null }));
+      : isGeneric
+        ? [
+            ...leadColumnCatalog,
+            ...genericFieldConfigCatalog.filter(
+              (configColumn) =>
+                !leadColumnCatalog.some(
+                  (column) => column.key === configColumn.key,
+                ),
+            ),
+          ]
+        : leadColumnCatalog.length
+          ? leadColumnCatalog
+          : preferredVisibleColumns.map((key) => ({ key, label: null }));
     const verticalColumns = isTravel
       ? catalogColumns.filter(
           (column) =>
@@ -7053,7 +7071,10 @@ const Leads = ({ initialListState = null } = {}) => {
       : catalogColumns;
     const fieldsByKey = new Map();
     for (const catalogColumn of verticalColumns) {
-      const columnKey = catalogColumn.key;
+      const columnKey =
+        isGeneric && catalogColumn.key === "description"
+          ? "note"
+          : catalogColumn.key;
       const filterFieldAlias = columnToFilterFieldAlias[columnKey];
       const customField = customFieldByKey.get(columnKey);
       const rawFilterFieldKey =
@@ -7094,9 +7115,24 @@ const Leads = ({ initialListState = null } = {}) => {
         kind: "text",
       });
     }
+    if (isGeneric && !fieldsByKey.has("note")) {
+      fieldsByKey.set("note", {
+        field: "note",
+        label: "Note",
+        kind: "text",
+      });
+    }
+    if (isGeneric && !fieldsByKey.has("source")) {
+      fieldsByKey.set("source", {
+        field: "source",
+        label: "Source",
+        kind: "text",
+      });
+    }
     return [...fieldsByKey.values()];
   }, [
     customFieldByKey,
+    genericFieldConfigCatalog,
     isGeneric,
     isTravel,
     isWellness,
@@ -7231,7 +7267,16 @@ const Leads = ({ initialListState = null } = {}) => {
       if (key === "whatsappPhone") return { key, label: "WhatsApp Number" };
       if (key === "aiScore") return { key, label: "Lead Score" };
       if (key === "source") return { key, label: "Source" };
-      if (key === "lifecycleStage") return { key, label: isGeneric ? "Status" : "Lifecycle Stage" };
+      if (key === "lifecycleStage")
+        return {
+          key,
+          label:
+            isGeneric && preferredVisibleColumns.includes("status")
+              ? "Lifecycle Stage"
+              : isGeneric
+                ? "Status"
+                : "Lifecycle Stage",
+        };
       if (key === "medium") return { key, label: "Medium" };
       if (key === "webForm") return { key, label: "Web Form" };
       if (key === "subBrand") return { key, label: "Sub-brand" };
@@ -9846,7 +9891,7 @@ const Leads = ({ initialListState = null } = {}) => {
             : null;
         const displayValue =
           column.key === "note"
-            ? noteActivity?.description || lead.note
+            ? noteActivity?.description || lead.note || lead.description
             : lead[column.key];
         const plainDisplayValue =
           column.key === "note"
@@ -12068,10 +12113,14 @@ const Leads = ({ initialListState = null } = {}) => {
                 onColumnsChange={(columns) =>
                   setVisibleColumns(
                     isGeneric
-                      ? columns.filter(
-                          (column) =>
-                            !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column),
-                        )
+                      ? columns
+                          .map((column) =>
+                            column === "description" ? "note" : column,
+                          )
+                          .filter(
+                            (column) =>
+                              !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column),
+                          )
                       : columns,
                   )
                 }

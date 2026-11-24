@@ -73,7 +73,10 @@ export default function ColumnPicker({
   const normalizeColumnOrder = (keys, columns = available) => {
     const availableKeys = new Set(columns.map((column) => column.key));
     const unique = [];
-    for (const key of Array.isArray(keys) ? keys : []) {
+    for (const rawKey of Array.isArray(keys) ? keys : []) {
+      const key = tableKey === "leads" && rawKey === "description"
+        ? "note"
+        : rawKey;
       if ((!columns.length || availableKeys.has(key)) && !unique.includes(key)) {
         unique.push(key);
       }

@@ -3095,7 +3095,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
           fields: [
             { field: 'name', label: 'Name', kind: 'text' },
             { field: 'companySize', label: 'No Of Employee', kind: 'text' },
-            { field: 'description', label: 'Note', kind: 'text' },
+            { field: 'note', label: 'Note', kind: 'text' },
             { field: 'assignedToId', label: 'Sales Owner', kind: 'id' },
             { field: 'territoryId', label: 'Territory', kind: 'id' },
           ],
@@ -5219,7 +5219,7 @@ describe('Leads extended Freshsales-parity columns', () => {
     linkedin: 'linkedin.com/in/aarav',
     industry: 'Logistics',
     companySize: '-688',
-    description: 'Met at expo',
+    note: 'Met at expo',
     stateCode: 'IN-KA',
     firstTouchSource: 'Web',
     lastTouchSource: 'Referral',
@@ -5233,7 +5233,7 @@ describe('Leads extended Freshsales-parity columns', () => {
 
   const EXTENDED_KEYS = [
     'name', 'email', 'lifecycleStage', 'status', 'title', 'firstName', 'lastName', 'website',
-    'linkedin', 'industry', 'companySize', 'description', 'stateCode',
+    'linkedin', 'industry', 'companySize', 'note', 'stateCode',
     'firstTouchSource', 'lastTouchSource',
   ];
 
@@ -5242,7 +5242,7 @@ describe('Leads extended Freshsales-parity columns', () => {
       ...EXTENDED_LEAD,
       id: 202,
       name: 'Note Lead',
-      description: '',
+      note: '',
       activities: [{
         id: 1,
         type: 'Note',
@@ -5256,7 +5256,7 @@ describe('Leads extended Freshsales-parity columns', () => {
       }
       if (url === '/api/table-column-prefs/leads' && !opts) {
         return Promise.resolve({
-          visible: ['name', 'description', 'actions'],
+          visible: ['name', 'note', 'actions'],
           availableColumns: [
             { key: 'name', label: 'Name', lockedVisible: true },
             { key: 'note', label: 'Note' },

@@ -193,11 +193,14 @@ function uniqueEmail(label) {
   return `e2e+${label}.${rnd}.${RUN_TAG.toLowerCase()}@example.com`;
 }
 
-// Indian-style number with a unique 5-digit suffix so /duplicates/find is
-// deterministic (no accidental phone-collision with seed data or other tests).
+// Indian-style number with a full random 10-digit subscriber number so
+// /duplicates/find is deterministic without colliding with seed data or
+// another parallel worker.
 function uniquePhone() {
-  const tail = String(Math.floor(10000 + Math.random() * 89999));
-  return `+91 98765 ${tail}`;
+  const subscriber = String(
+    Math.floor(1000000000 + Math.random() * 8999999999),
+  );
+  return `+91 ${subscriber.slice(0, 5)} ${subscriber.slice(5)}`;
 }
 
 // Helper: create a contact and remember it for cleanup. Returns the row.

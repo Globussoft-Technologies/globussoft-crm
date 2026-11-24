@@ -138,7 +138,7 @@ const AUTO_CAMPAIGN_RULE_COLUMN_KEYS = new Set([
   "lastName",
   "website",
   "linkedin",
-  "description",
+  "note",
   "stateCode",
   "firstTouchSource",
   "lastTouchSource",
@@ -694,6 +694,13 @@ const ensureGenericOverallStatusCatalog = (columns) => {
   );
   return withoutOverallStatus;
 };
+const ensureGenericStatusCatalog = (columns) => {
+  if (!Array.isArray(columns) || columns.some((column) => column?.key === "status")) return columns;
+  const sourceIndex = columns.findIndex((column) => column?.key === "source");
+  const next = [...columns];
+  next.splice(sourceIndex >= 0 ? sourceIndex + 1 : next.length, 0, { key: "status", label: "Status" });
+  return next;
+};
 // Travel Leads intentionally exposes only the vertical's core lead columns.
 // Generic's extended Contact fields (for example touch attribution, billing
 // state, Job Title, Website, and LinkedIn) must not appear even if a stale
@@ -720,7 +727,7 @@ const TRAVEL_TAG_LABELS = {
 };
 const travelTagLabel = (tag) => TRAVEL_TAG_LABELS[String(tag || "").toLowerCase()] || tag;
 const GENERIC_HIDDEN_LEAD_COLUMN_KEYS = new Set();
-const GENERIC_HIDDEN_COLUMN_PICKER_KEYS = Object.freeze(["status"]);
+const GENERIC_HIDDEN_COLUMN_PICKER_KEYS = Object.freeze([]);
 const CSV_IMPORT_FIELD_TYPES = {
   aiScore: "number",
   callifiedScore: "number",
@@ -729,7 +736,6 @@ const CSV_IMPORT_FIELD_TYPES = {
   noOfEmployee: "number",
   monthlyBudget: "number",
   status: "dropdown",
-  lifecycleStage: "dropdown",
   callStatus: "dropdown",
   birthDate: "date",
   anniversary: "date",
@@ -741,7 +747,7 @@ const CSV_IMPORT_FIELD_TYPES = {
   pageUrl: "url",
   referrerUrl: "url",
   landingPageUrl: "url",
-  description: "textarea",
+  note: "textarea",
 };
 const GENERIC_BACKEND_STATUS_OPTIONS = ["New", "Contacted", "Won", "Churned", "Junk", "Interested", "Unqualified", "Qualified", "Lost"];
 const GENERIC_STATUS_DISPLAY_MAP = { Lead: "New", Prospect: "Contacted", Customer: "Won" };
@@ -762,11 +768,10 @@ const GENERIC_LEAD_IMPORT_DEFAULT_FIELDS = [
   { key: "linkedin", label: "LinkedIn", fieldType: "url" },
   { key: "industry", label: "Service Type", fieldType: "text" },
   { key: "companySize", label: "No Of Employee", fieldType: "number" },
-  { key: "description", label: "Note", fieldType: "textarea" },
+  { key: "note", label: "Note", fieldType: "textarea" },
   { key: "stateCode", label: "State", fieldType: "text" },
   { key: "status", label: "Status", fieldType: "dropdown" },
   { key: "source", label: "Source", fieldType: "text" },
-  { key: "lifecycleStageKey", label: "Status", fieldType: "dropdown" },
   { key: "medium", label: "Medium", fieldType: "text" },
   { key: "firstTouchSource", label: "First Touch Source", fieldType: "text" },
   { key: "lastTouchSource", label: "Last Touch Source", fieldType: "text" },
@@ -777,7 +782,6 @@ const GENERIC_LEAD_IMPORT_DEFAULT_FIELDS = [
   { key: "assignedTo", label: "Assigned To", fieldType: "text" },
   { key: "createdAt", label: "Created", fieldType: "date" },
   { key: "lastUpdated", label: "Last Updated", fieldType: "date" },
-  { key: "interestedPlotArea", label: "Interested plot area", fieldType: "text" },
   { key: "pickupLocation", label: "Pickup Location", fieldType: "text" },
   { key: "plotAssign", label: "Plot Assign", fieldType: "text" },
   { key: "overallPickupStatus", label: "Overall Status", fieldType: "text" },
@@ -786,6 +790,39 @@ const GENERIC_LEAD_IMPORT_DEFAULT_FIELDS = [
   { key: "callStatus", label: "Call Status", fieldType: "dropdown" },
   { key: "callifiedAi", label: "Callified AI call", fieldType: "text" },
   { key: "callifiedScore", label: "Callified Score", fieldType: "number" },
+];
+// Field Config also exposes system fields that are intentionally not all
+// rendered as Leads table columns. Keep those fields available in the import
+// mapper as well, so the mapper shows the complete Generic CRM field catalog.
+const GENERIC_FIELD_CONFIG_SYSTEM_FIELDS = [
+  { key: "email", label: "Email", fieldType: "text" },
+  { key: "name", label: "Full name", fieldType: "text" },
+  { key: "company", label: "Company", fieldType: "text" },
+  { key: "title", label: "Job title", fieldType: "text" },
+  { key: "phone", label: "Mobile", fieldType: "text" },
+  { key: "whatsappPhone", label: "WhatsApp phone", fieldType: "text" },
+  { key: "owner", fieldKey: "assignedTo", label: "Sales owner", fieldType: "dropdown" },
+  { key: "source", label: "Source", fieldType: "dropdown" },
+  { key: "medium", label: "Medium", fieldType: "text" },
+  { key: "status", label: "Status", fieldType: "dropdown" },
+  { key: "website", label: "Website URL", fieldType: "url" },
+  { key: "industry", label: "Industry", fieldType: "text" },
+  { key: "companySize", label: "Company size", fieldType: "number" },
+  { key: "utm_medium", label: "UTM Medium", fieldType: "text" },
+  { key: "utm_source", label: "UTM Source", fieldType: "text" },
+  { key: "utm_campaign", label: "UTM Campaign", fieldType: "text" },
+  { key: "utm_id", label: "UTM ID", fieldType: "text" },
+  { key: "utm_term", label: "UTM Term", fieldType: "text" },
+  { key: "utm_content", label: "UTM Content", fieldType: "text" },
+  { key: "fbp", label: "FBP", fieldType: "text" },
+  { key: "fbc", label: "FBC", fieldType: "text" },
+  { key: "gclid", label: "Google Click ID", fieldType: "text" },
+  { key: "gbraid", label: "Google Braid ID", fieldType: "text" },
+  { key: "wbraid", label: "Google Wbraid ID", fieldType: "text" },
+  { key: "fbclid", label: "Meta Click ID", fieldType: "text" },
+  { key: "firstTouchSource", label: "First touch source", fieldType: "text" },
+  { key: "lastTouchSource", label: "Last touch source", fieldType: "text" },
+  { key: "tags", label: "Tags", fieldType: "multiselect" },
 ];
 const LEADS_COLUMN_DEFAULT_WIDTHS = {
   select: 48,
@@ -839,7 +876,7 @@ const LEADS_COLUMN_DEFAULT_WIDTHS = {
   linkedin: 180,
   industry: 150,
   companySize: 190,
-  description: 220,
+  note: 220,
   stateCode: 110,
   lastUpdated: 170,
   firstTouchSource: 160,
@@ -3467,6 +3504,7 @@ const Leads = ({ initialListState = null } = {}) => {
   // Fields). Wellness uses its separate patient field surfaces.
   const [customFieldDefs, setCustomFieldDefs] = useState([]);
   const [tenantFieldConfig, setTenantFieldConfig] = useState(null);
+  const [genericFieldConfigCatalog, setGenericFieldConfigCatalog] = useState([]);
   useEffect(() => {
     if (!isGeneric) return;
     let active = true;
@@ -3481,6 +3519,27 @@ const Leads = ({ initialListState = null } = {}) => {
       })
       .catch(() => {
         if (active) setTenantFieldConfig(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [isGeneric]);
+  useEffect(() => {
+    if (!isGeneric) {
+      setGenericFieldConfigCatalog([]);
+      return undefined;
+    }
+    let active = true;
+    fetchApi("/api/table-column-prefs/leads", { silent: true })
+      .then((response) => {
+        if (active) {
+          setGenericFieldConfigCatalog(
+            Array.isArray(response?.availableColumns) ? response.availableColumns : [],
+          );
+        }
+      })
+      .catch(() => {
+        if (active) setGenericFieldConfigCatalog([]);
       });
     return () => {
       active = false;
@@ -6876,6 +6935,65 @@ const Leads = ({ initialListState = null } = {}) => {
       new Map(customFieldDefs.map((field) => [`cf_${field.fieldKey}`, field])),
     [customFieldDefs],
   );
+  // Generic CRM imports must use the same live field catalog as Field Config
+  // and the Leads table. Keep the built-in fallback for the first render, but
+  // merge in the API catalog/custom definitions so newly configured fields,
+  // labels, types, and choices are immediately available to the mapper.
+  const genericLeadImportFields = useMemo(() => {
+    if (!isGeneric) return [];
+    const catalog = [
+      ...GENERIC_LEAD_IMPORT_DEFAULT_FIELDS,
+      ...GENERIC_FIELD_CONFIG_SYSTEM_FIELDS,
+      ...genericFieldConfigCatalog,
+      ...leadColumnCatalog,
+      ...customFieldDefs.map((field) => ({
+        key: `cf_${field.fieldKey}`,
+        fieldKey: field.fieldKey,
+        label: field.label,
+        fieldType: field.fieldType,
+        options: field.options,
+      })),
+    ];
+    const byKey = new Map();
+    for (const catalogField of catalog) {
+      const key = catalogField.key || catalogField.fieldKey;
+      if (!key || byKey.has(key)) continue;
+      const customField = customFieldByKey.get(key);
+      const overrideId = customField
+        ? `custom:${customField.id}`
+        : key === "lifecycleStage"
+          ? "lifecycleStage"
+          : key;
+      const override = tenantFieldConfig?.fieldOverrides?.[overrideId] || {};
+      byKey.set(key, {
+        ...catalogField,
+        key,
+        fieldKey:
+          key === "lifecycleStage"
+            ? "lifecycleStageKey"
+            : catalogField.fieldKey || (key.startsWith("cf_") ? key.slice(3) : key),
+        label: override.label || customField?.label || catalogField.label || key,
+        fieldType:
+          customField?.fieldType ||
+          override.fieldType ||
+          catalogField.fieldType ||
+          CSV_IMPORT_FIELD_TYPES[key],
+        ...(Array.isArray(override.options)
+          ? { options: override.options }
+          : Array.isArray(customField?.options)
+            ? { options: customField.options }
+            : {}),
+      });
+    }
+    return [...byKey.values()];
+  }, [
+    customFieldByKey,
+    customFieldDefs,
+    genericFieldConfigCatalog,
+    isGeneric,
+    leadColumnCatalog,
+    tenantFieldConfig,
+  ]);
   const leadColumnKeySet = useMemo(
     () => new Set(leadColumnCatalog.map((column) => column.key)),
     [leadColumnCatalog],
@@ -6892,9 +7010,17 @@ const Leads = ({ initialListState = null } = {}) => {
           .filter((field) => TRAVEL_TAXONOMY_FIELD_KEYS.has(field.fieldKey))
           .map((field) => `cf_${field.fieldKey}`)
       : [];
-    const next = isTravel ? [...new Set([...preferred, ...travelTaxonomyColumns])] : preferred;
+    const next = isTravel
+      ? [...new Set([...preferred, ...travelTaxonomyColumns])]
+      : preferred;
     return isGeneric
-      ? next.filter((key) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(key))
+      ? [
+          ...new Set(
+            next
+              .map((key) => (key === "description" ? "note" : key))
+              .filter((key) => !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(key)),
+          ),
+        ]
       : next;
   }, [customFieldDefs, isGeneric, isTravel, visibleColumns]);
   const leadFilterFieldCatalog = useMemo(() => {
@@ -6921,9 +7047,19 @@ const Leads = ({ initialListState = null } = {}) => {
     };
     const catalogColumns = isWellness
       ? wellnessTableColumns
-      : leadColumnCatalog.length
-        ? leadColumnCatalog
-        : preferredVisibleColumns.map((key) => ({ key, label: null }));
+      : isGeneric
+        ? [
+            ...leadColumnCatalog,
+            ...genericFieldConfigCatalog.filter(
+              (configColumn) =>
+                !leadColumnCatalog.some(
+                  (column) => column.key === configColumn.key,
+                ),
+            ),
+          ]
+        : leadColumnCatalog.length
+          ? leadColumnCatalog
+          : preferredVisibleColumns.map((key) => ({ key, label: null }));
     const verticalColumns = isTravel
       ? catalogColumns.filter(
           (column) =>
@@ -6935,7 +7071,10 @@ const Leads = ({ initialListState = null } = {}) => {
       : catalogColumns;
     const fieldsByKey = new Map();
     for (const catalogColumn of verticalColumns) {
-      const columnKey = catalogColumn.key;
+      const columnKey =
+        isGeneric && catalogColumn.key === "description"
+          ? "note"
+          : catalogColumn.key;
       const filterFieldAlias = columnToFilterFieldAlias[columnKey];
       const customField = customFieldByKey.get(columnKey);
       const rawFilterFieldKey =
@@ -6976,9 +7115,24 @@ const Leads = ({ initialListState = null } = {}) => {
         kind: "text",
       });
     }
+    if (isGeneric && !fieldsByKey.has("note")) {
+      fieldsByKey.set("note", {
+        field: "note",
+        label: "Note",
+        kind: "text",
+      });
+    }
+    if (isGeneric && !fieldsByKey.has("source")) {
+      fieldsByKey.set("source", {
+        field: "source",
+        label: "Source",
+        kind: "text",
+      });
+    }
     return [...fieldsByKey.values()];
   }, [
     customFieldByKey,
+    genericFieldConfigCatalog,
     isGeneric,
     isTravel,
     isWellness,
@@ -7057,7 +7211,7 @@ const Leads = ({ initialListState = null } = {}) => {
         key === "linkedin" ||
         key === "industry" ||
         key === "companySize" ||
-        key === "description" ||
+        key === "note" ||
         key === "stateCode" ||
         key === "lastUpdated" ||
         // Web-form parity set (same Contact data as the web-form Add-field list).
@@ -7113,7 +7267,16 @@ const Leads = ({ initialListState = null } = {}) => {
       if (key === "whatsappPhone") return { key, label: "WhatsApp Number" };
       if (key === "aiScore") return { key, label: "Lead Score" };
       if (key === "source") return { key, label: "Source" };
-      if (key === "lifecycleStage") return { key, label: isGeneric ? "Status" : "Lifecycle Stage" };
+      if (key === "lifecycleStage")
+        return {
+          key,
+          label:
+            isGeneric && preferredVisibleColumns.includes("status")
+              ? "Lifecycle Stage"
+              : isGeneric
+                ? "Status"
+                : "Lifecycle Stage",
+        };
       if (key === "medium") return { key, label: "Medium" };
       if (key === "webForm") return { key, label: "Web Form" };
       if (key === "subBrand") return { key, label: "Sub-brand" };
@@ -7128,7 +7291,7 @@ const Leads = ({ initialListState = null } = {}) => {
       if (key === "linkedin") return { key, label: "LinkedIn" };
       if (key === "industry") return { key, label: "Service Type" };
       if (key === "companySize") return { key, label: "No Of Employee" };
-      if (key === "description") return { key, label: "Note" };
+      if (key === "note") return { key, label: "Note" };
       if (key === "stateCode") return { key, label: "State" };
       if (key === "lastUpdated") return { key, label: "Last Updated" };
       if (key === "firstTouchSource")
@@ -9691,7 +9854,7 @@ const Leads = ({ initialListState = null } = {}) => {
         );
       }
       case "industry":
-      case "description":
+      case "note":
       case "stateCode":
       case "billingStateCode":
       case "firstTouchSource":
@@ -9702,7 +9865,7 @@ const Leads = ({ initialListState = null } = {}) => {
         // Add-field list. Blank when empty (no dash placeholder).
         const scalarLabels = {
           industry: "Service Type",
-          description: "Note",
+          note: "Note",
           stateCode: "State",
           billingStateCode: "Billing State Code",
           firstTouchSource: "First Touch Source",
@@ -9711,7 +9874,7 @@ const Leads = ({ initialListState = null } = {}) => {
           gst: "GSTIN",
         };
         const noteActivity =
-          column.key === "description"
+          column.key === "note"
             ? (lead.activities || [])
                 .filter(
                   (activity) =>
@@ -9727,11 +9890,11 @@ const Leads = ({ initialListState = null } = {}) => {
                 )
             : null;
         const displayValue =
-          column.key === "description"
-            ? noteActivity?.description || lead.description
+          column.key === "note"
+            ? noteActivity?.description || lead.note || lead.description
             : lead[column.key];
         const plainDisplayValue =
-          column.key === "description"
+          column.key === "note"
             ? plainTextLeadNote(displayValue)
             : displayValue;
         return renderBuiltInLeadCell({
@@ -9741,7 +9904,7 @@ const Leads = ({ initialListState = null } = {}) => {
           value: plainDisplayValue,
           extraStyle: { color: "var(--text-secondary)" },
           renderValue: (displayValue) =>
-            column.key === "description"
+            column.key === "note"
               ? plainTextLeadNote(displayValue)
               : displayValue
                 ? String(displayValue)
@@ -10367,35 +10530,7 @@ const Leads = ({ initialListState = null } = {}) => {
               allowImport={!isGeneric || canLeadWrite}
               onImported={isGeneric ? refreshAll : undefined}
               mappingFields={
-                isGeneric
-                  ? [
-                      // The exported contact id is a stable system column,
-                      // not a tenant custom field. Keep it in the mapping
-                      // catalog so imports never propose a duplicate field.
-                      { key: "id", label: "Id", fieldType: "text" },
-                      ...GENERIC_LEAD_IMPORT_DEFAULT_FIELDS,
-                      ...leadColumnCatalog,
-                    ]
-                      .map((catalogField) => {
-                        const key = catalogField.key;
-                        const customField = customFieldByKey.get(key);
-                        return {
-                          key,
-                          fieldKey:
-                            key === "lifecycleStage"
-                              ? "lifecycleStageKey"
-                              : key,
-                          label:
-                            catalogField.label ||
-                            customField?.label ||
-                            customField?.name ||
-                            key.replace(/^cf_/, ""),
-                          fieldType:
-                            customField?.fieldType ||
-                            CSV_IMPORT_FIELD_TYPES[key],
-                        };
-                      })
-                  : []
+                isGeneric ? genericLeadImportFields : []
               }
               compact
               endpoints={{
@@ -11978,10 +12113,14 @@ const Leads = ({ initialListState = null } = {}) => {
                 onColumnsChange={(columns) =>
                   setVisibleColumns(
                     isGeneric
-                      ? columns.filter(
-                          (column) =>
-                            !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column),
-                        )
+                      ? columns
+                          .map((column) =>
+                            column === "description" ? "note" : column,
+                          )
+                          .filter(
+                            (column) =>
+                              !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column),
+                          )
                       : columns,
                   )
                 }
@@ -11989,7 +12128,9 @@ const Leads = ({ initialListState = null } = {}) => {
                   setLeadColumnCatalog(
                     isGeneric
                       ? ensureGenericOverallStatusCatalog(
-                          ensureGenericPlotAssignCatalog(columns),
+                          ensureGenericStatusCatalog(
+                            ensureGenericPlotAssignCatalog(columns),
+                          ),
                         ).filter(
                           (column) =>
                             !GENERIC_HIDDEN_LEAD_COLUMN_KEYS.has(column.key),

@@ -154,7 +154,7 @@ describe("Workflows page", () => {
     const name = screen.getByRole("textbox", { name: "Workflow name" });
     await user.clear(name);
     await user.type(name, "Notify new leads");
-    await user.click(screen.getByRole("button", { name: /save as draft/i }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith("/api/workflows", expect.objectContaining({ method: "POST" })));
     const draftCall = fetchApiMock.mock.calls.find(([path, options]) => path === "/api/workflows" && options?.method === "POST");
     const body = JSON.parse(draftCall[1].body);
@@ -171,7 +171,7 @@ describe("Workflows page", () => {
     const name = screen.getByRole("textbox", { name: "Workflow name" });
     await user.clear(name);
     await user.type(name, "  WELCOME NEW LEADS  ");
-    await user.click(screen.getByRole("button", { name: /save as draft/i }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     expect(notify.error).toHaveBeenCalledWith("A workflow with this name already exists");
     expect(fetchApiMock.mock.calls.some(([path, options]) => (
@@ -537,7 +537,7 @@ describe("Workflows page", () => {
     expect(screen.getByRole("combobox", { name: "Schedule date field" })).toBeInTheDocument();
     await user.selectOptions(screen.getByRole("combobox", { name: "Schedule offset direction" }), "before");
 
-    await user.click(screen.getByRole("button", { name: /save as draft/i }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
     await waitFor(() => expect(
       fetchApiMock.mock.calls.some(([path, options]) => path === "/api/workflows" && options?.method === "POST"),
     ).toBe(true));
@@ -557,7 +557,7 @@ describe("Workflows page", () => {
     await user.selectOptions(screen.getByRole("combobox", { name: "Workflow trigger" }), "contact.created");
     expect(screen.queryByRole("combobox", { name: "Schedule frequency" })).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /save as draft/i }));
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
     const call = await waitFor(() => {
       const found = fetchApiMock.mock.calls.find(([path, options]) => path === "/api/workflows" && options?.method === "POST");
       expect(found).toBeTruthy();

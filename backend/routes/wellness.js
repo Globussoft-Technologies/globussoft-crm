@@ -14255,7 +14255,7 @@ router.post("/public/enquiry", publicEnquiryLimiter, async (req, res) => {
 
     if (duplicate) {
       const existing = duplicate.contact;
-      const nextDescription = [existing.description, note].filter(Boolean).join("\n\n") || note;
+      const nextNote = [existing.note, note].filter(Boolean).join("\n\n") || note;
       await prisma.contact.update({
         where: { id: existing.id },
         data: {
@@ -14264,7 +14264,7 @@ router.post("/public/enquiry", publicEnquiryLimiter, async (req, res) => {
           email: existing.email || syntheticEmail,
           phone: existing.phone || phone || null,
           firstTouchSource: existing.firstTouchSource || "Dr. Enhance Wellness website enquiry",
-          description: nextDescription,
+          note: nextNote,
         },
       });
       return res.json({ created: false, duplicate: true, contactId: existing.id, message: "Thanks - we'll be in touch shortly." });
@@ -14279,7 +14279,7 @@ router.post("/public/enquiry", publicEnquiryLimiter, async (req, res) => {
         status: "Lead",
         source: "website",
         firstTouchSource: "Dr. Enhance Wellness website enquiry",
-        description: note,
+        note,
         aiScore: 30,
         aiScoreLastComputedAt: new Date(),
       },

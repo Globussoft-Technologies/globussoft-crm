@@ -169,7 +169,8 @@ const canDeriveLeadFieldKey = (label) => {
 
 const normalizeMappingIdentity = (value) => String(value || "")
   .trim()
-  .toLowerCase()
+  .normalize("NFKC")
+  .toLocaleLowerCase("en-US")
   .replace(/^cf_/, "")
   .replace(/[^a-z0-9]+/g, "");
 
@@ -357,7 +358,7 @@ function SearchableMappingFieldSelect({ value, options, onChange, ariaLabel, tit
         <ChevronDown size={16} aria-hidden="true" />
       </button>
       {open && (
-        <div role="listbox" aria-label={`${ariaLabel} options`} style={{ position: "absolute", zIndex: 100, top: "calc(100% + 4px)", left: 0, right: 0, minWidth: 220, maxHeight: 280, overflowY: "auto", padding: 6, border: "1px solid var(--border-color)", borderRadius: 8, background: "#fff", opacity: 1, boxShadow: "0 12px 28px rgba(0,0,0,.18)" }}>
+        <div role="listbox" aria-label={`${ariaLabel} options`} style={{ position: "absolute", zIndex: 1, top: "calc(100% + 4px)", left: 0, right: 0, minWidth: 220, maxHeight: 280, overflowY: "auto", padding: 6, border: "1px solid var(--border-color)", borderRadius: 8, background: "#fff", opacity: 1, boxShadow: "0 12px 28px rgba(0,0,0,.18)" }}>
           <input
             type="search"
             autoFocus
@@ -928,15 +929,30 @@ function ImportModal({
     const selections = {};
     const types = {};
     const unmatched = [];
-    headers.forEach((header) => {
+    const usedTargets = new Set();
+    const orderedHeaders = genericLeadWizard
+      ? [...headers].sort((left, right) => {
+          const leftField = findExactMappingField(availableMappingFields, left);
+          const rightField = findExactMappingField(availableMappingFields, right);
+          const leftIsKey = leftField && normalizeMappingIdentity(leftField.fieldKey || leftField.key || leftField.id) === normalizeMappingIdentity(left);
+          const rightIsKey = rightField && normalizeMappingIdentity(rightField.fieldKey || rightField.key || rightField.id) === normalizeMappingIdentity(right);
+          return Number(rightIsKey) - Number(leftIsKey);
+        })
+      : headers;
+    orderedHeaders.forEach((header) => {
       const field = genericLeadWizard ? findExactMappingField(availableMappingFields, header) : findMappingField(header);
       if (!field) {
         if (genericLeadWizard) unmatched.push(header);
         return;
       }
       const key = field.fieldKey || field.key || field.id;
+      if (genericLeadWizard && usedTargets.has(key)) {
+        unmatched.push(header);
+        return;
+      }
       selections[header] = key;
       types[header] = normalizeFieldType(field.fieldType);
+      usedTargets.add(key);
     });
     setMappingSelections(selections);
     setMappingFieldTypes(types);
@@ -1158,12 +1174,16 @@ function ImportModal({
     const fields = buildAvailableMappingFields(mappingFields, dynamicLeadFields, genericLeadWizard);
     setMappingSelections((current) => {
       const next = { ...current };
+      const usedTargets = new Set(Object.values(next));
       let changed = false;
       for (const header of previewHeaders) {
         if (next[header]) continue;
         const field = findExactMappingField(fields, header);
         if (!field) continue;
-        next[header] = field.fieldKey || field.key || field.id;
+        const key = field.fieldKey || field.key || field.id;
+        if (usedTargets.has(key)) continue;
+        next[header] = key;
+        usedTargets.add(key);
         changed = true;
       }
       return changed ? next : current;

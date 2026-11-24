@@ -215,7 +215,7 @@ const CONTACT_FIELDS = new Set([
   "companySize",
   "website",
   "linkedin",
-  "description",
+  "note",
   "tags",
   "stateCode",
   "billingStateCode",
@@ -227,6 +227,27 @@ const CONTACT_FIELDS = new Set([
   "subBrand",
   "treatmentOfInterest",
 ]);
+
+// Attribution values captured by the embed are kept under tracking metadata
+// for persistence. Generic CRM webhooks should also expose the provider
+// identifiers directly so a selected webhook field can be delivered.
+const GENERIC_WEBHOOK_TRACKING_FIELDS = [
+  "gclid",
+  "gbraid",
+  "wbraid",
+  "fbclid",
+  "fbc",
+  "fbp",
+  "gad_source",
+  "gad_campaignid",
+  "campaign_id",
+  "adset_id",
+  "ad_id",
+  "campaign_name",
+  "adset_name",
+  "ad_name",
+  "site_source_name",
+];
 
 /**
  * Build the event payload consumed by Generic CRM contact workflows.
@@ -240,7 +261,7 @@ const CONTACT_FIELDS = new Set([
  * Keep this allow-listed to Contact/form fields: a Prisma Contact row contains
  * internal fields that must never be copied wholesale to an outbound webhook.
  */
-function genericWebFormWorkflowPayload({ contact, form, submission, payload, customFieldValues }) {
+function genericWebFormWorkflowPayload({ contact, form, submission, payload, customFieldValues, trackingMetadata }) {
   const contactFields = {};
   for (const field of CONTACT_FIELDS) {
     if (field === "tags") {
@@ -256,8 +277,15 @@ function genericWebFormWorkflowPayload({ contact, form, submission, payload, cus
     if (contact?.[field] !== undefined) contactFields[field] = contact[field];
   }
 
+  const webhookTrackingFields = Object.fromEntries(
+    GENERIC_WEBHOOK_TRACKING_FIELDS
+      .filter((key) => trackingMetadata?.[key] != null && String(trackingMetadata[key]) !== "")
+      .map((key) => [key, trackingMetadata[key]]),
+  );
+
   const workflowFields = {
     ...contactFields,
+    ...webhookTrackingFields,
     ...(payload || {}),
     ...(customFieldValues || {}),
   };
@@ -1897,8 +1925,8 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
           const list = Array.isArray(raw) ? raw : String(raw == null ? "" : raw).split(",");
           const clean = list.map((t) => textOr(t).slice(0, 60)).filter(Boolean).slice(0, 20);
           if (clean.length) contactData.tagsJson = JSON.stringify(clean);
-        } else if (field.sourceKey === "description")
-          contactData.description = textOr(raw) || null;
+        } else if (field.sourceKey === "note" || field.sourceKey === "description")
+          contactData.note = textOr(raw) || null;
         else if (field.sourceKey === "industry")
           contactData.industry = textOr(raw) || null;
         else if (field.sourceKey === "companySize")
@@ -1948,6 +1976,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       payload.utm_source = submittedUtm.source || null;
       payload.utm_medium = submittedUtm.medium || null;
       payload.utm_campaign = submittedUtm.campaign || null;
+      payload.utm_id = textOr(trackingMetadata?.utm_id) || null;
       payload.utm_term = submittedUtm.term || null;
       payload.utm_content = submittedUtm.content || null;
     }
@@ -2328,6 +2357,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
             submission,
             payload,
             customFieldValues,
+            trackingMetadata,
           }),
           form.tenantId,
           req.io,

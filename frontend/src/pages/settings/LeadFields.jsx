@@ -157,7 +157,7 @@ const WEB_ATTRIBUTION_FIELD_KEYS = new Set([
 ]);
 const CALLIFIED_FIELD_KEYS = new Set(["campaign", "callStatus", "callifiedAi", "callifiedScore"]);
 const LEAD_DETAIL_FIELD_KEYS = new Set([
-  "aiScore", "source", "status", "lifecycleStage", "medium", "location", "pickupLocation",
+  "aiScore", "source", "status", "medium", "location", "pickupLocation",
   "plotAssign", "overallPickupStatus", "tags", "assignedTo", "createdAt", "lastUpdated",
 ]);
 const TABLE_CONTROL_FIELD_KEYS = new Set(["actions"]);
@@ -166,7 +166,7 @@ const ATTRIBUTION_FIELD_KEYS = new Set(["firstTouchSource", "lastTouchSource"]);
 const NUMBER_FIELD_KEYS = new Set(["aiScore", "companySize", "callifiedScore"]);
 const DATE_FIELD_KEYS = new Set(["createdAt", "lastUpdated", "submittedAt", "birthDate", "anniversary"]);
 const URL_FIELD_KEYS = new Set(["website", "linkedin", "pageUrl", "referrerUrl", "landingPageUrl"]);
-const OPTION_FIELD_KEYS = new Set(["source", "status", "lifecycleStage", "assignedTo"]);
+const OPTION_FIELD_KEYS = new Set(["source", "status", "assignedTo"]);
 const AUTOMATIC_FIELD_KEYS = new Set([
   ...UTM_FIELD_KEYS,
   ...WEB_ATTRIBUTION_FIELD_KEYS,
@@ -192,7 +192,7 @@ function inferSystemFieldType(key) {
   if (URL_FIELD_KEYS.has(key)) return "url";
   if (OPTION_FIELD_KEYS.has(key)) return "dropdown";
   if (key === "tags") return "multiselect";
-  if (key === "description") return "textarea";
+  if (key === "note") return "textarea";
   return "text";
 }
 

@@ -1806,7 +1806,6 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
       keyword: contact.keyword,
       note: contact.note,
       medium: contact.medium ?? contact.source,
-      description: contact.description,
       monthlyBudget: contact.monthlyBudget,
     };
     if (key === 'website') {

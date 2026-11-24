@@ -359,6 +359,22 @@ describe("CsvImportExportToolbar", () => {
     expect(within(listbox).queryByRole("option", { name: "Alpha" })).not.toBeInTheDocument();
   });
 
+  it("matches Generic CRM headers case-insensitively", async () => {
+    render(<CsvImportExportToolbar entity="contacts" label="Contacts" genericLeadWizard skipMeta
+      mappingFields={[{ key: "email", fieldKey: "email", label: "Email", fieldType: "text" }]}
+      endpoints={{ import: "/api/csv/contacts/import.csv" }} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Import Contacts$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
+    const csv = "EMAIL\nsales@example.com\n";
+    const file = new File([csv], "contacts.csv", { type: "text/csv" });
+    Object.defineProperty(file, "text", { value: vi.fn().mockResolvedValue(csv) });
+    fireEvent.change(screen.getByLabelText("Select CSV file"), { target: { files: [file] } });
+
+    const field = await screen.findByRole("combobox", { name: "CRM field for EMAIL" });
+    expect(field).toHaveValue("email");
+  });
+
   it("reuses an existing custom field whose key matches an automatic tracking key", async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url === "/api/lead-custom-fields") {

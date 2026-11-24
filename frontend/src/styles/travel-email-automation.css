@@ -150,6 +150,13 @@
 }
 .travel-personalization-fields { align-content: flex-start; }
 
+/* Keep long email bodies inside the editor so the helper text stays below it. */
+.travel-rich-editor {
+  box-sizing: border-box;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
 @media (max-width: 760px) {
   .travel-modal:has(.travel-template-editor) { align-items: flex-start; padding: 8px; }
   .travel-template-editor {
@@ -237,6 +244,8 @@
 .travel-delivery-row > strong { flex: 0 0 auto; padding: .28rem .55rem; border-radius: 6px; font-size: .72rem; }
 .travel-delivery-row > strong.sent { color: #047857; background: rgba(16,185,129,.13); }
 .travel-delivery-row > strong.failed { color: #b91c1c; background: rgba(239,68,68,.12); }
+.travel-delivery-resend { display: inline-flex; align-items: center; gap: 5px; flex: 0 0 auto; padding: 5px 9px; font-size: .72rem; }
+.travel-delivery-error { color: #b91c1c; max-width: 180px; }
 .travel-history-empty { padding: 28px 8px; text-align: center; color: var(--text-secondary); }
 .travel-history-pagination { margin: 8px 0 0 !important; }
 .travel-history-detail { width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 40px); overflow: auto; }

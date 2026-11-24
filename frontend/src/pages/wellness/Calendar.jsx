@@ -5,6 +5,7 @@ import { useNotify } from '../../utils/notify';
 import { tenantLocale } from '../../utils/date';
 import { AuthContext } from '../../App';
 import { usePermissions } from '../../hooks/usePermissions';
+import { DashboardBackLink } from '../../components/PageHeader';
 
 import {
   displayStatus,
@@ -475,6 +476,7 @@ export default function CalendarGrid() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+      <DashboardBackLink />
       <CalendarHeader
         practitionerRoleOptions={practitionerRoleOptions}
         selectedRoleKey={selectedRoleKey}

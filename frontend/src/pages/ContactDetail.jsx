@@ -351,7 +351,8 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
   const canAssignOwner = permissionsReady &&
     (hasPermission('contacts', 'update') || hasPermission('leads', 'update'));
   const isGeneric = !isWellness && !isTravel;
-  const isGenericLeadsDetail = isGeneric && location.pathname.startsWith('/leads/');
+  const isLeadsDetail = location.pathname.startsWith('/leads/');
+  const isGenericLeadsDetail = isGeneric && isLeadsDetail;
   const renderStandaloneLeadPage = isGenericLeadsDetail
     && !renderBackdrop
     && (!location.state?.leadsListState || location.state?.openFullPage);
@@ -958,24 +959,24 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
   const goNeighbor = async (dir) => {
     try {
       const list = await fetchApi(
-        isGenericLeadsDetail ? '/api/contacts?status=Lead&limit=200' : '/api/contacts?limit=200',
+        isLeadsDetail ? '/api/contacts?status=Lead&limit=200' : '/api/contacts?limit=200',
         { silent: true },
       );
       const arr = Array.isArray(list) ? list : list?.data || [];
       const idx = arr.findIndex((c) => String(c.id) === String(id));
       const target = idx >= 0 ? arr[idx + dir] : null;
       if (target) {
-        const targetBase = `${isGenericLeadsDetail ? '/leads' : '/contacts'}/${target.id}`;
+        const targetBase = `${isLeadsDetail ? '/leads' : '/contacts'}/${target.id}`;
         const targetPath = isGenericLeadsDetail && detailPage
           ? `${targetBase}?page=${detailPage}&limit=${detailPageSize}`
           : targetBase;
         navigate(targetPath, { state: location.state });
       } else {
-        const recordLabel = isGenericLeadsDetail ? 'lead' : 'contact';
+        const recordLabel = isLeadsDetail ? 'lead' : 'contact';
         notify.info(dir > 0 ? `This is the last ${recordLabel}.` : `This is the first ${recordLabel}.`);
       }
     } catch {
-      notify.error(`Could not load ${isGenericLeadsDetail ? 'leads' : 'contacts'}.`);
+      notify.error(`Could not load ${isLeadsDetail ? 'leads' : 'contacts'}.`);
     }
   };
 
@@ -1949,8 +1950,8 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
           )}
           <button type="button" className="cp-action-btn" onClick={() => setActiveTab('details')}><FileText size={13} /> See all details</button>
           <div className="cp-nav-btns">
-            <button type="button" className="cp-action-btn" onClick={() => goNeighbor(-1)} title={`Previous ${isGenericLeadsDetail ? 'lead' : 'contact'}`} aria-label={`Previous ${isGenericLeadsDetail ? 'lead' : 'contact'}`}><ChevronLeft size={14} /></button>
-            <button type="button" className="cp-action-btn" onClick={() => goNeighbor(1)} title={`Next ${isGenericLeadsDetail ? 'lead' : 'contact'}`} aria-label={`Next ${isGenericLeadsDetail ? 'lead' : 'contact'}`}><ChevronRight size={14} /></button>
+            <button type="button" className="cp-action-btn" onClick={() => goNeighbor(-1)} title={`Previous ${isLeadsDetail ? 'lead' : 'contact'}`} aria-label={`Previous ${isLeadsDetail ? 'lead' : 'contact'}`}><ChevronLeft size={14} /></button>
+            <button type="button" className="cp-action-btn" onClick={() => goNeighbor(1)} title={`Next ${isLeadsDetail ? 'lead' : 'contact'}`} aria-label={`Next ${isLeadsDetail ? 'lead' : 'contact'}`}><ChevronRight size={14} /></button>
           </div>
         </div>
       </div>

@@ -178,7 +178,9 @@ export default function TravelDashboard() {
               label="Cost master (active rates)"
               value={data.costMaster.activeRows}
               footer={byKeyFooter(data.costMaster.bySubBrand)}
-              link="/travel/cost-master"
+              link={activeSubBrand
+                ? `/travel/cost-master?subBrand=${encodeURIComponent(activeSubBrand)}`
+                : "/travel/cost-master"}
               statusLinks={statusLinksFor("/travel/cost-master", ["tmc", "rfu", "travelstall", "visasure"], "subBrand")}
             />
             <Tile

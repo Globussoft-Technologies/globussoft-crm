@@ -8224,7 +8224,6 @@ const Leads = ({ initialListState = null } = {}) => {
 
   const leadDetailPath = (lead) => {
     if (isTravel) return `/travel/leads/${lead.id}`;
-    if (!isGeneric) return `/contacts/${lead.id}`;
     return `/leads/${lead.id}`;
   };
 
@@ -8660,6 +8659,10 @@ const Leads = ({ initialListState = null } = {}) => {
     },
     leadsTableState,
   };
+  const leadFullDetailNavigationState = {
+    ...leadListNavigationState,
+    openFullPage: true,
+  };
   const rememberLeadListState = () => {
     if ((!isGeneric && !isTravel) || typeof window === "undefined") return;
     try {
@@ -8678,8 +8681,11 @@ const Leads = ({ initialListState = null } = {}) => {
   const openLeadDetail = (lead) => {
     rememberLeadListState();
     navigate(leadDetailPathWithListState(lead), {
-      state: leadListNavigationState,
+      state: leadFullDetailNavigationState,
     });
+  };
+  const handleLeadViewAction = (lead) => {
+    openLeadDetail(lead);
   };
   useEffect(() => {
     if (
@@ -9981,51 +9987,28 @@ const Leads = ({ initialListState = null } = {}) => {
             editOnDisplayClick={false}
             showEditButton={canLeadUpdate}
             disableTruncation
-            renderValue={(name) =>
-              isTravel ? (
-                <a
-                  href="#lead-preview"
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setPreviewLead(lead);
-                  }}
-                  title={`Preview ${lead.name || "lead"}`}
-                  style={{
-                    minWidth: 0,
-                    overflow: "visible",
-                    textOverflow: "clip",
-                    whiteSpace: "nowrap",
-                    color: "var(--accent-color)",
-                    fontWeight: 700,
-                    textDecoration: "none",
-                  }}
-                >
-                  {name || "Unnamed lead"}
-                </a>
-              ) : (
-                <Link
-                  to={leadDetailPathWithListState(lead)}
-                  state={leadListNavigationState}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    rememberLeadListState();
-                  }}
-                  title={`Open profile for ${name || "lead"}`}
-                  style={{
-                    minWidth: 0,
-                    overflow: "visible",
-                    textOverflow: "clip",
-                    whiteSpace: "nowrap",
-                    color: "var(--accent-color)",
-                    fontWeight: 700,
-                    textDecoration: "none",
-                  }}
-                >
-                  {name || "Unnamed lead"}
-                </Link>
-              )
-            }
+            renderValue={(name) => (
+              <Link
+                to={leadDetailPathWithListState(lead)}
+                state={leadFullDetailNavigationState}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  rememberLeadListState();
+                }}
+                title={`Open full detail for ${name || "lead"}`}
+                style={{
+                  minWidth: 0,
+                  overflow: "visible",
+                  textOverflow: "clip",
+                  whiteSpace: "nowrap",
+                  color: "var(--accent-color)",
+                  fontWeight: 700,
+                  textDecoration: "none",
+                }}
+              >
+                {name || "Unnamed lead"}
+              </Link>
+            )}
           />
         </div>
       </div>
@@ -10210,7 +10193,7 @@ const Leads = ({ initialListState = null } = {}) => {
   const renderLeadActionsBodyCell = (lead) => (
     <td style={getBodyCellStyle("actions", { padding: ".75rem .5rem", minWidth: `${getColumnWidth("actions")}px`, overflow: "visible", textOverflow: "clip" })} onClick={(e) => e.stopPropagation()}>
       {wellnessCall.enabled && <WellnessLeadCallButton lead={lead} onCall={() => wellnessCall.open(lead)} />}
-      <button onClick={() => setPreviewLead(lead)} title="Preview lead" aria-label={`Preview ${lead.name || "lead"}`} style={actionIconBtn}><Eye size={15} /></button>
+      <button onClick={() => handleLeadViewAction(lead)} title="View lead" aria-label={`View ${lead.name || "lead"}`} style={actionIconBtn}><Eye size={15} /></button>
       {canLeadUpdate && <>
         <button onClick={() => openEdit(lead)} title="Edit lead" style={{ ...actionIconBtn, marginLeft: 6 }}><Pencil size={15} /></button>
         {!isGeneric && <button onClick={() => handleConvert(lead.id)} title="Convert to Prospect" aria-label={`Convert ${lead.name || "lead"} to Prospect`} style={{ ...actionIconBtn, color: "var(--success-color)", marginLeft: 6 }}><ArrowRightCircle size={15} /></button>}
@@ -12475,12 +12458,12 @@ const Leads = ({ initialListState = null } = {}) => {
                                 renderValue={(name) => (
                                   <Link
                                     to={leadDetailPathWithListState(lead)}
-                                    state={leadListNavigationState}
+                                    state={leadFullDetailNavigationState}
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       rememberLeadListState();
                                     }}
-                                    title={`Open profile for ${name || "lead"}`}
+                                    title={`Open full detail for ${name || "lead"}`}
                                     style={{
                                       minWidth: 0,
                                       overflow: "visible",
@@ -13356,9 +13339,9 @@ const Leads = ({ initialListState = null } = {}) => {
                             />
                           )}
                           <button
-                            onClick={() => setPreviewLead(lead)}
-                            title="Preview lead"
-                            aria-label={`Preview ${lead.name || "lead"}`}
+                            onClick={() => handleLeadViewAction(lead)}
+                            title="View lead"
+                            aria-label={`View ${lead.name || "lead"}`}
                             style={actionIconBtn}
                           >
                             <Eye size={15} />

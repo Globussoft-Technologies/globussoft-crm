@@ -32,6 +32,7 @@ const { toE164 } = require("../utils/deduplication");
 // without capturing a stale destructured reference.
 const selfBookingPatient = require("../lib/selfBookingPatient");
 const { ensurePatientContact } = require("../lib/patientContactLink");
+const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 // Module-object require so vi.mock-style replacement of the exports at
 // test time is observable here (the destructured form captures function
 // references at require-time and bypasses any later patching).
@@ -1667,6 +1668,7 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
     // ahmed.pilgrim@demo.test work). We reuse the SAME bcrypt hash so one
     // password works in both stores. Travel-only + best-effort: any failure
     // here must never break the User registration above.
+    let travelPortalContact = null;
     if ((user.tenant?.vertical || tenant.vertical) === "travel") {
       try {
         // A Contact may already be a TMC teacher/parent account. The User
@@ -1695,9 +1697,30 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
             data: { portalPasswordHash: hashedPassword },
           });
         }
+        travelPortalContact = portalContact;
       } catch (e) {
         console.error(
           `[auth] customer/register portal-contact bridge failed (non-fatal): ${e.message}`,
+        );
+      }
+
+      try {
+        const frontendBase = getFrontendUrlFromRequest(req).replace(/\/+$/, "");
+        await require("../lib/eventBus").emitEvent(
+          "account.created",
+          {
+            contactId: travelPortalContact?.id || null,
+            recipientEmail: email,
+            recipientName: name || email.split("@")[0],
+            subBrand: travelPortalContact?.subBrand || "travelstall",
+            signInLink: `${frontendBase}/travel/portal`,
+          },
+          tenantId,
+          req.app.get("io"),
+        );
+      } catch (eventError) {
+        console.error(
+          `[auth] customer/register account.created email failed (non-fatal): ${eventError.message}`,
         );
       }
     }

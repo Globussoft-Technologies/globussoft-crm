@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Sparkles, Check, X, Clock, AlertCircle, Play } from 'lucide-react';
 import { fetchApi } from '../../utils/api';
 import { useNotify } from '../../utils/notify';
+import { DashboardBackLink } from '../../components/PageHeader';
 
 const priorityColor = { high: '#ef4444', medium: '#f59e0b', low: '#64748b' };
 const PAGE_SIZE = 10;
@@ -163,6 +164,7 @@ export default function Recommendations() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+      <DashboardBackLink />
       <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontFamily: 'var(--font-family)', fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

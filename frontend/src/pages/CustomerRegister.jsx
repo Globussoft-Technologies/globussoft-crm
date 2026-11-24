@@ -94,27 +94,6 @@ function scoreOrganizationMatch(tenant, queryKey) {
   return Number.POSITIVE_INFINITY;
 }
 
-function readLandingRegistrationPrefill() {
-  if (typeof window === "undefined") return null;
-  const storages = [window.localStorage, window.sessionStorage];
-  for (const storage of storages) {
-    try {
-      for (let index = 0; index < storage.length; index += 1) {
-        const key = storage.key(index);
-        if (!key || !key.startsWith("landing-registration-draft:")) continue;
-        const saved = JSON.parse(storage.getItem(key) || "null");
-        const fields = saved?.regValues && typeof saved.regValues === "object" ? saved.regValues : saved;
-        const email = String(fields?.parent_email || fields?.parentEmail || fields?.email || "").trim().toLowerCase();
-        const name = String(fields?.parent_name || fields?.parentName || fields?.fullName || fields?.name || "").trim();
-        if (email || name) return { email, name };
-      }
-    } catch {
-      // Ignore unavailable or malformed browser storage.
-    }
-  }
-  return null;
-}
-
 export default function CustomerRegister() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -133,9 +112,13 @@ export default function CustomerRegister() {
   const isTmcTeacherRegistration = searchParams.get("tmcRole") === "TEACHER";
   const registrationTenantSlug = isTmcTeacherRegistration ? TMC_TENANT_SLUG : (tenantSlugParam || "");
   const lockedToTenantSlug = Boolean(registrationTenantSlug);
-  const landingPrefill = registrationDraftToken ? null : readLandingRegistrationPrefill();
-  const initialEmail = (searchParams.get("email") || landingPrefill?.email || "").trim().toLowerCase();
-  const initialName = (searchParams.get("name") || landingPrefill?.name || "").trim();
+  // Never scan browser storage for another registration's identity. The TMC
+  // teacher URL is permanent/shared, and a stale landing-page draft from a
+  // previous parent otherwise leaks that person's name and email into the
+  // next registrant's form. Identity may only come from an explicit URL
+  // handoff or the server-side opaque draftToken flow below.
+  const initialEmail = (searchParams.get("email") || "").trim().toLowerCase();
+  const initialName = (searchParams.get("name") || "").trim();
 
   const [tenants, setTenants] = useState([]);
   const [tenantsLoading, setTenantsLoading] = useState(true);

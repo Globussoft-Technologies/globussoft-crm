@@ -441,13 +441,20 @@ export default function CostMaster() {
   }, [load]);
 
   const loadLookupData = useCallback(() => {
-    fetchApi("/api/travel/suppliers?limit=500&fields=summary")
+    const supplierParams = new URLSearchParams({ limit: "500", fields: "summary" });
+    const seasonParams = new URLSearchParams();
+    if (filterSubBrand && filterSubBrand !== "all") {
+      supplierParams.set("subBrand", filterSubBrand);
+      seasonParams.set("subBrand", filterSubBrand);
+    }
+
+    fetchApi(`/api/travel/suppliers?${supplierParams.toString()}`)
       .then((res) => setSuppliers(Array.isArray(res?.suppliers) ? res.suppliers : []))
       .catch(() => setSuppliers([]));
-    fetchApi("/api/travel/seasons")
+    fetchApi(`/api/travel/seasons${seasonParams.toString() ? `?${seasonParams.toString()}` : ""}`)
       .then((res) => setSeasons(Array.isArray(res?.seasons) ? res.seasons : []))
       .catch(() => setSeasons([]));
-  }, []);
+  }, [filterSubBrand]);
 
   useEffect(() => {
     loadLookupData();

@@ -12,7 +12,7 @@ import { usePermissions } from '../../hooks/usePermissions';
 import { AuthContext } from '../../App';
 // Issue #816: Reusable CSV import/export toolbar for the Catalog + Packages tabs.
 import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
-import PageHeader from '../../components/PageHeader';
+import PageHeader, { DashboardBackLink } from '../../components/PageHeader';
 import TabBtn from './services/TabBtn';
 import CatalogTab from './services/CatalogTab';
 import PackageBuilder from './services/PackageBuilder';
@@ -279,6 +279,7 @@ export default function Services() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+      <DashboardBackLink />
       <PageHeader
         icon={Sparkles}
         title="Service catalog"

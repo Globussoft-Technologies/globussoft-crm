@@ -734,7 +734,10 @@ export default function Inbox({
         return haystack.includes(recipientQuery.toLowerCase());
       })
     : composeRecipientOptions;
-  const visibleRecipientSuggestions = filteredRecipientSuggestions.slice(0, 6);
+  // Keep the full filtered directory available. The suggestion panel has a
+  // bounded height and scrolls, so limiting this array would hide contacts
+  // that are valid recipients but happen to sort after the first six.
+  const visibleRecipientSuggestions = filteredRecipientSuggestions;
   const recipientSuggestionsOpen =
     showRecipientSuggestions && visibleRecipientSuggestions.length > 0;
 
@@ -897,10 +900,17 @@ export default function Inbox({
         });
       }
 
-      await fetchApi("/api/communications/send-email", {
+      const result = await fetchApi("/api/communications/send-email", {
         method: "POST",
         body: requestBody,
       });
+
+      if (result?.delivered !== true) {
+        if (result?.reason === "sendgrid_error_403") {
+          throw new Error("Email was not sent because the configured sender address is not verified in SendGrid.");
+        }
+        throw new Error(result?.error || "Email was not delivered.");
+      }
 
       notify.success("Email sent successfully.");
       closeCompose(false);
@@ -911,7 +921,7 @@ export default function Inbox({
       }
     } catch (err) {
       console.error(err);
-      notify.error("Failed to send email. Please try again.");
+      notify.error(err?.message || "Failed to send email. Please try again.");
     }
   };
 

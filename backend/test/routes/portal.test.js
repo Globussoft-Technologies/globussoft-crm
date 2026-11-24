@@ -126,6 +126,9 @@ prisma.tripPaymentPlan = {
 prisma.tmcTrip = {
   findFirst: vi.fn().mockResolvedValue(null),
 };
+prisma.tmcParentTrip = {
+  upsert: vi.fn().mockResolvedValue({}),
+};
 prisma.payment = {
   findMany: vi.fn().mockResolvedValue([]),
   update: vi.fn().mockResolvedValue({}),
@@ -137,6 +140,7 @@ prisma.$queryRawUnsafe = vi.fn().mockResolvedValue([]);
 prisma.$transaction = vi.fn(async (callback) => callback(prisma));
 
 import express from 'express';
+import cookieParser from 'cookie-parser';
 import request from 'supertest';
 import { createRequire } from 'node:module';
 const requireCJS = createRequire(import.meta.url);
@@ -150,6 +154,8 @@ emailOtp.enforceRegistrationOtp = vi.fn().mockReturnValue({ ok: true, emailVerif
 const emailSender = requireCJS('../../lib/emailSender');
 emailSender.sendEmail = vi.fn().mockResolvedValue({ sent: true, source: 'tenant' });
 const portalResetTokens = requireCJS('../../lib/portalResetTokens');
+const eventBus = requireCJS('../../lib/eventBus');
+eventBus.emitEvent = vi.fn().mockResolvedValue(undefined);
 
 const portalRouter = requireCJS('../../routes/portal');
 
@@ -162,6 +168,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 function makeApp() {
   const app = express();
   app.use(express.json());
+  app.use(cookieParser());
   app.use('/api/portal', portalRouter);
   return app;
 }
@@ -204,12 +211,14 @@ beforeEach(() => {
   prisma.tripInstalmentPayment.update.mockReset().mockResolvedValue({});
   prisma.tripPaymentPlan.findUnique.mockReset().mockResolvedValue(null);
   prisma.tmcTrip.findFirst.mockReset().mockResolvedValue(null);
+  prisma.tmcParentTrip.upsert.mockReset().mockResolvedValue({});
   prisma.payment.findMany.mockReset().mockResolvedValue([]);
   prisma.payment.update.mockReset().mockResolvedValue({});
   prisma.paymentGatewayConfig.findFirst.mockReset().mockResolvedValue(null);
   prisma.$queryRawUnsafe.mockReset().mockResolvedValue([]);
   prisma.$transaction.mockClear();
   emailSender.sendEmail.mockReset().mockResolvedValue({ sent: true, source: 'tenant' });
+  eventBus.emitEvent.mockReset().mockResolvedValue(undefined);
   portalResetTokens.resetTokens.clear();
 });
 
@@ -711,6 +720,18 @@ describe('POST /register — travel customer self-service sign-up', () => {
     expect(createArg.tenantId).toBe(3);
     expect(typeof createArg.portalPasswordHash).toBe('string');
     expect(await bcrypt.compare('Pass1234', createArg.portalPasswordHash)).toBe(true);
+    expect(eventBus.emitEvent).toHaveBeenCalledWith(
+      'account.created',
+      expect.objectContaining({
+        contactId: 501,
+        recipientEmail: 'new@x.com',
+        recipientName: 'New Cust',
+        subBrand: 'travelstall',
+        signInLink: expect.stringMatching(/\/travel\/portal$/),
+      }),
+      3,
+      undefined,
+    );
   });
 
   test('email already has a portal account → 409 (no duplicate create)', async () => {
@@ -735,6 +756,61 @@ describe('POST /register — travel customer self-service sign-up', () => {
     const updArg = prisma.contact.update.mock.calls[0][0];
     expect(updArg.where).toEqual({ id: 88 });
     expect(typeof updArg.data.portalPasswordHash).toBe('string');
+  });
+
+  test.each([
+    ['TEACHER', '/tmc/teacher-portal'],
+    ['PARENT', '/tmc/parent-portal'],
+  ])('new TMC %s account email uses its respective portal link', async (registrationType, portalRoute) => {
+    const context = {
+      type: 'TMC_REGISTRATION',
+      registrationType,
+      subBrand: 'tmc',
+      tenantId: 3,
+      ...(registrationType === 'PARENT' ? { teacherContactId: 71, tripId: 91 } : {}),
+    };
+    const contextToken = jwt.sign(context, JWT_SECRET, { noTimestamp: true });
+    prisma.tenant.findUnique.mockResolvedValue({ id: 3, vertical: 'travel' });
+    if (registrationType === 'PARENT') {
+      prisma.contact.findFirst
+        .mockResolvedValueOnce({ id: 71 })
+        .mockResolvedValueOnce(null);
+      prisma.tmcTrip.findFirst.mockResolvedValue({ id: 91 });
+    } else {
+      prisma.contact.findFirst.mockResolvedValue(null);
+    }
+    prisma.contact.create.mockResolvedValue({
+      id: registrationType === 'TEACHER' ? 601 : 602,
+      tenantId: 3,
+      name: `${registrationType} Account`,
+      email: `${registrationType.toLowerCase()}@example.com`,
+      subBrand: 'tmc',
+      portalRole: registrationType,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/portal/register')
+      .set('Cookie', `tmc_registration_context=${contextToken}`)
+      .send({
+        email: `${registrationType.toLowerCase()}@example.com`,
+        password: 'Pass1234',
+        name: `${registrationType} Account`,
+        registrationTenantId: 3,
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.portalRoute).toBe(portalRoute);
+    expect(eventBus.emitEvent).toHaveBeenCalledWith(
+      'account.created',
+      expect.objectContaining({
+        recipientEmail: `${registrationType.toLowerCase()}@example.com`,
+        recipientName: `${registrationType} Account`,
+        subBrand: 'tmc',
+        signInLink: expect.stringMatching(new RegExp(`${portalRoute}$`)),
+      }),
+      3,
+      undefined,
+    );
   });
 });
 

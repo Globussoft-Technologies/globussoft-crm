@@ -161,7 +161,7 @@ export default function Trips() {
     const value = searchParams.get("sortDirection");
     return value === "asc" || value === "desc" ? value : null;
   });
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(() => location.state?.createTrip === true);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [variantSource, setVariantSource] = useState(null);

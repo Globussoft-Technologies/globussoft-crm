@@ -12,6 +12,7 @@ import LandingPageWanderluxEditor, { LayoutPanel as WanderluxLayoutPanel } from 
 import LandingPageWellnessEditor from './LandingPageWellnessEditor';
 import LandingPageGenericEditor from './LandingPageGenericEditor';
 import { TeeDecisionPanel } from '../components/TeeDecisionPanel';
+import TripBuilderNavigator from './travel/TripBuilderNavigator';
 import { AuthContext } from '../App';
 import { getWellnessIconName, WellnessIcon, WellnessNav } from '../components/landing-blocks/BasicBlocks';
 
@@ -710,10 +711,12 @@ export default function LandingPageBuilder() {
   const onRedo = () => { if (canRedo) { dispatch({ type: 'REDO' }); setIsDirty(true); } };
 
   const selectedComp = selected !== null ? components[selected] : null;
+  const originTripId = isTravelTenant && backTrackState?.tripContext?.subBrand === "tmc" && backTrackState.tripContext.tripId;
   if (!page) return <div style={{ padding: '2rem' }}>Loading...</div>;
 
   return (
-    <div className="landing-builder" style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+    <div className="landing-builder" style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden', ...(originTripId ? {paddingBottom: 'var(--tmc-builder-nav-space, 100px)', boxSizing: 'border-box'} : {}) }}>
+      {originTripId && <TripBuilderNavigator key={originTripId} tripId={originTripId} page={page} dirty={isDirty} />}
       {/* Builder top bar */}
       <div className="landing-builder__toolbar" style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.65rem 1rem', borderBottom: '1px solid var(--border-color)', flexShrink: 0, background: 'var(--surface-color)' }}>
         <Link to={builderBackTarget} state={backTrackState || undefined} title={`Back to ${builderBackLabel}`} style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center' }}><ArrowLeft size={18} /></Link>

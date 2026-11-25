@@ -1,4 +1,5 @@
 import { formatTimestamp } from '../utils/date';
+import { createPortal } from 'react-dom';
 import { Fragment, useEffect, useState, useMemo, useRef } from "react";
 import { Search, Phone, X, RefreshCw, Clock, AlertCircle, CheckCircle2, PhoneOff } from "lucide-react";
 import { fetchApi } from "../utils/api";
@@ -157,7 +158,7 @@ export default function CallifiedCallStatusDrawer({ onClose, onQueueChanged, onM
   const yesterdayDate = new Date(formatTimestamp(previousDate, { year: 'numeric', month: '2-digit', day: '2-digit' }, 'en-CA') + 'T12:00:00Z');
   yesterdayDate.setUTCDate(yesterdayDate.getUTCDate() - 1);
   const yesterday = formatTimestamp(yesterdayDate, { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
-  return <div className="call-status-layer">
+  return createPortal(<div className="call-status-layer">
     <div className="call-status-backdrop" onClick={onClose} />
     <section className="call-status-panel" role="dialog" aria-modal="true" aria-label="Call Status">
       <header><div><h2>Call status</h2><small>Live calls, updating automatically</small></div>
@@ -197,5 +198,5 @@ export default function CallifiedCallStatusDrawer({ onClose, onQueueChanged, onM
       </div>
     </section>
     {detailsLead && <CallifiedCallDetailsDrawer lead={detailsLead} onClose={() => setDetailsLead(null)} />}
-  </div>;
+  </div>, document.body);
 }

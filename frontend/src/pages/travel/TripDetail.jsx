@@ -110,7 +110,14 @@ function getPaymentPlanDateMinimum(index, instalments) {
   return previousDate > today ? previousDate : today;
 }
 
+import { SetupHeader, SetupNavigator, setupSteps, rememberParentLink, isPublishedTripPage, stepTab, anchors, tripStepPath } from "./TripSetupNavigation";
+
 export default function TripDetail() {
+  const { id } = useParams();
+  return <SelectedTrip key={id}/>;
+}
+
+function SelectedTrip() {
   const { id } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -123,6 +130,24 @@ export default function TripDetail() {
   const [savedListUrl] = useState(getTripsListUrl);
   const [trip, setTrip] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState(undefined);
+  const [generated, setGenerated] = useState(null);
+  const section = new URLSearchParams(location.search).get("setup");
+  const viewed = tab === "payment" ? 1 : tab === "documents" ? 2 : tab === "overview" ? ({landing:3,teacher:4,parent:5}[section] || 0) : -1;
+  useEffect(() => {
+    let active = true;
+    fetchApi(`/api/travel/trips/${id}/landing-page`, {silent:true}).then(p => { if(active) setPage(p); }).catch(e => {
+      if (!active) return;
+      if (e.status === 404 || e.body?.code === "NOT_LINKED") setPage(null);
+      else notify.error(e.body?.error || "Failed to load landing page");
+    });
+    return () => { active = false; };
+  }, [id, notify]);
+  useEffect(() => {
+    if (loading || tab !== "overview" || !section) return;
+    const target = section === "landing" ? "trip-landing" : "trip-access-title";
+    document.getElementById(target)?.scrollIntoView?.({block:"start"});
+  }, [section, tab, loading]);
   const hasLoadedRef = useRef(false);
   const backTo = location.state?.backTo || savedListUrl;
   const backLabel = location.state?.backLabel || "Back to trips";
@@ -154,14 +179,22 @@ export default function TripDetail() {
     navigate({ pathname: location.pathname, search: `?${params.toString()}` }, { replace: true, state: location.state });
   }, [location.pathname, location.search, location.state, navigate, normalizedTab]);
 
-  const selectTab = useCallback((nextTab) => {
+  const selectTab = useCallback((nextTab, anchor) => {
     const params = new URLSearchParams(location.search);
     params.set("tab", nextTab);
+    if (anchor) params.set("setup", anchor); else params.delete("setup");
     setTab(nextTab);
     navigate({ pathname: location.pathname, search: `?${params.toString()}` }, { replace: true, state: location.state });
   }, [location.pathname, location.search, location.state, navigate]);
 
 
+  const jump = index => {
+    selectTab(stepTab[index], anchors[index]);
+    requestAnimationFrame(() => {
+      const target = index === 3 ? "trip-landing" : index >= 4 ? "trip-access-title" : "trip-header";
+      document.getElementById(target)?.scrollIntoView?.({block:"start"});
+    });
+  };
   if (loading) return <div style={{ padding: 24 }}>Loading&hellip;</div>;
   if (!trip) return (
     <div style={{ padding: 24 }}>
@@ -170,9 +203,10 @@ export default function TripDetail() {
     </div>
   );
 
+  const flags = setupSteps(trip, page === undefined ? undefined : isPublishedTripPage(page), generated);
   return (
-    <div className="travel-trip-detail-page" style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
+    <div className="travel-trip-detail-page ts-detail" style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
+      <div id="trip-header" className="ts-trip-header">
         <div>
           <Link to={backTo} style={backLink}><ChevronLeft size={16} /> {backLabel}</Link>
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: "8px 0 4px" }}>
@@ -182,6 +216,7 @@ export default function TripDetail() {
             <CalendarIcon size={14} /> {fmt(trip.departDate)} → {fmt(trip.returnDate)} · {trip.destination}
           </div>
         </div>
+        <SetupHeader flags={flags} viewed={viewed} jump={jump}/>
         <StatusBadge status={trip.status} />
       </div>
 
@@ -214,11 +249,22 @@ export default function TripDetail() {
         })}
       </div>
 
-      {tab === "overview" && <OverviewTab trip={trip} onJump={selectTab} notify={notify} />}
+      {tab === "overview" && <OverviewTab page={page} sharingChanged={(ids, link) => {
+        const teacherContactIds = ids.map(Number);
+        const saved = link ? trip : { ...trip, teacherContactIds, teacherContactId: teacherContactIds[0] ?? null,
+          teacherAssignments: teacherContactIds.map(teacherContactId => ({teacherContactId})) };
+        rememberParentLink(saved, link); setGenerated(link); setTrip(saved);
+      }} trip={trip} onJump={selectTab} notify={notify} />}
       {tab === "participants" && <SimpleParticipantsTab trip={trip} onChange={load} notify={notify} />}
       {tab === "documents" && <DocumentsTab trip={trip} onChange={load} notify={notify} />}
       {tab === "rooming" && <RoomingTab trip={trip} notify={notify} readOnly showExports={false} />}
-      {tab === "payment" && <PaymentTab trip={trip} notify={notify} />}
+      {tab === "payment" && <PaymentTab trip={trip} notify={notify} onChange={load} />}
+      <SetupNavigator trip={trip} flags={flags} viewed={viewed} jump={jump} tabLabel={TABS.find(t=>t.key===tab)?.label}
+        newTrip={()=>navigate("/travel/trips", {state:{createTrip:true}})}
+        switchTrip={(row,index)=>{
+          if (row.id===trip.id) return jump(index);
+          navigate(tripStepPath(row.id, index));
+        }}/>
     </div>
   );
 }
@@ -230,7 +276,7 @@ export default function TripDetail() {
 // rollups) so the overview shows live trip health rather than 9 static
 // labels. Cards are clickable — clicking jumps to the relevant tab.
 
-function OverviewTab({ trip, onJump, notify }) {
+function OverviewTab({ trip, onJump, notify, page, sharingChanged }) {
   const auth = useContext(AuthContext);
   const isAdmin = auth?.user?.role === "ADMIN";
   const [ops, setOps] = useState(null);
@@ -389,12 +435,12 @@ function OverviewTab({ trip, onJump, notify }) {
           description="Control who can manage this trip and how parents enter the registration flow."
           trailing={isAdmin ? <CopyTeacherPortalLinkButton notify={notify} /> : null}
         />
-        <TeacherAssignment trip={trip} notify={notify} isAdmin={isAdmin} embedded />
+        <TeacherAssignment sharingChanged={sharingChanged} trip={trip} notify={notify} isAdmin={isAdmin} embedded />
       </section>
 
       <div style={overviewSupportGrid}>
         {(trip.familyParent || (trip.familyVariants || []).length > 0) && <TripFamilyCard trip={trip} />}
-      <LandingPageCard trip={trip} notify={notify} />
+      <LandingPageCard trip={trip} page={page} loading={page === undefined} />
       </div>
     </div>
   );
@@ -497,7 +543,7 @@ function getAssignedTeacherIds(trip) {
   return [...new Set(ids.map((id) => String(id)))];
 }
 
-function TeacherAssignment({ trip, notify, isAdmin, embedded = false }) {
+function TeacherAssignment({ trip, notify, isAdmin, sharingChanged, embedded = false }) {
   const [teachers, setTeachers] = useState([]);
   const assignmentKey = getAssignedTeacherIds(trip).join(",");
   const [teacherIds, setTeacherIds] = useState(() => assignmentKey ? assignmentKey.split(",") : []);
@@ -569,6 +615,7 @@ function TeacherAssignment({ trip, notify, isAdmin, embedded = false }) {
         method: "PATCH",
         body: JSON.stringify({ teacherContactIds: teacherIds.map(Number) }),
       });
+      if (!assignmentSaved || Number(teacherIds[0] || 0) !== Number(trip.teacherContactId || 0)) sharingChanged(teacherIds, false);
       setSavedTeacherIds(teacherIds);
       setParentLink("");
       notify.success(teacherIds.length ? "Teachers assigned to this trip" : "Teacher assignments removed");
@@ -585,6 +632,7 @@ function TeacherAssignment({ trip, notify, isAdmin, embedded = false }) {
     try {
       const result = await fetchApi(`/api/portal/tmc/staff/trips/${trip.id}/parent-link`, { method: "POST" });
       setParentLink(result?.link || "");
+      if (result?.link) sharingChanged(savedTeacherIds, true);
       notify.success("Parent registration link generated");
     } catch (error) {
       notify.error(error?.body?.error || "Could not generate the parent registration link");
@@ -3109,7 +3157,7 @@ function RoomCard({
 
 // ─── Payment plan tab ────────────────────────────────────────────────
 
-export function PaymentTab({ trip, notify, request = fetchApi, readOnly = false }) {
+export function PaymentTab({ trip, notify, onChange, request = fetchApi, readOnly = false }) {
   const [plan, setPlan] = useState(null);
   const [instalments, setInstalments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -3280,6 +3328,7 @@ export function PaymentTab({ trip, notify, request = fetchApi, readOnly = false 
           graceDays: Number(graceDays) || 0,
         }),
       });
+      onChange?.();
       notify.success(`Payment plan saved (${editInstalments.length} instalments).`);
       if (editorRevisionRef.current === savedRevision) editorDirtyRef.current = false;
       load();
@@ -3301,6 +3350,7 @@ export function PaymentTab({ trip, notify, request = fetchApi, readOnly = false 
     setDeleting(true);
     try {
       await request(`/api/travel/trips/${trip.id}/payment-plan`, { method: "DELETE" });
+      onChange?.();
       notify.success("Payment plan deleted.");
       editorDirtyRef.current = false;
       load();
@@ -3767,33 +3817,12 @@ function tripDurationDays(trip) {
 // link (LandingPage.tripId @unique) is what makes the
 // registration-draft branch fire — without it the wizard submission
 // falls back to the legacy lead-capture path.
-function LandingPageCard({ trip, notify }) {
+function LandingPageCard({ trip, page, loading }) {
   const location = useLocation();
-  const [page, setPage] = useState(null);
-  const [loading, setLoading] = useState(true);
   const landingPagesReturnState = buildLandingPagesReturnState(trip, location.state || {});
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const p = await fetchApi(`/api/travel/trips/${trip.id}/landing-page`);
-      setPage(p);
-    } catch (e) {
-      if (e?.status === 404 || e?.body?.code === "NOT_LINKED") {
-        setPage(null);
-      } else {
-        notify.error(e?.body?.error || "Failed to load landing page");
-      }
-    } finally {
-      setLoading(false);
-    }
-  }, [trip.id, notify]);
-
-  useEffect(() => { load(); }, [load]);
-
   return (
     <div
-      data-testid="landing-page-card"
+      id="trip-landing" data-testid="landing-page-card"
       style={!loading && !page ? {
         border: "1px solid rgba(205, 117, 37, 0.55)",
         borderRadius: 12,

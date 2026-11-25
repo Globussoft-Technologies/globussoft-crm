@@ -693,10 +693,11 @@ const Layout = () => {
             background: "var(--surface-color)",
             color: "var(--text-secondary)",
             fontSize: "0.7rem",
-            opacity: 0.7,
+            lineHeight: 1.4,
+            paddingBottom: "max(4px, env(safe-area-inset-bottom))",
           }}
         >
-          <small>
+          <small style={{ fontSize: "inherit" }}>
             v
             {typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.0.0"}
             {user?.role === "ADMIN" &&

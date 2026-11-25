@@ -74,7 +74,12 @@ describe('<AuditLog /> — page surface', () => {
     notifyError.mockReset();
     fetchApiMock.mockImplementation((url) => {
       if (url.startsWith('/api/audit-viewer')) {
-        return Promise.resolve({ logs: sampleLogs, pages: 3, total: 150 });
+        return Promise.resolve({
+          logs: sampleLogs.map((log) => ({ ...log, viewerTimezone: 'Asia/Kolkata' })),
+          pages: 3,
+          total: 150,
+          viewerTimezone: 'Asia/Kolkata',
+        });
       }
       return Promise.resolve(null);
     });
@@ -128,19 +133,11 @@ describe('<AuditLog /> — page surface', () => {
     await waitFor(() => expect(screen.getByText('Alice Admin')).toBeInTheDocument());
     expect(screen.getByText('Bob Manager')).toBeInTheDocument();
     expect(screen.getByText('Charlie User')).toBeInTheDocument();
-    // Actions use plain-English labels in the filter and row badge.
-    expect(screen.getAllByText('Created').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText('Updated').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText('Deleted').length).toBeGreaterThanOrEqual(2);
-    // Entity names appear in rows (also in the entity-filter dropdown
-    // options, so accept ≥1 occurrence).
-    expect(screen.getAllByText('Deal').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Contact').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Invoice').length).toBeGreaterThanOrEqual(1);
-    // Activity summaries include the affected record and its ID.
-    expect(screen.getByText(/Created Deal.*#42/)).toBeInTheDocument();
-    expect(screen.getByText(/Updated Contact.*#7/)).toBeInTheDocument();
-    expect(screen.getByText(/Deleted Invoice.*#13/)).toBeInTheDocument();
+    // Each event row exposes its readable activity, entity, ID, and actor as
+    // one accessible name; filter choices are only rendered when selected.
+    expect(screen.getByRole('row', { name: /Created Deal.*#42.*Alice Admin/ })).toBeInTheDocument();
+    expect(screen.getByRole('row', { name: /Updated Contact.*#7.*Bob Manager/ })).toBeInTheDocument();
+    expect(screen.getByRole('row', { name: /Deleted Invoice.*#13.*Charlie User/ })).toBeInTheDocument();
   });
 
   it('renders hard-delete actions and exposes the hard-delete filter', async () => {

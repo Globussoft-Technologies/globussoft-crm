@@ -1,0 +1,322 @@
+.super-admin-main:has(.super-admin-organization-deletion) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.super-admin-organization-deletion {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.85rem;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  color: var(--text-primary, #202331);
+}
+
+.super-admin-organization-deletion__header {
+  flex: 0 0 auto;
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid var(--border-color, rgba(120, 120, 120, 0.2));
+}
+
+.super-admin-organization-deletion__header h1 {
+  font-size: clamp(1.45rem, 2vw, 1.9rem);
+  line-height: 1.15;
+}
+
+.super-admin-organization-deletion__header p {
+  font-size: 0.84rem;
+}
+
+.super-admin-organization-deletion__warning {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+  border-left: 4px solid #f59e0b;
+  color: var(--text-secondary, #687083);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.super-admin-organization-deletion__notice {
+  flex: 0 0 auto;
+  padding: 0.75rem 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.super-admin-organization-deletion__notice.is-success {
+  border-left: 4px solid #22c55e;
+}
+
+.super-admin-organization-deletion__notice.is-error {
+  border-left: 4px solid #ef4444;
+}
+
+.super-admin-organization-deletion__workspace {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+  min-height: 0;
+  padding: 1rem;
+  overflow: hidden;
+}
+
+.super-admin-organization-deletion__workspace > label {
+  flex: 0 0 auto;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.super-admin-organization-deletion__search {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--border-color, rgba(120, 120, 120, 0.25));
+  border-radius: 0.7rem;
+  background: color-mix(in srgb, var(--surface-color, #fff) 88%, var(--bg-color, #f4efe4));
+  color: var(--text-secondary, #687083);
+}
+
+.super-admin-organization-deletion__search:focus-within {
+  border-color: var(--accent-color, #b98949);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color, #b98949) 15%, transparent);
+}
+
+.super-admin-organization-deletion__search > svg {
+  flex: 0 0 auto;
+}
+
+.super-admin-organization-deletion__search-input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  padding: 0 !important;
+  border: 0 !important;
+  outline: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--text-primary, #202331);
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.super-admin-organization-deletion__search-input:focus {
+  border: 0 !important;
+  outline: 0 !important;
+  box-shadow: none !important;
+}
+
+.super-admin-organization-deletion__search-hint {
+  color: var(--text-secondary, #687083);
+  font-size: 0.78rem;
+}
+
+.super-admin-organization-deletion__search-hint {
+  flex: 0 0 auto;
+}
+
+.super-admin-organization-deletion__results {
+  display: block;
+  position: relative;
+  isolation: isolate;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 0 0.2rem 0 0;
+}
+
+.super-admin-organization-deletion__table {
+  width: 100%;
+  min-width: 640px;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: var(--text-primary, #202331);
+  font-size: 0.82rem;
+  text-align: left;
+}
+
+.super-admin-organization-deletion__table th,
+.super-admin-organization-deletion__table td {
+  padding: 0.72rem 0.8rem;
+  border-bottom: 1px solid var(--border-color, rgba(120, 120, 120, 0.16));
+  vertical-align: middle;
+}
+
+.super-admin-organization-deletion__table th {
+  background-color: var(--surface-muted, var(--bg-color, #f4efe4));
+  color: var(--text-secondary, #687083);
+  font-size: 0.74rem;
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: 0 1px 0 var(--border-color, rgba(120, 120, 120, 0.2));
+}
+
+.super-admin-organization-deletion__table thead {
+  position: sticky;
+  z-index: 4;
+  top: 0;
+  isolation: isolate;
+  background-color: var(--surface-muted, var(--bg-color, #f4efe4));
+  background-image: none;
+}
+
+.super-admin-organization-deletion__table tbody tr {
+  background: color-mix(in srgb, var(--surface-color, #fff) 88%, var(--bg-color, #f4efe4));
+}
+
+.super-admin-organization-deletion__table tbody tr:hover {
+  background: color-mix(in srgb, var(--accent-color, #b98949) 5%, var(--surface-color, #fff));
+}
+
+.super-admin-organization-deletion__table th:nth-child(2),
+.super-admin-organization-deletion__table td:nth-child(2) {
+  width: 10rem;
+}
+
+.super-admin-organization-deletion__table th:last-child,
+.super-admin-organization-deletion__table td:last-child {
+  width: 13rem;
+}
+
+.super-admin-organization-deletion__table th:last-child {
+  text-align: left;
+}
+
+.super-admin-organization-deletion__table td:last-child {
+  text-align: left;
+}
+
+.super-admin-organization-deletion__name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  font-weight: 700;
+}
+
+.super-admin-organization-deletion__name svg {
+  flex: 0 0 auto;
+}
+
+.super-admin-organization-deletion__details {
+  color: var(--text-secondary, #687083);
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.super-admin-organization-deletion__protected {
+  flex: 0 0 auto;
+  color: var(--text-secondary, #687083);
+  font-size: 0.78rem;
+}
+
+.super-admin-organization-deletion__vertical {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.8rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-color, #b98949) 12%, transparent);
+  color: var(--text-primary, #202331);
+  font-size: 0.75rem;
+  font-weight: 650;
+  text-transform: capitalize;
+}
+
+.super-admin-organization-deletion__delete-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 2.4rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #ef4444;
+  border-radius: 0.5rem;
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.super-admin-organization-deletion__delete-button:hover {
+  background: rgba(239, 68, 68, 0.18);
+}
+
+.super-admin-organization-deletion__list-state {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 3rem;
+  color: var(--text-secondary, #687083);
+  font-size: 0.84rem;
+}
+
+.super-admin-organization-deletion__list-footer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem 1rem;
+  min-height: 2.2rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border-color, rgba(120, 120, 120, 0.16));
+  color: var(--text-secondary, #687083);
+  font-size: 0.78rem;
+}
+
+.super-admin-organization-deletion__retry {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-color, #b98949);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+
+.super-admin-organization-deletion__retry:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+@media (max-width: 640px) {
+  .super-admin-organization-deletion {
+    gap: 0.65rem;
+  }
+
+  .super-admin-organization-deletion__header h1 {
+    font-size: 1.4rem;
+  }
+
+  .super-admin-organization-deletion__warning {
+    padding: 0.75rem;
+    font-size: 0.78rem;
+  }
+
+  .super-admin-organization-deletion__workspace {
+    padding: 0.75rem;
+  }
+
+  .super-admin-organization-deletion__list-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

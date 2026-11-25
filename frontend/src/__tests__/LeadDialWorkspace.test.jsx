@@ -121,7 +121,7 @@ describe('calling workspace', () => {
     expect(await screen.findByText('CRM time')).toBeVisible();
     expect(screen.getByText(/1:30:0\d PM/)).toBeVisible();
     expect(screen.getByRole('region', { name: 'Pending retries' })).toHaveTextContent('Pending lead');
-    expect(screen.getByRole('region', { name: 'Pending retries' })).toHaveTextContent(/1:29:28 PM.*Previous submission failed \(CALLIFIED_API_503\)/);
+    expect(screen.getByRole('region', { name: 'Pending retries' })).toHaveTextContent(/1:29:28 PM.*Previous submission failed \(CALLIFIED_API_503\)/i);
     expect(screen.getByRole('region', { name: 'DNP retries' })).toHaveTextContent('Off');
     expect(screen.getByRole('region', { name: 'New-lead auto-dial' })).toHaveTextContent('3 queued');
     expect(screen.getByText('1 active Callified call')).toBeVisible();

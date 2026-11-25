@@ -404,6 +404,44 @@ describe('GET /api/contacts/:id/activities — deterministic pagination', () => 
     });
   });
 
+  test('filters the Wellness activity timeline to notes when requested', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(prospect);
+    prisma.activity.findMany.mockResolvedValueOnce([{ id: 12, type: 'Note' }]);
+    prisma.activity.count.mockResolvedValueOnce(1);
+
+    const res = await request(makeApp()).get(`/api/contacts/${CONTACT_ID}/activities?page=1&limit=20&type=Note`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ total: 1, page: 1, limit: 20, totalPages: 1 });
+    expect(prisma.activity.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { contactId: CONTACT_ID, tenantId: TENANT_ID, type: 'Note' },
+      take: 20,
+      skip: 0,
+    }));
+    expect(prisma.activity.count).toHaveBeenCalledWith({
+      where: { contactId: CONTACT_ID, tenantId: TENANT_ID, type: 'Note' },
+    });
+  });
+
+  test('excludes notes from the Wellness activity timeline when requested', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(prospect);
+    prisma.activity.findMany.mockResolvedValueOnce([{ id: 13, type: 'Patient journey stage updated' }]);
+    prisma.activity.count.mockResolvedValueOnce(1);
+
+    const res = await request(makeApp()).get(`/api/contacts/${CONTACT_ID}/activities?page=1&limit=20&excludeType=Note`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([{ id: 13, type: 'Patient journey stage updated' }]);
+    expect(prisma.activity.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { contactId: CONTACT_ID, tenantId: TENANT_ID, type: { not: 'Note' } },
+      take: 20,
+      skip: 0,
+    }));
+    expect(prisma.activity.count).toHaveBeenCalledWith({
+      where: { contactId: CONTACT_ID, tenantId: TENANT_ID, type: { not: 'Note' } },
+    });
+  });
+
   test('merges Generic CRM Callified CallLogs as Call activities', async () => {
     prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'generic' });
     prisma.contact.findFirst.mockResolvedValueOnce(prospect);

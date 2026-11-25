@@ -141,9 +141,8 @@ async function loadPatientForCall(patientId, tenantId) {
 /**
  * Load a lead within the caller's tenant.
  *
- * A "lead" in this CRM is a Contact — both All Leads and Converted Leads are
- * views over Contact, filtered by status — so there is no separate model to
- * load. Filters `deletedAt: null` to match every other contact read.
+ * A "lead" in this CRM is a Contact, so there is no separate model to load.
+ * Filters `deletedAt: null` to match every other contact read.
  */
 async function loadLeadForCall(leadId, tenantId) {
   const id = Number(leadId);
@@ -193,7 +192,7 @@ function patientSubject(patient) {
 }
 
 /**
- * Leads / Converted Leads — the subject is a CRM contact.
+ * Wellness Leads — the subject is a CRM contact.
  *
  * Every other surface has to promote its record into a Contact before it can
  * be dialled. A lead already IS one, so `resolveContact` short-circuits: no
@@ -550,10 +549,7 @@ router.post(
 );
 
 /**
- * All Leads + Converted Leads — call a lead directly.
- *
- * Both pages are views over Contact filtered by status, so one route serves
- * both; nothing here needs to know which list the operator was looking at.
+ * All Leads — call a lead directly.
  *
  * GET  /api/wellness/callified/leads/:leadId/context
  * POST /api/wellness/callified/leads/:leadId/ai-call

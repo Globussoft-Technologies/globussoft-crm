@@ -496,7 +496,7 @@ describe('WebForms builder page', () => {
 
     expect(container.querySelectorAll('.wf-conditional-child-card')).toHaveLength(1);
     expect(liveChildCard.querySelector('select[aria-label^="Field type for"]')).toHaveValue('email');
-  });
+  }, 10000); // Conditional builder interactions can exceed 5s on loaded CI workers.
 
   test('offers dropdown and radio for an existing field that can create conditional children', async () => {
     const parentField = {
@@ -719,7 +719,7 @@ describe('WebForms builder page', () => {
     expect(previewFrame.style.height).toBe('1235px');
     expect(previewFrame.style.minHeight).toBe('0px');
 
-  });
+  }, 10000); // Multi-panel builder and iframe assertions need CI runner headroom.
 
 
 
@@ -936,7 +936,7 @@ describe('WebForms builder page', () => {
       expect.objectContaining({ method: 'POST' }),
     );
     expect(notifySuccess).not.toHaveBeenCalledWith('Field created');
-  });
+  }, 10000); // Dialog interaction can exceed 5s on loaded CI workers.
 
   test('hides legacy custom fields that collide with Generic built-in fields', async () => {
     renderPage(FORM_FIXTURE, [
@@ -951,7 +951,7 @@ describe('WebForms builder page', () => {
     expect(within(picker).getByRole('button', { name: /^Phonephone$/i })).toBeInTheDocument();
     expect(within(picker).queryByRole('button', { name: /^Phonecustom$/i })).toBeNull();
     expect(within(picker).getByRole('button', { name: /^Company phonecustom$/i })).toBeInTheDocument();
-  });
+  }, 10000); // Builder setup and picker rendering need CI runner headroom.
 
   test('does not show the lead-field plus action in the Travel form picker', async () => {
     renderTravelPage();

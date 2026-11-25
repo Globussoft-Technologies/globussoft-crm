@@ -116,6 +116,10 @@ const inputValue = search || selectedOption?.label || '';
         }}
         onChange={(e) => {
           const nextSearch = e.target.value;
+          // Editing a selected label starts a new search. Clear the previous
+          // value immediately so an empty query stays empty instead of
+          // snapping back to the old option label.
+          if (normalizedValue) onChange?.('');
           setSearch(nextSearch);
           onSearchChange?.(nextSearch);
           setActiveIndex(-1);

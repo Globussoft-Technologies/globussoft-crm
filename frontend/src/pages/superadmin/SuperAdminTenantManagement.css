@@ -1,0 +1,796 @@
+.tenant-management-page {
+  --tenant-management-surface: color-mix(in srgb, var(--surface-color, var(--card-bg, #fff)) 78%, var(--bg-color, #f4efe4));
+  --tenant-management-raised-surface: color-mix(in srgb, var(--surface-color, var(--card-bg, #fff)) 90%, var(--bg-color, #f4efe4));
+  --tenant-management-table-header: color-mix(in srgb, var(--tenant-management-raised-surface) 94%, var(--accent-color, #b98949));
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.9rem;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  color: var(--text-primary, #202331);
+}
+
+.super-admin-main:has(.tenant-management-page) {
+  display: flex;
+  flex-direction: column;
+}
+
+.tenant-management-header {
+  padding-bottom: 0.65rem;
+  border-bottom: 1px solid var(--border-color, rgba(120, 120, 120, 0.2));
+}
+
+.tenant-management-header h1 {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0;
+  font-size: clamp(1.5rem, 2vw, 1.9rem);
+  line-height: 1.15;
+}
+
+.tenant-management-header h1 svg {
+  flex: 0 0 auto;
+  color: var(--accent-color, #b98949);
+}
+
+.tenant-management-header p {
+  margin: 0.4rem 0 0;
+  color: var(--text-secondary, #687083);
+  font-size: 0.84rem;
+}
+
+.tenant-management-message {
+  padding: 0.7rem 0.85rem;
+  border: 1px solid #36a269;
+  border-radius: 0.7rem;
+  background: var(--tenant-status-success-bg);
+  color: var(--tenant-status-success-ink);
+  font-size: 0.82rem;
+}
+
+.tenant-management-message.is-error {
+  border-color: #d14d55;
+  background: rgba(209, 77, 85, 0.1);
+  color: #a12632;
+}
+
+[data-theme="dark"] .tenant-management-message.is-error {
+  color: #ffb4b8;
+}
+
+.tenant-management-summary {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-color, rgba(120, 120, 120, 0.2));
+  border-radius: 0.9rem;
+  background: var(--tenant-management-surface);
+  box-shadow: var(--glass-shadow, 0 4px 14px rgba(30, 35, 45, 0.06));
+}
+
+.tenant-management-metric {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+  min-height: 4.1rem;
+  padding: 0.85rem 1rem;
+}
+
+.tenant-management-metric:not(:last-child) {
+  border-right: 1px solid var(--border-color, rgba(120, 120, 120, 0.2));
+}
+
+.tenant-management-metric__icon {
+  display: grid;
+  flex: 0 0 2.35rem;
+  width: 2.35rem;
+  height: 2.35rem;
+  place-items: center;
+  border-radius: 0.7rem;
+  background: color-mix(in srgb, var(--accent-color, #b98949) 12%, transparent);
+  color: var(--accent-color, #b98949);
+}
+
+.tenant-management-metric__copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.12rem;
+}
+
+.tenant-management-metric__copy > span {
+  overflow: hidden;
+  color: var(--text-secondary, #687083);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tenant-management-metric__copy strong {
+  overflow: hidden;
+  font-size: 1.12rem;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tenant-management-workspace {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-color, rgba(120, 120, 120, 0.2));
+  border-radius: 0.95rem;
+  background: var(--tenant-management-surface);
+  box-shadow: var(--glass-shadow, 0 5px 16px rgba(30, 35, 45, 0.06));
+}
+
+.tenant-management-tabs {
+  display: flex;
+  gap: 0.25rem;
+  overflow-x: auto;
+  padding: 0.35rem 0.8rem 0;
+  border-bottom: 1px solid var(--border-color, rgba(120, 120, 120, 0.2));
+  flex: 0 0 auto;
+}
+
+.tenant-management-tabs button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.65rem;
+  padding: 0 0.85rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary, #687083);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.tenant-management-tabs button:hover,
+.tenant-management-tabs button.is-active {
+  border-bottom-color: var(--accent-color, #b98949);
+  color: var(--text-primary, #202331);
+}
+
+.tenant-management-panel {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 0.85rem 1rem 0.95rem;
+}
+
+.tenant-management-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.8rem;
+}
+
+.tenant-management-search {
+  display: flex;
+  flex: 0 1 560px;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 220px;
+  min-height: 2.65rem;
+  padding: 0 0.65rem;
+  border: 1px solid var(--border-color, #d8dce5);
+  border-radius: 0.7rem;
+  background: var(--tenant-management-raised-surface);
+  color: var(--text-secondary, #687083);
+}
+
+.tenant-management-search:focus-within {
+  border-color: var(--accent-color, #b98949);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color, #b98949) 16%, transparent);
+}
+
+.tenant-management-search > svg {
+  flex: 0 0 auto;
+}
+
+.tenant-management-search input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  outline: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--text-primary, #202331);
+  font: inherit;
+  font-size: 0.8rem;
+  appearance: none !important;
+}
+
+.tenant-management-search input:focus {
+  border: 0 !important;
+  outline: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.tenant-management-search button,
+.tenant-management-filter-trigger,
+.tenant-management-button,
+.tenant-management-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 2.55rem;
+  padding: 0 0.8rem;
+  border: 1px solid var(--border-color, #d8dce5);
+  border-radius: 0.65rem;
+  background: var(--tenant-management-surface);
+  color: var(--text-primary, #202331);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.tenant-management-search button {
+  width: 2rem;
+  min-height: 2rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-color, #b98949);
+}
+
+.tenant-management-filter {
+  position: relative;
+  z-index: 5;
+  flex: 0 0 auto;
+}
+
+.tenant-management-filter-trigger {
+  min-width: 6.5rem;
+  color: var(--text-secondary, #687083);
+}
+
+.tenant-management-filter-trigger > span {
+  max-width: 8rem;
+  overflow: hidden;
+  padding: 0.12rem 0.4rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent-color, #b98949) 12%, transparent);
+  color: var(--text-primary, #202331);
+  text-overflow: ellipsis;
+}
+
+.tenant-management-filter-trigger.is-active {
+  border-color: var(--accent-color, #b98949);
+  color: var(--text-primary, #202331);
+}
+
+.tenant-management-filter-menu {
+  position: absolute;
+  z-index: 15;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  display: grid;
+  width: min(240px, calc(100vw - 2rem));
+  gap: 0.2rem;
+  padding: 0.55rem;
+  border: 1px solid var(--border-color, #d8dce5);
+  border-radius: 0.7rem;
+  background: var(--tenant-management-surface);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.16);
+}
+
+.tenant-management-filter-menu > strong {
+  padding: 0.3rem 0.5rem;
+  color: var(--text-secondary, #687083);
+  font-size: 0.67rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tenant-management-filter-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 2.25rem;
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: 0.45rem;
+  background: transparent;
+  color: var(--text-primary, #202331);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.77rem;
+  text-align: left;
+}
+
+.tenant-management-filter-menu button:hover,
+.tenant-management-filter-menu button.is-active {
+  background: color-mix(in srgb, var(--accent-color, #b98949) 11%, transparent);
+  color: var(--accent-color, #9a6c2d);
+}
+
+.tenant-management-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  margin-left: auto;
+}
+
+.tenant-management-button--primary {
+  border-color: var(--accent-color, #b98949);
+  background: var(--accent-color, #b98949);
+  color: var(--button-text-color, #fff);
+}
+
+.tenant-management-button--primary:hover:not(:disabled) {
+  filter: brightness(0.95);
+}
+
+.tenant-management-button--secondary:hover,
+.tenant-management-action-button:hover,
+.tenant-management-filter-trigger:hover {
+  border-color: var(--accent-color, #b98949);
+  color: var(--accent-color, #9a6c2d);
+}
+
+.tenant-management-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.tenant-management-table-scroll {
+  flex: 1 1 auto;
+  max-width: 100%;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border-color, rgba(120, 120, 120, 0.2));
+  border-radius: 0.7rem;
+}
+
+.tenant-management-table {
+  width: 100%;
+  height: 100%;
+  min-width: 1000px;
+  border-collapse: separate;
+  border-spacing: 0;
+  color: var(--text-primary, #202331);
+  font-size: 0.78rem;
+  text-align: left;
+}
+
+.tenant-management-table th,
+.tenant-management-table td {
+  padding: 0.7rem 0.8rem;
+  border-bottom: 1px solid var(--border-color, rgba(120, 120, 120, 0.16));
+  vertical-align: middle;
+}
+
+.tenant-management-table th {
+  background: var(--tenant-management-table-header);
+  color: var(--text-secondary, #687083);
+  font-size: 0.7rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.tenant-management-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.tenant-management-table tbody tr {
+  background: var(--tenant-management-raised-surface);
+}
+
+.tenant-management-table tbody tr:hover {
+  background: var(--surface-hover, color-mix(in srgb, var(--accent-color, #b98949) 7%, var(--tenant-management-surface)));
+}
+
+.tenant-management-organization {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.tenant-management-organization__icon {
+  display: grid;
+  flex: 0 0 2.2rem;
+  width: 2.2rem;
+  height: 2.2rem;
+  place-items: center;
+  border-radius: 0.65rem;
+  background: color-mix(in srgb, var(--accent-color, #b98949) 12%, transparent);
+  color: var(--accent-color, #b98949);
+}
+
+.tenant-management-organization__copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.12rem;
+}
+
+.tenant-management-organization__copy strong {
+  font-size: 0.79rem;
+}
+
+.tenant-management-organization__copy small {
+  max-width: 24rem;
+  overflow: hidden;
+  color: var(--text-secondary, #687083);
+  font-size: 0.68rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tenant-management-organization__copy .tenant-management-vertical-label {
+  color: var(--accent-color, #9a6c2d);
+  font-size: 0.64rem;
+  font-weight: 700;
+}
+
+.tenant-management-muted {
+  color: var(--text-secondary, #687083);
+}
+
+.tenant-management-credit-value,
+.tenant-management-credit-mode {
+  display: block;
+}
+
+.tenant-management-credit-value {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.tenant-management-credit-mode {
+  margin-top: 0.12rem;
+  color: var(--text-secondary, #687083);
+  font-size: 0.66rem;
+  text-transform: uppercase;
+}
+
+.tenant-management-action-button {
+  width: 2.2rem;
+  min-height: 2.2rem;
+  padding: 0;
+}
+
+.tenant-management-empty,
+.tenant-management-state {
+  padding: 2rem 1rem !important;
+  color: var(--text-secondary, #687083);
+  text-align: center;
+}
+
+.tenant-management-state {
+  border: 1px solid var(--border-color, rgba(120, 120, 120, 0.2));
+  border-radius: 0.7rem;
+}
+
+.tenant-management-list-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding-top: 0.75rem;
+  color: var(--text-secondary, #687083);
+  font-size: 0.74rem;
+}
+
+.tenant-management-create-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.tenant-management-create-heading > div > span {
+  color: var(--accent-color, #9a6c2d);
+  font-size: 0.65rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+}
+
+.tenant-management-create-heading h2 {
+  margin: 0.2rem 0 0;
+  font-size: 1.05rem;
+}
+
+.tenant-management-create-heading p {
+  margin: 0.35rem 0 0;
+  color: var(--text-secondary, #687083);
+  font-size: 0.78rem;
+}
+
+.tenant-management-create-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.7rem;
+}
+
+.tenant-management-create-form .input-field {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.65rem;
+  margin: 0;
+}
+
+.tenant-management-create-actions {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 0.7rem;
+  margin-top: 0.2rem;
+}
+
+.tenant-management-create-actions > span {
+  color: var(--text-secondary, #687083);
+  font-size: 0.7rem;
+}
+
+.tenant-management-users-card {
+  display: grid;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 1rem;
+}
+
+.tenant-management-users-heading {
+  font-weight: 700;
+}
+
+.tenant-management-users-scroll {
+  max-height: min(19rem, 55vh);
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border-top: 1px solid var(--border-color, rgba(120, 120, 120, 0.16));
+  border-bottom: 1px solid var(--border-color, rgba(120, 120, 120, 0.16));
+}
+
+.tenant-management-users-list {
+  display: grid;
+  min-width: 0;
+}
+
+.tenant-management-user-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.55rem 0.25rem;
+  border-bottom: 1px solid var(--border-color, rgba(120, 120, 120, 0.16));
+  font-size: 0.85rem;
+}
+
+.tenant-management-user-identity {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tenant-management-user-meta {
+  flex: 0 0 auto;
+  color: var(--text-secondary, #687083);
+  text-align: right;
+}
+
+.tenant-management-users-empty {
+  padding: 0.8rem 0.25rem;
+  color: var(--text-secondary, #687083);
+  font-size: 0.85rem;
+}
+
+.tenant-management-users-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.4rem 1rem;
+  color: var(--text-secondary, #687083);
+  font-size: 0.74rem;
+}
+
+.tenant-management-subscriptions-card {
+  display: grid;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 1rem;
+}
+
+.tenant-management-subscriptions-scroll {
+  max-height: min(12rem, 45vh);
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border-top: 1px solid var(--border-color, rgba(120, 120, 120, 0.16));
+  border-bottom: 1px solid var(--border-color, rgba(120, 120, 120, 0.16));
+}
+
+.tenant-management-subscriptions-list {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.tenant-management-subscription-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-width: 0;
+  min-height: 2.55rem;
+  padding: 0.4rem 0.25rem;
+  border-bottom: 1px solid var(--border-color, rgba(120, 120, 120, 0.16));
+  font-size: 0.85rem;
+}
+
+.tenant-management-subscription-meta {
+  color: var(--text-secondary, #687083);
+  text-align: right;
+}
+
+.tenant-management-cancel-card {
+  display: grid;
+  gap: 0.6rem;
+  padding: 1rem;
+}
+
+.tenant-management-cancel-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.tenant-management-cancel-reason {
+  flex: 1 1 320px;
+  min-width: min(100%, 220px);
+  margin: 0;
+}
+
+.tenant-management-cancel-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  min-height: 2.75rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--danger-color, #ef4444);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--danger-color, #ef4444) 10%, transparent);
+  color: var(--danger-color, #ef4444);
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+}
+
+.tenant-management-cancel-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+@media (max-width: 1180px) {
+  .tenant-management-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tenant-management-metric:not(:last-child) {
+    border-right: 0;
+  }
+
+  .tenant-management-metric:nth-child(odd) {
+    border-right: 1px solid var(--border-color, rgba(120, 120, 120, 0.2));
+  }
+
+  .tenant-management-metric:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--border-color, rgba(120, 120, 120, 0.2));
+  }
+}
+
+@media (max-width: 900px) {
+  .tenant-management-create-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tenant-management-search {
+    flex: 1 1 380px;
+  }
+}
+
+@media (max-width: 640px) {
+  .tenant-management-header h1 {
+    font-size: 1.45rem;
+  }
+
+  .tenant-management-panel {
+    padding: 0.7rem;
+  }
+
+  .tenant-management-toolbar {
+    align-items: stretch;
+  }
+
+  .tenant-management-search {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .tenant-management-toolbar-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .tenant-management-toolbar-actions .tenant-management-button--primary {
+    margin-left: auto;
+  }
+
+  .tenant-management-list-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .tenant-management-create-heading {
+    align-items: flex-start;
+  }
+
+  .tenant-management-create-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tenant-management-create-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .tenant-management-user-row {
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .tenant-management-user-meta {
+    text-align: left;
+  }
+
+  .tenant-management-subscription-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .tenant-management-subscription-meta {
+    text-align: left;
+  }
+
+  .tenant-management-cancel-controls {
+    flex-wrap: wrap;
+  }
+
+  .tenant-management-cancel-reason {
+    flex-basis: 100%;
+  }
+}

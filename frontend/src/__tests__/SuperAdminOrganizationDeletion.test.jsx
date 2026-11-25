@@ -18,7 +18,7 @@ const organization = {
 beforeEach(() => {
   superAdminFetch.mockReset();
   superAdminFetch.mockImplementation((path) => {
-    if (path.includes("/organizations/search")) return Promise.resolve({ organizations: [organization], total: 1, limit: 50, offset: 0 });
+    if (path.includes("/organizations/search")) return Promise.resolve({ organizations: [organization], total: 1, limit: 25, offset: 0 });
     if (path.includes("/hard-delete")) return Promise.resolve({
       ok: true,
       auditId: 901,
@@ -33,33 +33,48 @@ describe("SuperAdminOrganizationDeletion", () => {
   test("loads the organization list without requiring a search", async () => {
     render(<SuperAdminOrganizationDeletion />);
 
-    expect(screen.getByText("All organizations")).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: /Delete permanently/ })).toBeInTheDocument();
-    expect(screen.getByText("1 organization")).toBeInTheDocument();
+    expect(screen.queryByText("All organizations")).not.toBeInTheDocument();
+    expect(screen.queryByText("1 organization", { exact: true })).not.toBeInTheDocument();
+    expect(screen.getByText("Showing 1 of 1 organizations")).toBeInTheDocument();
     await waitFor(() => expect(superAdminFetch).toHaveBeenCalledWith(
-      "/tenant-management/organizations/search?limit=50&offset=0",
+      "/tenant-management/organizations/search?limit=25&offset=0",
     ));
   });
 
-  test("loads the next page of organizations", async () => {
-    const nextOrganization = { ...organization, id: 51, name: "Zeta Health", slug: "zeta-health" };
+  test("loads the next organization batch on scroll without page controls", async () => {
+    const firstBatch = Array.from({ length: 25 }, (_, index) => ({
+      ...organization,
+      id: index + 2,
+      name: `Organization ${String(index + 2).padStart(2, "0")}`,
+      slug: `organization-${index + 2}`,
+    }));
+    const nextOrganization = { ...organization, id: 27, name: "Zeta Health", slug: "zeta-health" };
     superAdminFetch.mockImplementation((path) => {
-      if (path.includes("/organizations/search?limit=50&offset=50")) {
-        return Promise.resolve({ organizations: [nextOrganization], total: 51, limit: 50, offset: 50 });
+      if (path.includes("/organizations/search?limit=25&offset=25")) {
+        return Promise.resolve({ organizations: [nextOrganization], total: 26, limit: 25, offset: 25 });
       }
       if (path.includes("/organizations/search")) {
-        return Promise.resolve({ organizations: [organization], total: 51, limit: 50, offset: 0 });
+        return Promise.resolve({ organizations: firstBatch, total: 26, limit: 25, offset: 0 });
       }
       return Promise.resolve({});
     });
     render(<SuperAdminOrganizationDeletion />);
 
-    expect(await screen.findByRole("button", { name: /Delete permanently/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Next" }));
+    expect(await screen.findByText("Organization 26")).toBeInTheDocument();
+    expect(screen.queryByText("Zeta Health")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Next" })).not.toBeInTheDocument();
+    const results = screen.getByRole("region", { name: "Organization results" });
+    Object.defineProperties(results, {
+      clientHeight: { configurable: true, value: 300 },
+      scrollHeight: { configurable: true, value: 1000 },
+      scrollTop: { configurable: true, writable: true, value: 650 },
+    });
+    fireEvent.scroll(results);
 
     expect(await screen.findByText("Zeta Health")).toBeInTheDocument();
-    expect(screen.getByText("Showing 51-51 of 51")).toBeInTheDocument();
-    expect(superAdminFetch).toHaveBeenCalledWith("/tenant-management/organizations/search?limit=50&offset=50");
+    expect(screen.getByText("Showing 26 of 26 organizations")).toBeInTheDocument();
+    expect(superAdminFetch).toHaveBeenCalledWith("/tenant-management/organizations/search?limit=25&offset=25");
   });
 
   test("requires the exact organization name and a reason before deleting", async () => {
@@ -95,7 +110,7 @@ describe("SuperAdminOrganizationDeletion", () => {
     superAdminFetch.mockResolvedValue({
       organizations: [{ ...organization, id: 1, name: "Platform Default" }],
       total: 1,
-      limit: 50,
+      limit: 25,
       offset: 0,
     });
     render(<SuperAdminOrganizationDeletion />);
@@ -105,7 +120,7 @@ describe("SuperAdminOrganizationDeletion", () => {
     expect(await screen.findByText("Protected platform default")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Delete permanently/ })).not.toBeInTheDocument();
     await waitFor(() => expect(superAdminFetch).toHaveBeenCalledWith(
-      "/tenant-management/organizations/search?limit=50&offset=0&q=1",
+      "/tenant-management/organizations/search?limit=25&offset=0&q=1",
     ));
   });
 });

@@ -11,7 +11,7 @@
  * of a 2-column grid. Tests pin the actual inline-form behavior.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -637,7 +637,8 @@ describe('<Invoices /> — page surface', () => {
     await openCreateInvoiceForm();
 
     // Seed has INV-001, INV-002, INV-003 → next should be INV-004.
-    const invInput = screen.getByLabelText(/Invoice number/i);
+    const invoiceDialog = screen.getByRole('dialog', { name: 'Create Invoice' });
+    const invInput = within(invoiceDialog).getByLabelText('Invoice number (auto-generated on save)');
     expect(invInput.value).toMatch(/INV-004/);
     // Field is marked readOnly so the user can't pre-set it.
     expect(invInput).toHaveAttribute('readOnly');
@@ -1203,7 +1204,8 @@ describe('<Invoices /> — page surface', () => {
     renderInvoices();
     await waitFor(() => expect(screen.getByText(/No invoices yet/i)).toBeInTheDocument());
     await openCreateInvoiceForm();
-    const invInput = screen.getByLabelText(/Invoice number/i);
+    const invoiceDialog = screen.getByRole('dialog', { name: 'Create Invoice' });
+    const invInput = within(invoiceDialog).getByLabelText('Invoice number (auto-generated on save)');
     expect(invInput.value).toBe('INV-001');
   });
 
@@ -1374,7 +1376,7 @@ describe('<Invoices /> — wellness customer invoice form', () => {
     await openCreateInvoiceForm();
 
     expect(screen.getByRole('heading', { name: /Customer Details/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /Products & Services/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Invoice items/i })).toBeInTheDocument();
     expect(screen.getByLabelText(/Customer or patient/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Patient visit/i)).toBeInTheDocument();
     expect(screen.queryByLabelText(/Customer ID/i)).toBeNull();
@@ -1597,7 +1599,7 @@ describe('<Invoices /> — wellness customer invoice form', () => {
 
     await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
     expect(screen.getByRole('columnheader', { name: /Customer \/ Patient/i })).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: /Products \/ Services/i })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: /Invoice Items/i })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /^Qty$/i })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: /Payment Mode/i })).toBeInTheDocument();
     expect(screen.getByText('Priya Sharma')).toBeInTheDocument();
@@ -1609,6 +1611,43 @@ describe('<Invoices /> — wellness customer invoice form', () => {
     expect(screen.getByRole('cell', { name: '2026-06-01' }).querySelector('svg')).toBeNull();
     const wellnessUnpaidBadge = screen.getAllByText('Unpaid').find((node) => node.closest('tr'));
     expect(wellnessUnpaidBadge.getAttribute('style')).toMatch(/border:\s*0px?\s+solid\s+transparent/i);
+  });
+
+  it('shows the imported mixed payment split alongside the generated service for INV-002145', async () => {
+    const invoice = {
+      id: 2145,
+      invoiceNum: 'INV-002145',
+      amount: 6275,
+      amountPaid: 6275,
+      balance: 0,
+      status: 'PAID',
+      dueDate: '2026-10-29',
+      issuedDate: '2026-10-29',
+      patientId: 11,
+      customerName: 'Dipika',
+      paymentMode: 'combined',
+      lineItemsJson: JSON.stringify([
+        { type: 'service', itemId: 21, name: 'Dr Consultation', quantity: 1, unitPrice: 6275, amount: 6275 },
+      ]),
+      importedPaymentSplit: { Cash: 6200, UPI: 75 },
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/billing' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve([invoice]);
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    renderInvoices(ADMIN_USER, { vertical: 'wellness', defaultCurrency: 'INR' });
+
+    const invoiceNumber = await screen.findByText('INV-002145');
+    const row = invoiceNumber.closest('tr');
+    expect(row).toHaveTextContent('Dr Consultation');
+    expect(row).toHaveTextContent('Mixed payment');
+    expect(row).toHaveTextContent(/Cash: ₹6?,?200\.00/);
+    expect(row).toHaveTextContent(/UPI: ₹75\.00/);
+    expect(screen.getByText('Cash: ₹6200.00')).toBeInTheDocument();
+    expect(screen.getByText('UPI: ₹75.00')).toBeInTheDocument();
   });
 });
 

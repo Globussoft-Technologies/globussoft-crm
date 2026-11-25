@@ -1792,12 +1792,14 @@ describe('PUT /api/contacts/:id — update', () => {
     prisma.activity.create.mockResolvedValueOnce({
       id: 99,
       type: 'Patient journey stage updated',
-      description: 'Updated from Contacted to New',
+      description: 'Updated from Contacted to New. Reason: Duplicate intake correction',
+      createdAt: new Date('2026-11-23T11:30:00.000Z'),
+      user: { id: USER_ID, name: 'Wellness Operator', email: 'operator@example.com' },
     });
 
     const res = await request(makeApp({ vertical: 'wellness' }))
       .patch('/api/contacts/9001')
-      .send({ lifecycleStageKey: 'new' });
+      .send({ lifecycleStageKey: 'new', lifecycleTransitionReason: 'Duplicate intake correction' });
 
     expect(res.status).toBe(200);
     expect(prisma.$transaction).toHaveBeenCalledOnce();
@@ -1808,9 +1810,52 @@ describe('PUT /api/contacts/:id — update', () => {
     expect(prisma.activity.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         type: 'Patient journey stage updated',
-        description: 'Updated from Contacted to New',
+        description: 'Updated from Contacted to New. Reason: Duplicate intake correction',
       }),
     }));
+    expect(res.body.lifecycleActivity).toMatchObject({
+      id: 99,
+      type: 'Patient journey stage updated',
+      description: 'Updated from Contacted to New. Reason: Duplicate intake correction',
+      createdAt: '2026-11-23T11:30:00.000Z',
+      user: { id: USER_ID, name: 'Wellness Operator', email: 'operator@example.com' },
+    });
+  });
+
+  test('requires a reason before moving backward in the Wellness patient journey', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce({
+      ...SAMPLE_CONTACT,
+      status: 'Prospect',
+      lifecycleStageKey: 'contacted',
+    });
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+
+    const res = await request(makeApp({ vertical: 'wellness' }))
+      .patch('/api/contacts/9001')
+      .send({ lifecycleStageKey: 'new' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'BACKWARD_STAGE_REASON_REQUIRED' });
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(prisma.activity.create).not.toHaveBeenCalled();
+  });
+
+  test('requires a reason for a Wellness alternative patient journey stage', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce({
+      ...SAMPLE_CONTACT,
+      status: 'Prospect',
+      lifecycleStageKey: 'interested',
+    });
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+
+    const res = await request(makeApp({ vertical: 'wellness' }))
+      .patch('/api/contacts/9001')
+      .send({ lifecycleStageKey: 'not_interested' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'NEGATIVE_STAGE_REASON_REQUIRED' });
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(prisma.activity.create).not.toHaveBeenCalled();
   });
 
   test('does not write lifecycle stages for a vertical without stage support', async () => {

@@ -919,6 +919,26 @@ function GenericOrWellnessOnly({ children }) {
   return children;
 }
 
+// Converted Leads is a legacy cross-contact status queue. Wellness tenants
+// manage lead progression through the clinic-specific stages on lead detail.
+// Keep this route available to Generic and Travel tenants without exposing it
+// to Wellness users by direct URL.
+function NonWellnessOnly({ children }) {
+  const { tenant, user } = useContext(AuthContext);
+  if (tenant?.vertical === "wellness") {
+    const target = landingFor(user, tenant);
+    const targetIsRemovedPage =
+      target === "/converted-leads" || target.startsWith("/converted-leads?");
+    return (
+      <Navigate
+        to={targetIsRemovedPage ? wellnessLandingFor(user) : target}
+        replace
+      />
+    );
+  }
+  return children;
+}
+
 // Lead Routing is intentionally disabled for Generic CRM only. The component,
 // backend routes, and non-generic behavior remain intact so this does not alter
 // Callified's independent "Assigning Staff" configuration.
@@ -2919,7 +2939,7 @@ export default function App() {
                       />
                       <Route
                         path="converted-leads"
-                        element={<ConvertedLeads />}
+                        element={<NonWellnessOnly><ConvertedLeads /></NonWellnessOnly>}
                       />
                       <Route
                         path="callified-data"

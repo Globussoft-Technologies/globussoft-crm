@@ -1,7 +1,7 @@
 // @ts-check
 /**
- * Callified calling is offered on FOUR wellness surfaces — an Appointments
- * row, a Patients row, All Leads and Converted Leads — and all of them go
+ * Callified calling is offered on three wellness surfaces — an Appointments
+ * row, a Patients row, and All Leads — and all of them go
  * through one set of handlers in routes/wellness_callified.js.
  *
  * That sharing is the point: contact resolution, the redial cooldown, the

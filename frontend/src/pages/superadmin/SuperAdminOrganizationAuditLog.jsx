@@ -57,7 +57,7 @@ export default function SuperAdminOrganizationAuditLog() {
         <button type="button" className="btn-secondary" onClick={load} disabled={loading} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}><RefreshCw size={15} /> Refresh</button>
       </header>
 
-      <section className="card" style={{ padding: "1rem", display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(160px, 220px)", gap: "0.75rem" }} aria-label="Audit log filters">
+      <section className="card" style={{ padding: "1rem", display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: "0.75rem" }} aria-label="Audit log filters">
         <label style={{ position: "relative", display: "block" }}>
           <span style={{ position: "absolute", left: 12, top: 13, color: "var(--text-secondary)" }}><Search size={15} /></span>
           <input className="input-field" aria-label="Search audit log" placeholder="Search organization, owner, actor, or reason" value={query} onChange={(event) => { setQuery(event.target.value); setOffset(0); }} style={{ width: "100%", paddingLeft: "2.2rem" }} />

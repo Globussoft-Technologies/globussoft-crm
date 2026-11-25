@@ -27,7 +27,7 @@
 //
 // All endpoints require admin or manager wellnessRole (operational config,
 // not PHI). Tenant scope inherits from req.user.tenantId via tenantWhere.
-// Audit emitted on every mutation to feed the AuditLog hash chain.
+// Record every inventory mutation in the tenant audit log.
 
 const express = require("express");
 const prisma = require("../lib/prisma");

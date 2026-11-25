@@ -94,7 +94,7 @@
  *   is mocked to a tagged sentinel so we can prove encryption happened
  *   without depending on a real WELLNESS_FIELD_KEY) and the lib/audit
  *   writeAudit so the rotation-emits-audit assertion fires without hitting
- *   the AuditLog hash-chain code path.
+ *   the AuditLog database write path.
  *
  *   No real DB, no real HTTP, no real crypto. Pure contract pins.
  */

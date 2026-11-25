@@ -92,10 +92,6 @@ Module._cache[auditPath] = {
   exports: {
     writeAudit: writeAuditMock,
     diffFields: () => ({}),
-    canonicalize: (x) => x,
-    computeHash: () => 'h',
-    genesisFor: () => 'g',
-    backfillTenantChain: async () => ({}),
   },
 };
 

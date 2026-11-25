@@ -800,6 +800,18 @@ describe('POST /register — travel customer self-service sign-up', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.portalRoute).toBe(portalRoute);
+    if (registrationType === 'PARENT') {
+      expect(prisma.tmcTrip.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+        where: {
+          id: 91,
+          tenantId: 3,
+          OR: [
+            { teacherContactId: 71 },
+            { teacherAssignments: { some: { tenantId: 3, teacherContactId: 71 } } },
+          ],
+        },
+      }));
+    }
     expect(eventBus.emitEvent).toHaveBeenCalledWith(
       'account.created',
       expect.objectContaining({

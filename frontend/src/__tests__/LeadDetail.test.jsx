@@ -185,7 +185,11 @@ describe("LeadDetail", () => {
 
   it("shows the whole trip amount for a teacher contact", async () => {
     fetchApiMock.mockImplementation(makeFetchImpl({
-      trips: [{ ...TRIP, teacherContactId: 77 }],
+      trips: [{
+        ...TRIP,
+        teacherContactId: 88,
+        teacherAssignments: [{ teacherContactId: 77 }],
+      }],
     }));
     renderPage();
 

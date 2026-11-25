@@ -12,13 +12,13 @@
 
 **Cluster:** `MANUAL_CODING_BACKLOG.md` cluster D — proposing **D21**; see §10.
 
-**Cred dependency:** none external — pure schema + routes + cron + public React page + optional admin page. Re-uses existing `/api/health` and `/api/travel/health` endpoints, existing cron infrastructure, existing audit-hash-chain, and existing frontend design tokens.
+**Cred dependency:** none external — pure schema + routes + cron + public React page + optional admin page. Re-uses existing `/api/health` and `/api/travel/health` endpoints, existing cron infrastructure, existing audit log, and existing frontend design tokens.
 
 ---
 
 ## §1 Background + source attribution
 
-The CRM today has **no public status page**. After the recent demo backend memory crisis (`backend/lib/audit.js` unbounded `findMany` causing 8–12 GB RSS and PM2 restart loops), customers and internal staff had no single public URL to check whether the platform was degraded or recovering. The only health signals were:
+The CRM today has **no public status page**. After a recent demo backend memory crisis (an unbounded backend query caused 8–12 GB RSS and PM2 restart loops), customers and internal staff had no single public URL to check whether the platform was degraded or recovering. The only health signals were:
 
 1. **`GET /api/health`** at `backend/server.js:1757-1778` — returns `{ status, timestamp }` unauthenticated and `{ version, uptime, database }` when an `Authorization` header is present. This is a point-in-time liveness probe, not a persisted history or incident surface.
 
@@ -45,7 +45,7 @@ This PRD scopes a **first slice** that delivers the public page, the backend dat
 - `backend/server.js:1757` `/api/health` — public liveness probe for the core API + DB.
 - `backend/routes/travel_*.js` — travel health endpoint (`/api/travel/health`).
 - `backend/cron/` — existing cron infrastructure (e.g., `notificationRulesEngine`, `cron/*` jobs).
-- `backend/lib/audit.js` — tamper-evident audit log; new `STATUS_INCIDENT_CREATED` / `_UPDATED` events flow through unchanged.
+- `backend/lib/audit.js` — records new `STATUS_INCIDENT_CREATED` / `_UPDATED` events in the tenant audit log.
 - `frontend/src/App.jsx` — React Router setup; public routes already exist outside `<Layout>` (`/p/*`, `/survey/:id`, `/knowledge-base/public/*`, etc.).
 - `frontend/src/index.css` — design-token system (`--success-color`, `--warning-color`, `--danger-color`, `--surface-color`, `--text-primary`, etc.).
 - `recharts` — already a frontend dependency for charts.
@@ -84,7 +84,7 @@ The public page itself is small, but the feature needs:
 
 3. **Internal ops declares a maintenance window before the nightly DB backup.** A SUPER_ADMIN opens the admin status page, creates an incident with impact `maintenance`, status `monitoring`, and a message: “Scheduled maintenance 02:00–02:30 IST — brief API unavailability expected.” The public page shows the yellow maintenance banner immediately.
 
-4. **After the recent OOM fix, the engineering lead wants to show stability.** They open `/status`, view the 30-day uptime chart, and point to the last 7 days of green bars for “CRM API” and “Database” as evidence that the audit backfill fix resolved the restart loop.
+4. **After the recent OOM fix, the engineering lead wants to show stability.** They open `/status`, view the 30-day uptime chart, and point to the last 7 days of green bars for “CRM API” and “Database” as evidence that the API memory fix resolved the restart loop.
 
 5. **A third-party monitoring tool polls the platform health.** Instead of scraping `/api/health`, it consumes `/api/status/feed.rss` or `/api/status/feed.atom` and surfaces incident titles in the customer’s IT channel.
 

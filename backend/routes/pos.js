@@ -25,7 +25,7 @@
 //
 // Tenant scope: every read/write filters by req.user.tenantId via tenantWhere.
 // Audit: every mutation emits writeAudit('Register' | 'Shift' | 'Sale', ...)
-// so the audit hash chain captures POS activity for compliance.
+// so the tenant audit log captures POS activity.
 
 const express = require("express");
 const prisma = require("../lib/prisma");
@@ -729,7 +729,7 @@ router.get("/shifts/:id", cashierGate, async (req, res) => {
 //      isn't a CASH sale is variance").
 //   2. The cashier's UI can render an Expenses tab on the shift detail
 //      with each movement (#781 transaction split).
-//   3. Audit chain captures who-deposited-what-when for compliance.
+//   3. Audit log captures who-deposited-what-when for review.
 //
 // Append-only — no PUT/DELETE. Both routes are admin/manager only because
 // a clinical-staff cashier was the most common source of paper-notebook
@@ -1878,9 +1878,8 @@ router.get("/sales/:id", cashierGate, async (req, res) => {
 // snapshot all live inside ONE prisma.$transaction. A throw anywhere
 // (insufficient balance, DB hiccup, invariant violation) rolls back
 // EVERY row — no Sale persists if wallet redemption fails halfway.
-// The audit.writeAudit call sits OUTSIDE the transaction (audit is
-// hash-chained — see lib/audit.js — and a failed audit must NOT roll
-// back a legitimate sale) but receives a snapshot computed inside
+// The audit.writeAudit call sits OUTSIDE the transaction so a failed audit
+// must NOT roll back a legitimate sale, but receives a snapshot computed inside
 // the tx so the audit payload reflects the committed reality.
 //
 // Error codes:
@@ -2340,9 +2339,9 @@ router.post("/sales/finalize", cashierGate, async (req, res) => {
       throw txErr;
     }
 
-    // Audit OUTSIDE the transaction — hash-chained writes must never
-    // roll back a committed sale. Fire-and-forget; an audit hiccup
-    // surfaces in the audit-integrity cron, not on the cashier's screen.
+    // Audit outside the transaction so an audit hiccup never rolls back a
+    // committed sale. Fire-and-forget; a logging failure does not affect the
+    // cashier's response.
     writeAudit(
       "Sale",
       "POS_SALE_FINALIZED",
@@ -2679,7 +2678,7 @@ router.post("/sales/:id/void", strictAdminGate, async (req, res) => {
         .json({ error: "Failed to void sale", code: "SALE_VOID_FAILED" });
     }
 
-    // Audit OUTSIDE the transaction (hash-chained — never blocks the void).
+    // Audit outside the transaction so a logging failure never blocks the void.
     writeAudit(
       "Sale",
       "POS_SALE_VOIDED",

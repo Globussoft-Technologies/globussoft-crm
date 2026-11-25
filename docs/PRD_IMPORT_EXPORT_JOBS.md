@@ -90,13 +90,13 @@ The synchronous endpoints work today for the volumes Globussoft tenants currentl
 
 2. **USER triggers a large dataset export (5000+ rows).** Reception staff (USER role) clicks "Export All Patients" from the patient list. System creates an `ImportExportJob` row in QUEUED state + records the operator's filter parameters in `params`. Engine picks up the row → streams patient rows to a temp CSV file → uploads file to disk/S3 → marks COMPLETED with `outputFileUrl` populated + `rowsSucceeded=5234`. Operator receives in-app notification "Your export is ready to download (5234 patients)". Clicks the notification → lands on Job History → clicks "Download" → CSV downloads. The job-history page also tracks `expiresAt` (30 days out by default per OQ-9.2) — after 30 days, the file is purged by a cleanup cron + the row transitions to EXPIRED with the download link grayed out.
 
-3. **ADMIN reviews "who exported what when" for compliance/DSAR purposes.** Compliance auditor for a US-based wellness tenant requests a list of every PHI export from the last 12 months: who initiated, what filters were used, when, how many rows, what file. ADMIN navigates to `/settings/import-export-jobs` → filters Type=EXPORT, ResourceType=PATIENT, DateRange=last 12 months → exports the filtered job list as CSV. Each row tells the auditor exactly who (userId+name+email), when (startedAt+completedAt), what (resourceType+params filters), how many (rowsTotal). Cross-references the audit chain via `auditChainEntryId` FK on each job row (one audit row written per job state transition).
+3. **ADMIN reviews "who exported what when" for compliance/DSAR purposes.** Compliance auditor for a US-based wellness tenant requests a list of every PHI export from the last 12 months: who initiated, what filters were used, when, how many rows, what file. ADMIN navigates to `/settings/import-export-jobs` → filters Type=EXPORT, ResourceType=PATIENT, DateRange=last 12 months → exports the filtered job list as CSV. Each row tells the auditor exactly who (userId+name+email), when (startedAt+completedAt), what (resourceType+params filters), how many (rowsTotal). The job row's `auditEntryId` references its corresponding tenant audit event.
 
 4. **A failed import shows a downloadable error file with row+column+reason for each rejected row.** Operator uploads a 200-row patient CSV. 47 rows fail validation (mix of missing required fields + duplicate phones + bad phone format + over-long names). Job transitions to COMPLETED with `rowsSucceeded=153, rowsFailed=47`. The PATIENT import handler streamed each failure into the in-memory error buffer + at end-of-run, persisted as an error CSV to `errorFileUrl`. Schema: `rowNumber,errorCode,errorMessage,originalRow` — `rowNumber` is the original-file row index (1-indexed, headers ignored); `errorCode` is a stable string (`PHONE_DUPLICATE`, `MISSING_REQUIRED:dateOfBirth`, `PHONE_FORMAT_INVALID`, etc.); `errorMessage` is a human-readable explanation; `originalRow` is the full original row content as a quoted CSV string. Operator opens the error report in Excel, fixes the 47 problem rows, saves as a fresh import — no need to filter out the 153 successes (they're not in the error file).
 
 5. **Re-trigger an export from the history page.** Job from 35 days ago has EXPIRED (its `outputFileUrl` was purged by the cleanup cron at day 30). Operator needs the same export again with the same filters. Clicks "Re-run" on the expired row → system creates a fresh job (new ID) with `params` copied verbatim from the expired job + records `parentJobId` FK for audit linkage. Fresh job runs against current data (NOT historical — re-runs always pull current state); operator gets the latest snapshot.
 
-6. **Cancellable in-flight job.** ADMIN realizes a 50,000-row export was kicked off against the wrong filter (entire-tenant instead of just-Mumbai-location). Opens Job History → clicks "Cancel" on the RUNNING row. Engine's per-row processing loop checks `job.status` between every 100 rows; when it observes CANCELLED, it bails out + persists `rowsSucceeded` to whatever it had processed + writes a partial output file (operator can download what was processed so far if useful) + transitions row to CANCELLED. Audit chain records the cancellation event + cancellingUserId.
+6. **Cancellable in-flight job.** ADMIN realizes a 50,000-row export was kicked off against the wrong filter (entire-tenant instead of just-Mumbai-location). Opens Job History → clicks "Cancel" on the RUNNING row. Engine's per-row processing loop checks `job.status` between every 100 rows; when it observes CANCELLED, it bails out + persists `rowsSucceeded` to whatever it had processed + writes a partial output file (operator can download what was processed so far if useful) + transitions row to CANCELLED. audit log records the cancellation event + cancellingUserId.
 
 7. **Failed-row retry (single-pass).** Operator's first import attempt yielded `rowsSucceeded=472, rowsFailed=28`. Instead of downloading the error CSV + manually editing + re-uploading, operator clicks "Retry Failed Rows" on the completed job. System reads the error file → for each row whose error is RETRYABLE (e.g. `RACE_DUPLICATE`, `TRANSIENT_DB_ERROR`), creates a fresh job containing only those rows + records `parentJobId` FK. Non-retryable errors (`PHONE_FORMAT_INVALID`, `MISSING_REQUIRED:*`) are excluded from the retry batch since they need operator data fixes. UI surfaces "12 of 28 failures are eligible for automatic retry; 16 require data fixes — download the error report and re-upload manually."
 
@@ -125,7 +125,7 @@ model ImportExportJob {
   params          Json?                                      // Filter params (for EXPORT) or import options (for IMPORT)
   errorSummary    String?  @db.Text                         // Top-level error message if FAILED at the job level (vs row-level)
   parentJobId     Int?                                       // FK to ImportExportJob for retry/re-run lineage
-  auditEntryId    Int?                                       // FK to AuditLog row at job-creation (audit-chain linkage)
+  auditEntryId    Int?                                       // FK to AuditLog row at job-creation
   startedAt       DateTime?
   completedAt     DateTime?
   expiresAt       DateTime?                                  // Auto-set at job-create via Tenant.jobArtifactRetentionDays (default 30)
@@ -155,7 +155,7 @@ The `@@unique` constraint is intentionally absent — a tenant can have unlimite
 - **FR-3.2.b Per-tick work.** On tick: scan `where: { status: 'QUEUED' } orderBy: createdAt asc take: 5` (process up to 5 jobs per tick, FIFO); for each:
   1. Transition to RUNNING with `startedAt = now`.
   2. Look up the resource-type handler via the registry (FR-3.3).
-  3. Call the handler with `(job, prisma, contextHelpers)`. Handler is responsible for reading input file (IMPORT) or streaming output rows (EXPORT) + updating `rowsSucceeded` / `rowsFailed` incrementally + persisting the result file + writing audit entries per row (NOT per job — row-level audit-chain entries scale poorly; use the job-summary entry only).
+  3. Call the handler with `(job, prisma, contextHelpers)`. Handler is responsible for reading input file (IMPORT) or streaming output rows (EXPORT) + updating `rowsSucceeded` / `rowsFailed` incrementally + persisting the result file + writing audit entries per row (NOT per job — row-level audit log entries scale poorly; use the job-summary entry only).
   4. On handler success: transition to COMPLETED with `completedAt = now` + final row counts + `outputFileUrl` / `errorFileUrl` populated.
   5. On handler throw: transition to FAILED + write `errorSummary` with the exception message (stack trace logged but not persisted to DB).
   6. On observed status=CANCELLED mid-processing (handler periodically refetches): handler bails cleanly + transition stays CANCELLED.
@@ -263,7 +263,7 @@ Retryable error codes are declared per-handler. The retry flow (FR-3.4.e) filter
 
 ### FR-3.11 Audit log integration
 
-Audit chain entries (via `backend/lib/audit.js` `writeAudit(entity, action, entityId, userId, tenantId, details)`):
+audit log entries (via `backend/lib/audit.js` `writeAudit(entity, action, entityId, userId, tenantId, details)`):
 
 - `IMPORT_EXPORT_JOB` + `CREATED` — on POST; details = `{ kind, resourceType, fileBytes?, paramsKeys }` (params keys only, not values — params may carry PII filters).
 - `IMPORT_EXPORT_JOB` + `STARTED` — on QUEUED → RUNNING transition (engine writes); details = `{ rowsTotal? }`.
@@ -275,7 +275,7 @@ Audit chain entries (via `backend/lib/audit.js` `writeAudit(entity, action, enti
 - `IMPORT_EXPORT_JOB` + `RERUN_TRIGGERED` — on re-run; details = `{ parentJobId }`.
 - `IMPORT_EXPORT_JOB` + `EXPIRY_EXTENDED` — on operator extension; details = `{ oldExpiresAt, newExpiresAt }`.
 
-Audit chain inherits the existing hash-chain immutability. `/api/audit/verify` works against IMPORT_EXPORT_JOB entries with zero code changes.
+Import and export job transitions are recorded as `IMPORT_EXPORT_JOB` audit events.
 
 ---
 
@@ -284,7 +284,7 @@ Audit chain inherits the existing hash-chain immutability. `/api/audit/verify` w
 - **Per-tenant scoping.** Every job row carries `tenantId` (FK to Tenant). Every route handler + engine handler scopes by tenantId. Cross-tenant access impossible. Mirrors every other CRM route's tenantWhere pattern. ESLint rule blocks `req.body.tenantId` reads.
 - **File storage abstraction.** Local disk by default; pluggable to S3 via storage shim (FR-3.9). Engine + routes are storage-agnostic.
 - **Job expiry + cleanup cron.** Daily 03:30 IST sweep purges expired job artifacts. Configurable retention window per-tenant (default 30d, max 90d).
-- **Audit log.** All state transitions write to the tamper-evident audit chain.
+- **Audit log.** All state transitions write to the tenant audit log.
 - **Engine concurrency.** Max 5 concurrent jobs across all tenants per engine tick; max 2 concurrent jobs per tenant. Prevents one tenant's heavy import from monopolizing the engine.
 - **Engine resilience.** Stuck jobs (RUNNING >1h with no progress) auto-fail. Engine crashes don't lose jobs (state is durable in DB). Server restart picks up QUEUED jobs on the next tick.
 - **Performance — list endpoint.** Tenant with up to 10,000 historical jobs paginates to first-page-load <500ms via the `(tenantId, status, createdAt)` index.
@@ -350,10 +350,10 @@ Audit chain inherits the existing hash-chain immutability. `/api/audit/verify` w
 - **AC-6.4** Failed import (47 of 200 rows fail validation) yields a downloadable error CSV with 47 rows × 4 columns (`rowNumber, errorCode, errorMessage, originalRow`). Operator downloads + fixes 47 rows in Excel + re-uploads as a fresh import → second job runs cleanly.
 - **AC-6.5** Operator on a COMPLETED job with `rowsFailed=28` clicks "Retry Failed Rows" → system reads the error file + filters to RETRYABLE-coded rows (say 12 of 28) → creates a fresh job with only those 12 rows + `parentJobId` FK populated → engine processes; 12 rows succeed on the retry (race-condition fluke resolved). UI surfaces the retry-job + the audit linkage to the parent.
 - **AC-6.6** ADMIN clicks "Cancel" on a RUNNING job → status transitions CANCELLED + cancelledBy populated + engine observes within next 5-10 seconds + bails gracefully + persists `rowsSucceeded` to wherever it had reached.
-- **AC-6.7** Job-artifact cleanup cron runs at 03:30 IST → identifies 12 jobs with `expiresAt < now` + COMPLETED status → deletes each file from storage + nulls the URL fields + transitions to EXPIRED. Audit chain logs each expiry event. The history page renders EXPIRED rows with grayed-out download links + a "Re-run" action available.
+- **AC-6.7** Job-artifact cleanup cron runs at 03:30 IST → identifies 12 jobs with `expiresAt < now` + COMPLETED status → deletes each file from storage + nulls the URL fields + transitions to EXPIRED. audit log logs each expiry event. The history page renders EXPIRED rows with grayed-out download links + a "Re-run" action available.
 - **AC-6.8** USER role attempts `GET /api/import-export-jobs?userId=42` (someone else's userId) → 403 Forbidden (RBAC). USER attempts `POST /api/import-export-jobs/:id/cancel` on another user's job → 403 Forbidden. MANAGER attempts both → 200 OK.
 - **AC-6.9** PATIENT export by a `wellnessRole=helper` user → 403 with "Patient exports require Doctor / Professional / Admin role" (per FR-3.7.d + DD-5.5). Same user can still export VENDOR or SERVICE (which have no PHI gate).
-- **AC-6.10** Audit chain integrity verified post-flow: `GET /api/audit/verify?entity=IMPORT_EXPORT_JOB` returns 200 with `integrityVerified=true` after 50 mixed jobs across 10 tenants. Cross-tenant access blocked end-to-end.
+- **AC-6.10** Audit records are visible for 50 mixed jobs across 10 tenants, and cross-tenant access is blocked end-to-end.
 
 ---
 
@@ -377,7 +377,7 @@ Audit chain inherits the existing hash-chain immutability. `/api/audit/verify` w
 
 - **`backend/cron/` engine pattern** — 22 existing engines listed in [CLAUDE.md](../CLAUDE.md). New `importExportEngine.js` follows the same shape (node-cron scheduling + `DISABLE_CRONS=1` env-respect + graceful SIGTERM).
 - **`backend/lib/notificationService.js`** ([backend/lib/notificationService.js](../backend/lib/notificationService.js)) — Used for in-app + email notifications on completion. New `category: 'import-export'` added to the existing taxonomy.
-- **`backend/lib/audit.js` `writeAudit()`** ([backend/lib/audit.js](../backend/lib/audit.js)) — Audit-chain integration. New entity `'IMPORT_EXPORT_JOB'` written transparently; hash chain inherits.
+- **`backend/lib/audit.js` `writeAudit()`** ([backend/lib/audit.js](../backend/lib/audit.js)) — New entity `'IMPORT_EXPORT_JOB'` is written to the tenant audit log.
 - **`backend/routes/wellness.js`** ([backend/routes/wellness.js:497](../backend/routes/wellness.js#L497)) — Existing `/patients.csv` + `/patients.xlsx` + `/patients/import-template.csv` endpoints. THIS PRD's PATIENT handler reuses the SQL+CSV/XLSX construction code as a library function (refactored out of the route). Migration follows the DD-5.3 threshold rule.
 - **`backend/routes/csv_io.js`** + **`backend/routes/travel_csv_io.js`** — Existing CSV I/O routes for generic + travel verticals. THIS PRD's PRODUCT / SERVICE / VENDOR / membership-plans handlers reuse their construction code as library functions.
 - **`Tenant` model** ([backend/prisma/schema.prisma](../backend/prisma/schema.prisma)) — New additive fields: `jobArtifactRetentionDays: Int @default(30)` + `maxConcurrentJobs: Int @default(2)` + `maxImportFileBytes: Int @default(26214400)` (25MB) + `maxJobStorageBytes: BigInt @default(5368709120)` (5GB).
@@ -461,4 +461,4 @@ Slices are mostly sequential but slice 2 can parallelize across handlers if each
 - `PRD_PURCHASE_ORDERS.md` §7 ("Bulk PO operations from CSV") references THIS PRD as the implementation surface (rather than building its own bulk-import).
 - `PRD_TRAVEL_SUPPLIER_MASTER.md` notes that the existing `travel_csv_io.js` flow will migrate into THIS PRD's job system in Slice 2.
 - `PRD_TRAVEL_BILLING.md` bulk-invoice exports reference THIS PRD's INVOICE export handler.
-- `routes/audit.js` `/verify` endpoint inherits IMPORT_EXPORT_JOB entries cleanly (no code change required).
+- The standard Audit Log viewer displays IMPORT_EXPORT_JOB entries.

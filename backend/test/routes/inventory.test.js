@@ -12,7 +12,7 @@
  * consumption rules engine and a combined movements ledger. Every mutation
  * has a downstream side effect on Product.currentStock and emits a
  * tenant-scoped writeAudit row. Silent drift on any of these → either stock
- * walks out of sync with reality (operational disaster) or audit chain is
+ * walks out of sync with reality (operational disaster) or the audit row is
  * incomplete (compliance disaster). Pin the wire shape and side effects now.
  *
  * Endpoints under test

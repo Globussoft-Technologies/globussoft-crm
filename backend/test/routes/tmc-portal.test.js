@@ -182,7 +182,13 @@ describe('TMC portal authentication and tenant isolation', () => {
 
     expect(res.status).toBe(200);
     expect(prisma.tmcTrip.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { tenantId: 7, teacherContactId: 41 },
+      where: {
+        tenantId: 7,
+        OR: [
+          { teacherContactId: 41 },
+          { teacherAssignments: { some: { tenantId: 7, teacherContactId: 41 } } },
+        ],
+      },
     }));
   });
 });
@@ -393,9 +399,29 @@ describe('TMC teacher trip management', () => {
       departDate: new Date('2026-12-01T00:00:00Z'),
       returnDate: new Date('2026-12-08T00:00:00Z'),
       status: 'confirmed',
-      teacherContactId: 41,
+      teacherContactId: 99,
       _count: { participants: 2, pendingRegistrations: 0 },
     });
+  });
+
+  test('co-teachers share every parent registration recorded for their trip', async () => {
+    prisma.pendingTripRegistration.findMany.mockResolvedValue([]);
+    prisma.tmcParentTrip.findMany.mockResolvedValue([{
+      id: 8,
+      tripId: 100,
+      createdAt: new Date('2026-10-01T00:00:00Z'),
+      parent: { id: 201, name: 'Riya Sharma', email: 'riya@example.test', phone: null },
+    }]);
+
+    const res = await request(makeApp())
+      .get('/api/portal/tmc/teacher/trips/100/registrations')
+      .set(bearer());
+
+    expect(res.status).toBe(200);
+    expect(res.body.parentLinks).toMatchObject([{ id: 8, tripId: 100, parent: { name: 'Riya Sharma' } }]);
+    expect(prisma.tmcParentTrip.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId: 7, tripId: 100 },
+    }));
   });
 
   test('teacher can read the assigned trip payment and rooming ledgers', async () => {
@@ -424,6 +450,16 @@ describe('TMC teacher trip management', () => {
     expect(instalments.body.instalments).toHaveLength(1);
     expect(rooming.status).toBe(200);
     expect(rooming.body.rooming[0].roomNumber).toBe('101');
+    expect(prisma.tmcTrip.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        id: 100,
+        tenantId: 7,
+        OR: [
+          { teacherContactId: 41 },
+          { teacherAssignments: { some: { tenantId: 7, teacherContactId: 41 } } },
+        ],
+      },
+    }));
   });
 
   test('teacher can create rooming only for participants on the assigned trip', async () => {
@@ -488,7 +524,10 @@ describe('TMC parent trip isolation', () => {
     expect(prisma.tmcTrip.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: {
         tenantId: 7,
-        teacherContactId: { in: [70] },
+        OR: [
+          { teacherContactId: { in: [70] } },
+          { teacherAssignments: { some: { tenantId: 7, teacherContactId: { in: [70] } } } },
+        ],
         status: { not: 'cancelled' },
       },
     }));
@@ -618,13 +657,77 @@ describe('TMC staff permission enforcement', () => {
   });
 
   test('authorized staff query remains tenant scoped', async () => {
+    prisma.contact.findMany.mockResolvedValueOnce([{
+      id: 101,
+      name: 'Asha Teacher',
+      email: 'asha@example.test',
+      phone: null,
+      company: 'Riverside School',
+      createdAt: new Date('2026-06-01T04:30:00.000Z'),
+      _count: { tmcTripTeacherAssignments: 3 },
+    }]);
     const res = await request(makeApp())
       .get('/api/portal/tmc/staff/teachers')
       .set('x-test-staff-auth', 'yes')
       .set('x-test-permission', 'trips.update');
     expect(res.status).toBe(200);
+    expect(res.body.teachers).toEqual([{
+      id: 101,
+      name: 'Asha Teacher',
+      email: 'asha@example.test',
+      phone: null,
+      company: 'Riverside School',
+      createdAt: '2026-06-01T04:30:00.000Z',
+      assignedTripCount: 3,
+    }]);
     expect(prisma.contact.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: { tenantId: 7, subBrand: 'tmc', portalRole: 'TEACHER', deletedAt: null },
+      select: expect.objectContaining({
+        _count: {
+          select: { tmcTripTeacherAssignments: { where: { tenantId: 7 } } },
+        },
+      }),
+    }));
+  });
+
+  test('teacher overview returns registration timestamp and school name for the detail page', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce({
+      id: 101,
+      name: 'Asha Teacher',
+      email: 'asha@example.test',
+      phone: '+91 90000 00000',
+      company: 'Riverside School',
+      createdAt: new Date('2026-06-01T04:30:00.000Z'),
+    });
+
+    const res = await request(makeApp())
+      .get('/api/portal/tmc/staff/teachers/101/overview')
+      .set('x-test-staff-auth', 'yes')
+      .set('x-test-permission', 'trips.update');
+
+    expect(res.status).toBe(200);
+    expect(res.body.teacher).toEqual({
+      id: 101,
+      name: 'Asha Teacher',
+      email: 'asha@example.test',
+      phone: '+91 90000 00000',
+      company: 'Riverside School',
+      createdAt: '2026-06-01T04:30:00.000Z',
+    });
+    expect(res.body.trips).toEqual([]);
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 101, tenantId: 7, subBrand: 'tmc', portalRole: 'TEACHER', deletedAt: null },
+      select: expect.objectContaining({ company: true, createdAt: true }),
+    }));
+    expect(prisma.tmcTrip.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        tenantId: 7,
+        OR: [
+          { teacherContactId: 101 },
+          { teacherAssignments: { some: { tenantId: 7, teacherContactId: 101 } } },
+        ],
+        status: { not: 'cancelled' },
+      },
     }));
   });
 });

@@ -10,7 +10,7 @@
 // itinerary share-mint endpoint).
 //
 // This helper consolidates the contract. It is a thin wrapper around the
-// `writeAudit` chain helper in lib/audit.js — NO new schema is introduced.
+// `writeAudit` helper in lib/audit.js — NO new schema is introduced.
 // The action verb (DOCUMENT_VIEW / DOCUMENT_DOWNLOAD / DOCUMENT_SHARE) lets
 // the audit-viewer page surface a "Document Access" sub-tab without having
 // to parse a dozen route-specific verbs. The `documentType` rides inside
@@ -19,7 +19,7 @@
 //
 // Contract:
 //   recordDocumentAccess({
-//     tenantId,         // REQUIRED — tenant scope for the chain
+//     tenantId,         // REQUIRED — tenant scope for the audit row
 //     userId,           // optional — null for anonymous share-token viewers
 //     documentType,     // 'Itinerary' | 'TravelInvoice' | 'TravelQuote' |
 //                       // 'VisaApplication' | 'Prescription' | 'ConsentForm'
@@ -75,7 +75,7 @@ async function recordDocumentAccess(params) {
   try {
     const p = params || {};
     if (!p.tenantId) {
-      // Tenant scope is required for the per-tenant hash chain. Best-effort:
+      // Tenant scope is required for the tenant audit log. Best-effort:
       // log + no-op so the caller doesn't fall over.
       console.warn(
         "[documentAccessAudit] missing tenantId — skipping audit row",

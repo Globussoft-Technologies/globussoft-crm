@@ -1704,9 +1704,7 @@ router.post(
 
       // One audit row per thread, matching the single-delete handler so a
       // bulk purge and N single deletes are indistinguishable to a reviewer
-      // querying by entityId. SEQUENTIAL, not Promise.all: writeAudit chains
-      // each row's prevHash off the tenant's current chain tail (#558), so
-      // concurrent writes for one tenant would race and fork the chain.
+      // querying by entityId.
       for (const t of threads) {
         await writeAudit(
           "WhatsAppThread",

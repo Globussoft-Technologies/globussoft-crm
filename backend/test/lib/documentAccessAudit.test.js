@@ -2,7 +2,7 @@
 //
 // Master PRD A3 / G124 — per-document view/download/share audit rows. The
 // helper is a thin wrapper around writeAudit (the existing per-tenant
-// hash-chained audit-log emitter); it normalises the (event → action) verb
+// audit-log emitter); it normalises the (event → action) verb
 // mapping + the details payload shape across every route that needs to log
 // a document fetch.
 //
@@ -20,7 +20,7 @@
 //      audit-viewer can separate customer share-link visits from operator
 //      accesses; userId-provided callers get the default actorType=user.
 //   6. Tenant isolation — tenantId is passed straight through to writeAudit
-//      (chain scope) so cross-tenant audit-row writes are impossible at the
+//      (tenant scope) so cross-tenant audit-row writes are impossible at the
 //      helper layer.
 //   7. writeAudit failures (mocked) must NOT propagate — helper swallows
 //      errors with a console.warn (audit emission is best-effort).
@@ -261,7 +261,7 @@ describe('recordDocumentAccess — short-circuits + never throws (contract #2)',
   });
 
   test('writeAudit throws → helper swallows + no rethrow (contract #7)', async () => {
-    mocks.audit.writeAudit.mockRejectedValueOnce(new Error('chain head conflict'));
+    mocks.audit.writeAudit.mockRejectedValueOnce(new Error('audit write failed'));
     await expect(
       sut.recordDocumentAccess({
         tenantId: 1,

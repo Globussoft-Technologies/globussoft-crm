@@ -38,14 +38,14 @@
  * and backend/test/routes/travel-csv-io.test.js (bufferParser for binary
  * CSV bodies, BOM byte assertion). Prisma singleton is patched BEFORE the
  * router is required so findFirst/create/update probes land on the stubs.
- * Audit-log create is mocked pass-through; the audit chain's own contract
- * is owned by audit-chain.test.js.
+ * Audit-log create is mocked pass-through; the audit helper contract
+ * is covered by backend/test/lib/audit.test.js.
  *
  * Not covered here (intentional, out of scope for ≥10 cases):
  *   - Multipart/form-data upload path (multer's req.file branch). The
  *     text/csv body path is tested; the multipart path is the same
  *     readUploadedCsv() helper with a different upstream.
- *   - The audit-log writeAudit details payload — owned by audit-chain.test.js.
+ *   - The audit-log writeAudit details payload — covered by backend/test/lib/audit.test.js.
  *   - Booking export (read-only, structurally identical to services export
  *     which IS tested; not enough delta to justify a sibling test).
  */

@@ -106,7 +106,7 @@ async function defaultStubNotifier(tenant, tier, daysToDeadline) {
 /**
  * Fire-and-forget audit wrapper. Mirrors travelMilestoneRemindersEngine's
  * writeAuditSafe — exposed via module.exports so the per-tenant loop can be
- * self-spied in tests without exercising audit.js's real hash-chain logic.
+ * self-spied in tests without exercising audit.js's Prisma write.
  */
 function writeAuditSafe(...args) {
   return writeAudit(...args).catch((err) => {

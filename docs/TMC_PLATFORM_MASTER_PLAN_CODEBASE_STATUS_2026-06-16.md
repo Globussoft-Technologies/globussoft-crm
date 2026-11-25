@@ -23,7 +23,7 @@ or only for non-travel providers) · ⚙️ process/ops item (not code-verifiabl
 - [x] ✅ **Three environments** — `deploy.yml` branches `main` + `staging_crm` (staging mirror + prod)
 - [x] ✅ **Tenant theming** — `routes/sub_brand_themes.js`; `frontend/src/theme/travel.css`
 - [x] ✅ **Data model + RLS** — `schema.prisma` tenantId on all tenant-owned models + `middleware/travelGuards.js` _(app-layer scoping, not DB row-level RLS)_
-- [x] ✅ **Audit log** — `schema.prisma` `AuditLog` (hash-chained, tamper-evident) + `writeAudit`
+- [x] ✅ **Audit log** — `schema.prisma` `AuditLog` + `writeAudit`
 
 ### Phase 1 — Multi-tenant & Identity
 

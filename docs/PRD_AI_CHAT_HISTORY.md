@@ -100,7 +100,7 @@ Operators don't complain about this today because they never knew the data exist
 
 4. **USER searches AI history for "I asked for a recommendation for August Bali trip last week — what was it?".** Travel-vertical agent Rakesh remembers asking the personalised-destinations AI for a "honeymoon Bali August" suggestion for a TravelStall customer but forgot to save the response. Navigates `/ai-history` → search box "Bali August" → 4 entries surface. He clicks the matching row → detail drawer shows full prompt + response + the Lead it was linked to → he copies the suggestion + sends to the customer.
 
-5. **COMPLIANCE produces an audit-trail report of all AI-mediated patient interactions for a DSAR.** Patient "Anjali Sharma" files a DSAR per GDPR. ADMIN navigates `/ai-history` → filters by `patientId = Anjali's-id` → sees 7 entries spanning 4 surfaces (1 chatbot conversation, 3 WhatsApp AI auto-replies, 2 talking-points used by her treating doctor, 1 form-vs-call comparison) → clicks "Export DSAR Bundle" → server generates a structured ZIP containing JSON + CSV of all 7 with full prompt + response bodies (PHI-masked appropriately per the wellness PHI-policy at `project_wellness_phi_policy.md`) + an audit-chain receipt. The export is also written as `AI_HISTORY_DSAR_EXPORTED` to the tamper-evident audit chain.
+5. **COMPLIANCE produces an audit-trail report of all AI-mediated patient interactions for a DSAR.** Patient "Anjali Sharma" files a DSAR per GDPR. ADMIN navigates `/ai-history` → filters by `patientId = Anjali's-id` → sees 7 entries spanning 4 surfaces (1 chatbot conversation, 3 WhatsApp AI auto-replies, 2 talking-points used by her treating doctor, 1 form-vs-call comparison) → clicks "Export DSAR Bundle" → server generates a structured ZIP containing JSON + CSV of all 7 with full prompt + response bodies (PHI-masked appropriately per the wellness PHI-policy at `project_wellness_phi_policy.md`). The export is recorded as `AI_HISTORY_DSAR_EXPORTED` in the tenant audit log.
 
 6. **MANAGER reviews team-wide AI adoption.** "Are my reps actually using the talking-points AI?". Sales manager navigates `/ai-history` → filters by `team` (managed users) + `surface = talking-points` + last 14 days → sees a leaderboard view with calls-per-user + average-cost-per-user + a "last used" timestamp. Identifies that Anika hasn't used talking-points in 12 days → schedules a 1:1 to understand whether the tool isn't helpful or she's forgetting to invoke it.
 
@@ -115,7 +115,7 @@ Operators don't complain about this today because they never knew the data exist
 - **Three tabs:**
   - **History (default)** — chronological list of AI interactions, filterable + searchable.
   - **Cost Breakdown** — aggregations by surface / user / model / day. Mirrors the existing `/api/admin/llm-spend` endpoint but with richer drill-down.
-  - **Audit Log** — read-only stream of `AI_HISTORY_*` audit chain events scoped to the tenant (when + who + what filter / export action).
+  - **Audit Log** — read-only stream of `AI_HISTORY_*` audit log events scoped to the tenant (when + who + what filter / export action).
 - **URL state persists filters** — operators can bookmark "my talking-points last 7 days for Acme Corp".
 - **Lazy-loaded** via `React.lazy()` per existing App.jsx pattern. ~15-25 KB gzipped.
 
@@ -229,12 +229,12 @@ Mirrors the canonical `shouldMaskForViewer` pattern at [backend/routes/wellness.
 - PAN numbers (`[A-Z]{5}\d{4}[A-Z]`)
 - Common Indian first-name + last-name dictionaries (best-effort soft match)
 
-ADMIN can toggle "Show un-redacted" (per-call) if the patient detail requires it for audit — toggling writes an `AI_HISTORY_PHI_UNMASK_VIEWED` audit chain event with reason text.
+ADMIN can toggle "Show un-redacted" (per-call) if the patient detail requires it for audit — toggling writes an `AI_HISTORY_PHI_UNMASK_VIEWED` audit log event with reason text.
 
 ### FR-3.10 Export
 
 - **CSV per-row download** — operator-triggered from the list view ("Download CSV"). Format: one row per history entry, columns matching FR-3.5 + full prompt + response bodies. CSV size capped at 10,000 rows per export (operator paginates if needed).
-- **DSAR bundle export** — ADMIN-only "Export DSAR Bundle" button visible when filter scoped to a single Patient/Contact/Lead. Produces a ZIP with `manifest.json` (entity-keyed) + per-entry full prompt + response + a hash-chain receipt linking to `routes/audit.js` `/verify` chain.
+- **DSAR bundle export** — ADMIN-only "Export DSAR Bundle" button visible when filter scoped to a single Patient/Contact/Lead. Produces a ZIP with `manifest.json` (entity-keyed) + per-entry full prompt + response. The export action is recorded in the tenant audit log.
 
 ### FR-3.11 Backfill script for older LlmCallLog rows
 
@@ -250,7 +250,7 @@ Realistic outcome: ~30-50% of historic rows get bodies backfilled; the rest stay
 
 ### FR-3.12 Audit log integration
 
-New audit chain entity `AI_HISTORY` with actions:
+New audit log entity `AI_HISTORY` with actions:
 
 - `AI_HISTORY_VIEWED` — on page load (throttled per existing audit-throttling pattern — once per session-id per 10 min)
 - `AI_HISTORY_DRAWER_OPENED` — on detail drawer open (throttled similarly)
@@ -263,7 +263,7 @@ New audit chain entity `AI_HISTORY` with actions:
 - `AI_HISTORY_SPOT_CHECK_SAMPLED` — on "Sample N random" use
 - `AI_HISTORY_BACKFILL_TRIGGERED` — on backfill script run
 
-All events go through `backend/lib/audit.js` `writeAudit()` for tamper-evident hashing. Audit Log tab (FR-3.1) reads these back.
+All events go through `backend/lib/audit.js` `writeAudit()` for audit logging. Audit Log tab (FR-3.1) reads these back.
 
 ---
 
@@ -319,8 +319,8 @@ All events go through `backend/lib/audit.js` `writeAudit()` for tamper-evident h
   - **Recommendation: (a) PLAIN TEXT for v1.** Matches existing schema convention + the PHI-masking pattern at read time is the established defense layer. Encryption-at-rest is a Phase 3 cross-cutting concern that should land for all body columns simultaneously, not piecemeal on LlmCallLog alone.
 
 - **DD-5.7 Retention — match LlmCallLog "indefinite" (current proposal) or shorter (e.g. 1-year)?** Two paths:
-  - **(a) INDEFINITE.** Same as LlmCallLog today. Pro: full history available; no operator surprise; no separate retention engine; matches `routes/audit.js` audit-chain retention model. Con: storage grows unboundedly; PHI exposure window is forever.
-  - **(b) 1-YEAR ROLLING.** Add a daily cleanup cron that deletes LlmCallLog rows older than 1 year. Pro: bounded storage; bounded PHI exposure. Con: operator surprise ("where's my talking-point from 2 years ago?"); inconsistent with audit-chain; needs careful coordination with `retentionEngine.js` (GDPR retention engine — already runs daily at 03:00 IST).
+  - **(a) INDEFINITE.** Same as LlmCallLog today. Pro: full history available; no operator surprise; no separate retention engine; matches `routes/audit.js` audit log retention model. Con: storage grows unboundedly; PHI exposure window is forever.
+  - **(b) 1-YEAR ROLLING.** Add a daily cleanup cron that deletes LlmCallLog rows older than 1 year. Pro: bounded storage; bounded PHI exposure. Con: operator surprise ("where's my talking-point from 2 years ago?"); inconsistent with audit log; needs careful coordination with `retentionEngine.js` (GDPR retention engine — already runs daily at 03:00 IST).
   - **(c) PER-TENANT CONFIGURABLE.** `Tenant.aiHistoryRetentionDays Int @default(0)` — 0 = indefinite; >0 = days. ADMIN configures in `/admin/ai-history-settings`. Pro: operator-side control. Con: per-tenant retention complexity; coordination with `retentionEngine.js`.
   - **Recommendation: (a) INDEFINITE for v1, coordinate with `retentionEngine.js` for a tenant-configurable extension in Phase 2.** Operator surprise from a default-on retention purge is worse than the storage cost.
 
@@ -338,15 +338,15 @@ All events go through `backend/lib/audit.js` `writeAudit()` for tamper-evident h
 
 ## §6 Acceptance criteria
 
-- **AC-6.1** USER navigates to `/ai-history` → list loads within 1s (P95) → sees own AI interactions chronologically with surface tag + entity link + truncated prompt + truncated response + cost + model + stub-mode-flag. Filter by `surface` / `date range` / `entity` works. Audit chain logs `AI_HISTORY_VIEWED` (throttled). Cross-tenant access blocked: tenant A USER returns 0 rows from any tenant B entity filter.
+- **AC-6.1** USER navigates to `/ai-history` → list loads within 1s (P95) → sees own AI interactions chronologically with surface tag + entity link + truncated prompt + truncated response + cost + model + stub-mode-flag. Filter by `surface` / `date range` / `entity` works. audit log logs `AI_HISTORY_VIEWED` (throttled). Cross-tenant access blocked: tenant A USER returns 0 rows from any tenant B entity filter.
 
-- **AC-6.2** ADMIN of wellness-tenant opens detail drawer on a `talking-points` row → prompt + response render with PHI-masked Indian phone numbers + Aadhaar + PAN + email addresses. ADMIN clicks "Show un-redacted" + types reason "DSAR investigation #1234" → un-redacted bodies shown + `AI_HISTORY_PHI_UNMASK_VIEWED` audit chain event captured with reason text.
+- **AC-6.2** ADMIN of wellness-tenant opens detail drawer on a `talking-points` row → prompt + response render with PHI-masked Indian phone numbers + Aadhaar + PAN + email addresses. ADMIN clicks "Show un-redacted" + types reason "DSAR investigation #1234" → un-redacted bodies shown + `AI_HISTORY_PHI_UNMASK_VIEWED` audit log event captured with reason text.
 
 - **AC-6.3** Per-row schema change visible: `LlmCallLog` now has `prompt` + `response` + `entityType` + `entityId` columns populated for new calls (5 LLM-router consumer surfaces) + `WhatsAppMessage.aiCallLogId` populated on AI auto-replies. Backward compat: old rows have NULL bodies + render with "Body not available — pre-extension call" label.
 
-- **AC-6.4** Cost Breakdown tab loads aggregations: total spend by surface for current month + per-user top 10 spenders + per-model breakdown + 30-day trend chart. P95 <2s for tenants with 100k+ LlmCallLog rows. CSV export download works. Audit chain logs `AI_HISTORY_CSV_EXPORTED`.
+- **AC-6.4** Cost Breakdown tab loads aggregations: total spend by surface for current month + per-user top 10 spenders + per-model breakdown + 30-day trend chart. P95 <2s for tenants with 100k+ LlmCallLog rows. CSV export download works. audit log logs `AI_HISTORY_CSV_EXPORTED`.
 
-- **AC-6.5** ADMIN filters by `entityType=Patient` + `entityId=<Anjali's-id>` + clicks "Export DSAR Bundle" → ZIP downloads containing `manifest.json` + per-entry JSON with full PHI-handled bodies + audit-chain receipt linking to `routes/audit.js` `/verify`. `AI_HISTORY_DSAR_EXPORTED` is the only non-throttled audit event in the chain.
+- **AC-6.5** ADMIN filters by `entityType=Patient` + `entityId=<Anjali's-id>` + clicks "Export DSAR Bundle" → ZIP downloads containing `manifest.json` + per-entry JSON with full PHI-handled bodies. An `AI_HISTORY_DSAR_EXPORTED` audit event is recorded.
 
 - **AC-6.6** Search box "Bali August" → list shows 4 matching rows + count badge + result-ranking by createdAt DESC. Search runs against PHI-masked projection for wellness viewer (no PHI leak through search results). P95 <1s on 500k-row LlmCallLog scan.
 
@@ -376,7 +376,7 @@ All events go through `backend/lib/audit.js` `writeAudit()` for tamper-evident h
 - **Existing `WhatsAppMessage` model** at [backend/prisma/schema.prisma:1468-1497](../backend/prisma/schema.prisma#L1468-L1497) — gains `aiCallLogId Int?` FK (FR-3.3).
 - **Existing `/api/admin/llm-spend` endpoint** at `backend/routes/admin.js` — mirror its tenant-scoping + cost-aggregation pattern for the Cost Breakdown tab.
 - **Existing `shouldMaskForViewer` pattern** at [backend/routes/wellness.js:43](../backend/routes/wellness.js#L43) — reused for FR-3.9 PHI redaction.
-- **Existing `lib/audit.js` `writeAudit()`** — new `AI_HISTORY` entity entries flow through the tamper-evident hash chain. No schema change.
+- **Existing `lib/audit.js` `writeAudit()`** — records new `AI_HISTORY` entity entries in the tenant audit log. No schema change.
 - **Existing `lib/llmRouter.js`** — central LLM dispatch; gains optional `{ prompt, response, entityType, entityId }` field passthrough to LlmCallLog (FR-3.4).
 - **Existing 5 LLM-router caller routes** — gain the new field passthrough at their existing dispatch call sites. Pure additive — no breaking change to caller signatures (new fields are optional).
 - **New file `backend/routes/ai_history.js`** — list / detail / cost-breakdown / search / CSV export / DSAR bundle endpoints (~7 endpoints).
@@ -385,7 +385,7 @@ All events go through `backend/lib/audit.js` `writeAudit()` for tamper-evident h
 - **Sidebar entry** in `frontend/src/components/Sidebar.jsx` under Analytics / Reports group.
 - **Lucide icons** (already in dependencies) — `MessageSquare`, `Sparkles`, `Search`, `Download`, `Filter`, `Eye`, `EyeOff`.
 - **`React.lazy()` code-splitting** per existing App.jsx pattern.
-- **`/api/audit/verify`** at `backend/routes/audit.js` — DSAR bundle export embeds an audit-chain receipt linking to this endpoint.
+- DSAR bundle exports create a standard tenant audit-log event.
 - **Existing `retentionEngine.js`** — Phase 2 retention extension coordinates here (DD-5.7).
 - **WhatsApp inbound auto-reply path** at `backend/routes/whatsapp.js` (or equivalent) — gains AI-attribution writeback (`aiCallLogId`) so the history surface can disambiguate.
 
@@ -463,5 +463,5 @@ Slices 1 + 2 must ship in order. Slice 3 + 4 can ship in parallel after slice 2 
 **Cross-PRD coordination check:** Before implementation starts, confirm:
 - `PRD_INTEGRATIONS_HUB.md` Phase 2 surfaces AI cost as a hub-level card (deep-links into `/ai-history` Cost Breakdown tab).
 - `PRD_IMPORT_EXPORT_JOBS.md` CSV export jobs include the `ai_history` job type — long-running exports (>10k rows) flow through the async job infra rather than blocking the page.
-- `routes/audit.js` `/verify` endpoint accepts the DSAR bundle receipt format without code change (entity = `AI_HISTORY`, action = `DSAR_EXPORTED`).
+- `writeAudit()` records the DSAR bundle export action as `AI_HISTORY` / `DSAR_EXPORTED`.
 - The LLM router (`backend/lib/llmRouter.js`) header comment is updated to document the new optional pass-through fields + the persistence contract; new caller-side LLM consumers added in future automatically inherit the history surface by passing the fields at their `llmRouter.dispatch()` call site.

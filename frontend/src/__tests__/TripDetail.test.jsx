@@ -101,6 +101,7 @@ import { AuthContext } from '../App';
 const fetchApiMock = vi.fn();
 const rawFetchMock = vi.fn();
 const originalFetch = globalThis.fetch;
+const originalClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
 vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
   getAuthToken: () => 'test-token',
@@ -172,6 +173,7 @@ function installFetchMock({
   registrationDecide = null, // override per-test to assert approve/reject
   itinerarySuggest = null, // override to return a custom AI suggestion
   parentLink = 'https://example.com/tmc/register/parent?token=abc',
+  teachers = [],
 } = {}) {
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
@@ -180,6 +182,12 @@ function installFetchMock({
     if (method === 'GET' && /^\/api\/travel\/trips\/\d+$/.test(url)) {
       if (trip instanceof Error) return Promise.reject(trip);
       return Promise.resolve(trip);
+    }
+    if (method === 'GET' && url === '/api/portal/tmc/staff/teachers') {
+      return Promise.resolve({ teachers });
+    }
+    if (method === 'PATCH' && /^\/api\/travel\/trips\/\d+$/.test(url)) {
+      return Promise.resolve({ ok: true });
     }
     // Admin-only TMC parent registration link generation
     if (method === 'POST' && /^\/api\/portal\/tmc\/staff\/trips\/\d+\/parent-link$/.test(url)) {
@@ -313,6 +321,11 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  if (originalClipboardDescriptor) {
+    Object.defineProperty(navigator, 'clipboard', originalClipboardDescriptor);
+  } else {
+    delete navigator.clipboard;
+  }
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -428,9 +441,57 @@ describe('<TripDetail /> — tab strip', () => {
 });
 
 describe('<TripDetail /> — Overview tab', () => {
+  it('allows multiple teachers to be assigned to the same trip', async () => {
+    installFetchMock({
+      trip: makeTrip({ teacherAssignments: [{ teacherContactId: 42 }] }),
+      teachers: [
+        { id: 42, name: 'Asha Teacher' },
+        { id: 43, name: 'Mira Teacher' },
+      ],
+    });
+    renderPage();
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Assigned teachers: Asha Teacher' }));
+    expect(await screen.findByRole('checkbox', { name: 'Asha Teacher' })).toBeChecked();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Mira Teacher' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save teachers' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/travel/trips/101',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({ teacherContactIds: [42, 43] }),
+      }),
+    ));
+  });
+
+  it('copies the teacher portal registration link from trip sharing', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+    installFetchMock();
+    renderPage();
+
+    const copyButton = await screen.findByRole('button', { name: 'Copy teacher portal link' });
+    const accessHeader = screen.getByRole('heading', { name: 'Access and sharing' }).parentElement.parentElement;
+    expect(accessHeader).toContainElement(copyButton);
+    fireEvent.click(copyButton);
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(
+      expect.stringContaining('/tmc/register/teacher?tenantSlug=travel-stall&tmcRole=TEACHER'),
+    ));
+    expect(notifySuccess).toHaveBeenCalledWith('Teacher registration link copied');
+  });
+
   it('lets an admin generate the parent link after a teacher is assigned', async () => {
     const parentLink = 'https://example.com/tmc/register/parent?token=abc';
-    installFetchMock({ trip: makeTrip({ teacherContactId: 42 }), parentLink });
+    installFetchMock({
+      trip: makeTrip({ teacherContactId: 42 }),
+      parentLink,
+      teachers: [{ id: 42, name: 'Asha Teacher' }],
+    });
     renderPage();
 
     const generateButton = await screen.findByRole('button', { name: 'Generate parent link' });

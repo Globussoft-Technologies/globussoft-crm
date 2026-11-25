@@ -95,7 +95,7 @@ The integrations work today; operators just have to know where to find each conf
 - Related: GH #651 — Credential-masking contract for Channels. THIS PRD's hub MUST inherit the same `{ configured, last4, lastRotatedAt }` shape on every credential surface (see [backend/lib/credentialMasking.js](../backend/lib/credentialMasking.js)).
 - Cross-reference: `PRD_PAYMENT_GATEWAY_CONFIG.md` — payment-gateway config page is sibling integration surface; the hub's "Payments" category deep-links to it rather than re-implementing.
 - Cross-reference: `PRD_IMPORT_EXPORT_JOBS.md` — consumes integration credentials (Mailgun for email-on-completion notifications, etc.); the hub surface helps operators verify those creds are LIVE before triggering large jobs.
-- Cross-reference: `routes/audit.js` — every hub action (view, test, deep-link) writes to the tamper-evident audit chain.
+- Cross-reference: `routes/audit.js` — hub actions (view, test, deep-link) are recorded in the tenant audit log.
 
 ---
 
@@ -109,7 +109,7 @@ The integrations work today; operators just have to know where to find each conf
 
 4. **USER discovering "what does this CRM connect to?"** New clinician (USER role) wants to know "does this thing send WhatsApp messages? Can I sync my Google Calendar?" Today: no answer — the user role's sidebar hides admin pages; the clinician has no way to discover capabilities. With the hub: USER role gets a READ-ONLY catalog view (hub is mounted as `/integrations` for ADMIN; under-the-hood the same page renders for USER in browse-only mode — categories + cards visible; no status badges, no test buttons, no configure links). Clinician sees "yes, the CRM does send WhatsApp messages" + can ask their ADMIN to wire it up. No "I didn't know this existed" surprises 3 months in.
 
-5. **Tenant migration — exporting integration config from sandbox to prod.** Globussoft engineer is migrating a wellness tenant from a staging instance to production. Today: manually re-wire each integration on the production tenant + manually test each one. With the hub: navigate to `/integrations` on staging → click "Export Configuration" → downloads `integrations-export.json` with all integration configs + structure (provider, scopes, settings) + PLACEHOLDER credentials (real creds stripped at export). Engineer navigates to `/integrations` on production → "Import Configuration" → uploads JSON → modal walks through each integration asking for real credentials → integrations re-created in seconds rather than hours. Audit chain logs the import event.
+5. **Tenant migration — exporting integration config from sandbox to prod.** Globussoft engineer is migrating a wellness tenant from a staging instance to production. Today: manually re-wire each integration on the production tenant + manually test each one. With the hub: navigate to `/integrations` on staging → click "Export Configuration" → downloads `integrations-export.json` with all integration configs + structure (provider, scopes, settings) + PLACEHOLDER credentials (real creds stripped at export). Engineer navigates to `/integrations` on production → "Import Configuration" → uploads JSON → modal walks through each integration asking for real credentials → integrations re-created in seconds rather than hours. audit log logs the import event.
 
 6. **Health-status dashboard surfaced to ADMIN sidebar.** Every morning at 09:00, an ADMIN's first sidebar click is "Integrations" → hub shows 3 cards in ERROR state (Stripe webhook signature mismatch since 02:00; WhatsApp template rejected by Meta yesterday; calendar sync paused due to expired refresh token). ADMIN clicks each card → deep-link to the existing config page → fix → "Test" button in the hub confirms LIVE. Eliminates the "discover broken integration via customer complaint" failure mode.
 
@@ -209,7 +209,7 @@ module.exports = [
 
 ### FR-3.7 Audit log integration
 
-Audit chain entries (via `backend/lib/audit.js` `writeAudit(entity, action, entityId, userId, tenantId, details)`):
+audit log entries (via `backend/lib/audit.js` `writeAudit(entity, action, entityId, userId, tenantId, details)`):
 
 - `INTEGRATION_HUB` + `VIEWED` — on `GET /api/integrations/hub`; details = `{ filterParams }`. Throttled per-user-per-tenant to once per 5 minutes (the entire hub render fires this; don't spam the audit log on every page refresh).
 - `INTEGRATION_HUB` + `TESTED` — on per-card test; details = `{ provider, ok, latencyMs }`.
@@ -267,7 +267,7 @@ Sort order in the catalog: `ERROR > LIVE > CONFIGURED > DISABLED > NOT_CONFIGURE
 - **Cache freshness.** 60s server-side cache per tenant per integration; operator-triggered "Refresh All" busts the cache.
 - **Performance — list endpoint.** Per-tenant `/api/integrations/hub` returns within 500ms (P95) for the ~25-30 card catalog (10 underlying tables, each queried once; cache reduces to <50ms after first call).
 - **Performance — test endpoint.** Per-card test returns within 5s (P95). Tests that exceed 5s time out + status flips to ERROR + lastError = `"Test exceeded 5s timeout"`.
-- **Audit log.** All hub mutations write to the tamper-evident audit chain. Read events throttled.
+- **Audit log.** All hub mutations write to the tenant audit log. Read events throttled.
 - **Browser bundle.** New page `Integrations.jsx` lazy-loaded via `React.lazy()` per the [CLAUDE.md](../CLAUDE.md) code-splitting standing rule. ~15KB gzipped (catalog + card components + filter chips + status logic).
 - **Mobile responsive.** Card grid uses the `repeat(auto-fit, minmax(min(100%, 320px), 1fr))` pattern from the [CLAUDE.md](../CLAUDE.md) standing rule — works at 375px portrait through 4K desktop without media queries.
 - **i18n-ready.** Card titles + descriptions + status labels routed through the existing `LanguageSwitcher.jsx` i18n surface. Catalog provider names stay as proper nouns (Stripe stays "Stripe" in every locale).
@@ -328,16 +328,16 @@ Sort order in the catalog: `ERROR > LIVE > CONFIGURED > DISABLED > NOT_CONFIGURE
 
 ## §6 Acceptance criteria
 
-- **AC-6.1** ADMIN navigates to `/integrations` → page loads within 1s (P95) → catalog shows all ~25-30 integrations grouped by category with correct status badges per tenant (NOT CONFIGURED / CONFIGURED / LIVE / DISABLED / ERROR) and last-tested timestamps. Audit chain logs the `INTEGRATION_HUB / VIEWED` event (throttled to 1-per-5-min per user).
+- **AC-6.1** ADMIN navigates to `/integrations` → page loads within 1s (P95) → catalog shows all ~25-30 integrations grouped by category with correct status badges per tenant (NOT CONFIGURED / CONFIGURED / LIVE / DISABLED / ERROR) and last-tested timestamps. audit log logs the `INTEGRATION_HUB / VIEWED` event (throttled to 1-per-5-min per user).
 - **AC-6.2** ADMIN clicks "Configure" on the WhatsApp card → deep-links to `/channels?tab=whatsapp&source=hub` → operator updates credentials → returns to hub → status badge has flipped to CONFIGURED (or LIVE if the existing config save triggers a test). No data loss; deep-link returns operator to hub cleanly.
-- **AC-6.3** ADMIN clicks "Test" on a configured Stripe card → backend fires test against Stripe API → returns within 5s with `{ ok: true, latencyMs: 240, message: "Account active" }` → status badge flips to LIVE + lastTestedAt updated → audit chain logs `INTEGRATION_HUB / TESTED` with `{ provider: 'stripe', ok: true, latencyMs: 240 }`. Test on a misconfigured Stripe card returns `{ ok: false, errorCode: 'AUTHENTICATION_REQUIRED', message: 'Invalid API key' }` → status flips to ERROR.
+- **AC-6.3** ADMIN clicks "Test" on a configured Stripe card → backend fires test against Stripe API → returns within 5s with `{ ok: true, latencyMs: 240, message: "Account active" }` → status badge flips to LIVE + lastTestedAt updated → audit log logs `INTEGRATION_HUB / TESTED` with `{ provider: 'stripe', ok: true, latencyMs: 240 }`. Test on a misconfigured Stripe card returns `{ ok: false, errorCode: 'AUTHENTICATION_REQUIRED', message: 'Invalid API key' }` → status flips to ERROR.
 - **AC-6.4** MANAGER navigates to `/integrations` → sees full catalog with status badges + last-tested timestamps + masked credentials. Clicks Configure → button is disabled with tooltip "Admin permission required". Clicks Test → succeeds (Test is read-only against the provider).
 - **AC-6.5** USER navigates to `/integrations` → sees the browse-only catalog (provider names + categories + descriptions ONLY; no status badges; no credentials; no Configure/Test buttons). Sister Products section hidden entirely.
-- **AC-6.6** ADMIN clicks "Export Configuration" → downloads `integrations-export.json` containing all configured integrations with credentials REPLACED by `'<PLACEHOLDER>'`. Audit chain logs `INTEGRATION_HUB / CONFIG_EXPORTED` with `{ format: 'json', integrationCount: 8 }`. Import flow on a fresh tenant accepts the file + walks operator through credential entry per integration.
-- **AC-6.7** ADMIN issues a new API key for Callified.ai via the Sister Products card → modal with `name + scopes + expiresAt` → key generated server-side starting with `glbs_` prefix + shown ONCE in plaintext → on modal close, key masked thereafter. ApiKey row written to DB with `tenantId, consumerProduct: 'callified', scopes: [...], expiresAt`. Audit chain logs.
+- **AC-6.6** ADMIN clicks "Export Configuration" → downloads `integrations-export.json` containing all configured integrations with credentials REPLACED by `'<PLACEHOLDER>'`. audit log logs `INTEGRATION_HUB / CONFIG_EXPORTED` with `{ format: 'json', integrationCount: 8 }`. Import flow on a fresh tenant accepts the file + walks operator through credential entry per integration.
+- **AC-6.7** ADMIN issues a new API key for Callified.ai via the Sister Products card → modal with `name + scopes + expiresAt` → key generated server-side starting with `glbs_` prefix + shown ONCE in plaintext → on modal close, key masked thereafter. ApiKey row written to DB with `tenantId, consumerProduct: 'callified', scopes: [...], expiresAt`. audit log logs.
 - **AC-6.8** Operator filters catalog: `?category=communications,payments&status=ERROR` → URL updates + only ERROR cards in Communications/Payments shown. Bookmark-friendly URL persists filter state.
-- **AC-6.9** Catalog status response cached for 60s per tenant; second hub render within 60s serves from cache (response includes `X-Cache: HIT` header). Operator clicks "Refresh All" → cache busted + all status providers re-queried + audit chain logs `INTEGRATION_HUB / STATUS_REFRESHED`.
-- **AC-6.10** Cross-tenant access blocked: ADMIN of tenant A receives 404 on `GET /api/integrations/hub/<id>` if `<id>` resolves to a config row belonging to tenant B. Per-card test against tenant B's integration ID returns 404. Audit-chain entries scoped by tenant. ESLint rule prevents `req.body.tenantId` reads.
+- **AC-6.9** Catalog status response cached for 60s per tenant; second hub render within 60s serves from cache (response includes `X-Cache: HIT` header). Operator clicks "Refresh All" → cache busted + all status providers re-queried + audit log logs `INTEGRATION_HUB / STATUS_REFRESHED`.
+- **AC-6.10** Cross-tenant access blocked: ADMIN of tenant A receives 404 on `GET /api/integrations/hub/<id>` if `<id>` resolves to a config row belonging to tenant B. Per-card test against tenant B's integration ID returns 404. audit log entries scoped by tenant. ESLint rule prevents `req.body.tenantId` reads.
 
 ---
 
@@ -364,7 +364,7 @@ Sort order in the catalog: `ERROR > LIVE > CONFIGURED > DISABLED > NOT_CONFIGURE
 - **[backend/routes/integrations.js](../backend/routes/integrations.js)** — Existing generic Integration REST surface + `AVAILABLE_INTEGRATIONS` static registry. THIS PRD's hub builds on the same pattern + extends to cover all the per-channel models.
 - **[backend/routes/external.js](../backend/routes/external.js)** — External Partner API surface (`/api/v1/external/*`). THIS PRD's Sister Products section surfaces the ApiKey management for the same surface.
 - **`backend/middleware/externalAuth.js`** — Existing X-API-Key auth middleware. THIS PRD's key-rotation flow integrates with the same model.
-- **`backend/lib/audit.js`** `writeAudit()` — Audit chain integration. New entity `'INTEGRATION_HUB'` written transparently; hash chain inherits.
+- **`backend/lib/audit.js`** `writeAudit()` — records new `'INTEGRATION_HUB'` events in tenant audit history.
 - **`backend/lib/eventBus.js`** — In-process event bus. v2 could subscribe to per-integration events (e.g. `STRIPE_WEBHOOK_FAILED` → flip status to ERROR) for real-time status. v1 stays pull-based.
 - **`backend/lib/webhookDelivery.js`** — Outbound webhook dispatch with retry. Status provider for the Webhooks card aggregates per-webhook last-success/last-failure.
 - **New file `backend/lib/integrationsRegistry.js`** — STATIC curated catalog (per DD-5.1).
@@ -442,5 +442,5 @@ Slices are mostly sequential; slice 2's status providers can parallelize across 
 **Cross-PRD coordination check:** Before implementation starts, confirm:
 - `PRD_PAYMENT_GATEWAY_CONFIG.md` ships the `/settings/payment-gateways` page that THIS PRD deep-links to from the Payments category.
 - `PRD_IMPORT_EXPORT_JOBS.md` integration with Mailgun credentials surface — operators can verify Mailgun is LIVE via hub before triggering jobs with email-on-completion notifications.
-- `routes/audit.js` `/verify` endpoint inherits INTEGRATION_HUB entries cleanly (no code change required).
+- `writeAudit()` records INTEGRATION_HUB entries in the tenant audit log.
 - Sister-product key management overlaps with existing `Developer.jsx` page — coordinate whether Developer.jsx deprecates its API Keys tab in favor of the hub OR keeps it as a power-user surface (per DD-5.4 (c) hybrid option).

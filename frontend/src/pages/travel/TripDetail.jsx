@@ -23,6 +23,7 @@ import {
   normalizeAcceptedFileTypes,
 } from "../../utils/travelDocumentPolicy";
 import { isDigitalConsentRequirement } from "../../utils/tmcDigitalConsent";
+import { getTeacherRegistrationLink } from "../../utils/tmcLinks";
 import { TRAVEL_PAYMENT_SYNC_CHANNEL, TRAVEL_PAYMENT_SYNC_EVENT } from "../../utils/travelPaymentSync";
 import TripFinancialSummary from "./TripFinancialSummary";
 import { AuthContext } from "../../App";
@@ -386,6 +387,7 @@ function OverviewTab({ trip, onJump, notify }) {
           title="Access and sharing"
           titleId="trip-access-title"
           description="Control who can manage this trip and how parents enter the registration flow."
+          trailing={isAdmin ? <CopyTeacherPortalLinkButton notify={notify} /> : null}
         />
         <TeacherAssignment trip={trip} notify={notify} isAdmin={isAdmin} embedded />
       </section>
@@ -408,6 +410,28 @@ function OverviewSectionHeader({ eyebrow, title, description, trailing, titleId 
       </div>
       {trailing}
     </div>
+  );
+}
+
+function CopyTeacherPortalLinkButton({ notify }) {
+  const [copying, setCopying] = useState(false);
+
+  const copyLink = async () => {
+    setCopying(true);
+    try {
+      await navigator.clipboard.writeText(getTeacherRegistrationLink());
+      notify.success("Teacher registration link copied");
+    } catch {
+      notify.error("Copy was not available. Select and copy the link manually.");
+    } finally {
+      setCopying(false);
+    }
+  };
+
+  return (
+    <button type="button" className="btn-secondary" onClick={copyLink} disabled={copying} style={{ display: "inline-flex", alignItems: "center", alignSelf: "center", gap: 6, flexShrink: 0 }}>
+      <Copy size={14} /> {copying ? "Copying..." : "Copy teacher portal link"}
+    </button>
   );
 }
 
@@ -459,14 +483,31 @@ function TripFamilyCard({ trip }) {
   );
 }
 
+function getAssignedTeacherIds(trip) {
+  const idsFromAssignments = Array.isArray(trip.teacherAssignments)
+    ? trip.teacherAssignments.map((assignment) => assignment?.teacherContactId).filter(Boolean)
+    : [];
+  const ids = idsFromAssignments.length
+    ? idsFromAssignments
+    : Array.isArray(trip.teacherContactIds) && trip.teacherContactIds.length
+      ? trip.teacherContactIds
+      : trip.teacherContactId
+        ? [trip.teacherContactId]
+        : [];
+  return [...new Set(ids.map((id) => String(id)))];
+}
+
 function TeacherAssignment({ trip, notify, isAdmin, embedded = false }) {
   const [teachers, setTeachers] = useState([]);
-  const [teacherId, setTeacherId] = useState(trip.teacherContactId ? String(trip.teacherContactId) : "");
-  const [savedTeacherId, setSavedTeacherId] = useState(trip.teacherContactId ? String(trip.teacherContactId) : "");
+  const assignmentKey = getAssignedTeacherIds(trip).join(",");
+  const [teacherIds, setTeacherIds] = useState(() => assignmentKey ? assignmentKey.split(",") : []);
+  const [savedTeacherIds, setSavedTeacherIds] = useState(() => assignmentKey ? assignmentKey.split(",") : []);
   const [parentLink, setParentLink] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [generatingLink, setGeneratingLink] = useState(false);
+  const [teacherPickerOpen, setTeacherPickerOpen] = useState(false);
+  const teacherPickerRef = useRef(null);
 
   useEffect(() => {
     let active = true;
@@ -484,21 +525,53 @@ function TeacherAssignment({ trip, notify, isAdmin, embedded = false }) {
   }, []);
 
   useEffect(() => {
-    setTeacherId(trip.teacherContactId ? String(trip.teacherContactId) : "");
-    setSavedTeacherId(trip.teacherContactId ? String(trip.teacherContactId) : "");
+    const nextIds = assignmentKey ? assignmentKey.split(",") : [];
+    setTeacherIds(nextIds);
+    setSavedTeacherIds(nextIds);
     setParentLink("");
-  }, [trip.teacherContactId]);
+  }, [assignmentKey]);
+
+  useEffect(() => {
+    if (!teacherPickerOpen) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (!teacherPickerRef.current?.contains(event.target)) setTeacherPickerOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setTeacherPickerOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [teacherPickerOpen]);
+
+  const toggleTeacher = (teacherId, checked) => {
+    setTeacherIds((current) => {
+      if (checked) return current.includes(teacherId) ? current : [...current, teacherId];
+      return current.filter((id) => id !== teacherId);
+    });
+  };
+  const normalizeIds = (ids) => [...ids].sort().join(",");
+  const assignmentSaved = normalizeIds(teacherIds) === normalizeIds(savedTeacherIds);
+  const selectedTeacherNames = teachers
+    .filter((teacher) => teacherIds.includes(String(teacher.id)))
+    .map((teacher) => teacher.name || teacher.email || "Teacher");
+  const teacherPickerLabel = selectedTeacherNames.length
+    ? selectedTeacherNames.join(", ")
+    : "Select teachers";
 
   const save = async () => {
     setSaving(true);
     try {
       await fetchApi(`/api/travel/trips/${trip.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ teacherContactId: teacherId ? Number(teacherId) : null }),
+        body: JSON.stringify({ teacherContactIds: teacherIds.map(Number) }),
       });
-      setSavedTeacherId(teacherId);
+      setSavedTeacherIds(teacherIds);
       setParentLink("");
-      notify.success(teacherId ? "Teacher assigned to this trip" : "Teacher assignment removed");
+      notify.success(teacherIds.length ? "Teachers assigned to this trip" : "Teacher assignments removed");
     } catch (error) {
       notify.error(error?.body?.error || "Could not update the teacher assignment");
     } finally {
@@ -507,7 +580,7 @@ function TeacherAssignment({ trip, notify, isAdmin, embedded = false }) {
   };
 
   const generateParentLink = async () => {
-    if (!isAdmin || !teacherId || teacherId !== savedTeacherId) return;
+    if (!isAdmin || !teacherIds.length || !assignmentSaved) return;
     setGeneratingLink(true);
     try {
       const result = await fetchApi(`/api/portal/tmc/staff/trips/${trip.id}/parent-link`, { method: "POST" });
@@ -530,8 +603,6 @@ function TeacherAssignment({ trip, notify, isAdmin, embedded = false }) {
     }
   };
 
-  const assignmentSaved = teacherId === savedTeacherId;
-
   return (
     <section style={{
       background: embedded ? "transparent" : "var(--bg-color, #111318)",
@@ -543,19 +614,51 @@ function TeacherAssignment({ trip, notify, isAdmin, embedded = false }) {
         <div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>Teacher portal access</div>
           <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
-            Assign the teacher who finalized this trip. They will see it in their Teacher Portal. Parent registration links are generated and shared by an admin.
+            Assign one or more teachers. Each assigned teacher sees the same trip details and registrations.
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <select value={teacherId} onChange={(event) => setTeacherId(event.target.value)} disabled={loading || saving} aria-label="Assign TMC teacher" style={{ minWidth: 220, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border-color)", background: "var(--input-bg)", color: "var(--text-primary)" }}>
-            <option value="">No teacher assigned</option>
-            {teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.name || teacher.email}</option>)}
-          </select>
-          <button type="button" className="btn-secondary" onClick={save} disabled={loading || saving}>{saving ? "Saving…" : "Save"}</button>
+          {teachers.length > 0 && (
+            <div ref={teacherPickerRef} style={{ position: "relative", minWidth: 230 }}>
+              <button
+                type="button"
+                className="btn-secondary"
+                aria-label={selectedTeacherNames.length ? `Assigned teachers: ${selectedTeacherNames.join(", ")}` : "Select teachers"}
+                aria-haspopup="true"
+                aria-expanded={teacherPickerOpen}
+                onClick={() => setTeacherPickerOpen((open) => !open)}
+                disabled={loading || saving}
+                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, width: "100%", minWidth: 230, maxWidth: 300, textAlign: "left" }}
+              >
+                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{teacherPickerLabel}</span>
+                <ChevronDown size={15} style={{ flexShrink: 0, transform: teacherPickerOpen ? "rotate(180deg)" : undefined }} />
+              </button>
+              {teacherPickerOpen && (
+                <div role="group" aria-label="Available TMC teachers" style={{ position: "absolute", zIndex: 30, top: "calc(100% + 6px)", right: 0, minWidth: "100%", maxHeight: 240, overflowY: "auto", padding: 8, border: "1px solid var(--border-color)", borderRadius: 8, background: "var(--surface-color, #fff)", boxShadow: "0 10px 24px rgba(20, 24, 35, 0.16)" }}>
+                  {teachers.map((teacher) => {
+                    const id = String(teacher.id);
+                    return (
+                      <label key={teacher.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", fontSize: 13, color: "var(--text-primary)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                        <input
+                          type="checkbox"
+                          aria-label={teacher.name || teacher.email}
+                          checked={teacherIds.includes(id)}
+                          onChange={(event) => toggleTeacher(id, event.target.checked)}
+                        />
+                        <span>{teacher.name || teacher.email}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+          <button type="button" className="btn-secondary" onClick={save} disabled={loading || saving}>{saving ? "Saving…" : "Save teachers"}</button>
         </div>
       </div>
-      {!loading && teachers.length === 0 && <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)" }}>No TMC teachers have registered yet. Generate the teacher link from Roles &amp; permissions first.</div>}
-      {isAdmin && teacherId && assignmentSaved && (
+      {!loading && teachers.length === 0 && <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)" }}>No TMC teachers have registered yet. Copy the teacher portal link to invite them.</div>}
+      {!loading && teachers.length === 0 && teacherIds.length > 0 && <button type="button" className="btn-secondary" onClick={() => setTeacherIds([])}>Clear unavailable assignments</button>}
+      {isAdmin && teachers.length > 0 && teacherIds.length > 0 && assignmentSaved && (
         <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border-color)" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
             <div>
@@ -577,7 +680,7 @@ function TeacherAssignment({ trip, notify, isAdmin, embedded = false }) {
           )}
         </div>
       )}
-      {isAdmin && teacherId && !assignmentSaved && <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)" }}>Save the teacher assignment before generating the parent registration link.</div>}
+      {isAdmin && teachers.length > 0 && teacherIds.length > 0 && !assignmentSaved && <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)" }}>Save the teacher assignments before generating the parent registration link.</div>}
     </section>
   );
 }

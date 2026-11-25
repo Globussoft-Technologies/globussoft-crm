@@ -184,7 +184,7 @@ The genuine scope is the eleven "DOES NOT EXIST" rows. The schema + Razorpay ver
 - **Shared frontend `<DateRangePicker>`** — exists; reuse for invoice history filter.
 - **PRD_TRAVEL_GST_COMPLIANCE** — tax math + HSN/SAC codes + place-of-supply rules.
 - **PR #710 NotificationPreference reshape** — usage-alert emails consume notification-preference channels (already in `{enabled}` object shape post-#710).
-- **Existing `writeAudit` + `auditLog.js` + audit hash-chain** — every state change goes through it.
+- **Existing `writeAudit` + `audit log`** — every state change goes through it.
 
 ---
 

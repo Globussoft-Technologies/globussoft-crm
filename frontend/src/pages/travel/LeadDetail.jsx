@@ -13,6 +13,14 @@ const formatDate = (value) => value ? new Date(value).toLocaleDateString() : "";
 const formatDateTime = (value) => value ? new Date(value).toLocaleString([], { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
 const formatMoney = (value, currency = "INR") => value == null || value === "" ? "" : (currency === "INR" ? RUPEE : currency + " ") + Number(value).toLocaleString();
 const formatStatus = (value) => value ? String(value).replaceAll("_", " ") : "";
+const tripIsAssignedTeacher = (trip, contactId) => {
+  const assignedIds = [
+    trip.teacherContactId,
+    ...(Array.isArray(trip.teacherContactIds) ? trip.teacherContactIds : []),
+    ...(Array.isArray(trip.teacherAssignments) ? trip.teacherAssignments.map((assignment) => assignment?.teacherContactId) : []),
+  ];
+  return assignedIds.some((id) => Number(id) === Number(contactId));
+};
 
 export default function LeadDetail() {
   const { contactId } = useParams(); const location = useLocation(); const navigate = useNavigate();
@@ -41,7 +49,7 @@ export default function LeadDetail() {
         const linkedTrips = Array.isArray(tripData?.trips) ? tripData.trips : [];
         const contactEmail = String(contactData?.email || "").trim().toLowerCase();
         const paidEntries = await Promise.all(linkedTrips.map(async (trip) => {
-          const isTeacher = Number(trip.teacherContactId) === Number(contactId);
+          const isTeacher = tripIsAssignedTeacher(trip, contactId);
           const instalmentsRequest = fetchApi(`/api/travel/trips/${trip.id}/instalments`, { silent: true })
             .then((response) => ({ ok: true, response }))
             .catch(() => ({ ok: false }));
@@ -88,9 +96,9 @@ export default function LeadDetail() {
     if (editingNoteId && tab === "Notes") noteInputRef.current?.focus();
   }, [editingNoteId, tab]);
   // Teachers manage the whole group, while student/parent contacts see their
-  // individual amount. The API marks teacher-linked trips with teacherContactId.
+  // individual amount. A trip can now be assigned to several teachers.
   const allTrips = useMemo(() => trips.map((trip) => {
-    const isTeacher = Number(trip.teacherContactId) === Number(contactId);
+    const isTeacher = tripIsAssignedTeacher(trip, contactId);
     return { ...trip, idLabel: trip.tripCode || trip.id, startDate: trip.departDate, endDate: trip.returnDate, value: isTeacher ? (trip.totalTripValue ?? trip.perStudentAmount ?? trip.pricePerStudent) : (trip.perStudentAmount ?? trip.pricePerStudent ?? trip.totalTripValue), paidAmount: paidAmounts[`trip:${trip.id}`] ?? null, type: "TMC" };
   }), [trips, contactId, paidAmounts]);
   const otherTrips = useMemo(() => quotes.map((quote) => ({

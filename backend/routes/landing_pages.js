@@ -1426,15 +1426,22 @@ async function getTmcParentRegistrationUrl(page, req, { draftToken = "" } = {}) 
     where: {
       id: Number(page.tripId),
       tenantId: Number(page.tenantId || 1),
-      teacherContactId: { not: null },
     },
-    select: { teacherContactId: true },
+    select: {
+      teacherContactId: true,
+      teacherAssignments: {
+        orderBy: { id: "asc" },
+        select: { teacherContactId: true },
+      },
+    },
   });
-  if (!trip?.teacherContactId) return null;
+  const teacherContactId = trip?.teacherContactId
+    || trip?.teacherAssignments?.[0]?.teacherContactId;
+  if (!teacherContactId) return null;
   const registrationUrl = buildTmcParentRegistrationUrl({
     baseUrl: getFrontendUrlFromRequest(req),
     tenantId: page.tenantId || 1,
-    teacherContactId: trip.teacherContactId,
+    teacherContactId,
     tripId: page.tripId,
   });
   if (!draftToken) return registrationUrl;

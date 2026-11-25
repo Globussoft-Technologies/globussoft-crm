@@ -1617,15 +1617,16 @@ router.get("/", async (req, res) => {
   try {
     const viewAllLeads = await canViewAllLeads(req);
     const where = { tenantId: req.user.tenantId };
+    const crmStatusListVertical = req.user.vertical || "generic";
     const includeCrmStatuses =
       req.query.includeCrmStatuses === "true" &&
-      (req.user.vertical || "generic") === "generic";
+      ["generic", "wellness"].includes(crmStatusListVertical);
     if (req.query.status && !includeCrmStatuses) where.status = req.query.status;
-    // Generic CRM's Leads page is an all-contacts view. The legacy request
-    // still includes ?status=Lead for compatibility with existing callers,
-    // but includeCrmStatuses explicitly means that the status must not limit
-    // the result set. Do not replace this with a hard-coded status list:
-    // custom/new statuses would otherwise disappear from the Leads page.
+    // Generic and Wellness CRM's Leads pages are all-contacts views. The
+    // legacy request still includes ?status=Lead for compatibility with
+    // existing callers, but includeCrmStatuses explicitly means that status
+    // must not limit the result set. Do not replace this with a hard-coded
+    // status list: converted customers and custom/new statuses would vanish.
     if (req.query.assignedToId)
       where.assignedToId = parseInt(req.query.assignedToId);
     if (req.query.unassigned === "true") where.assignedToId = null;
@@ -2265,20 +2266,22 @@ router.get("/filter-values/:field", async (req, res) => {
   try {
     const viewAllLeads = await canViewAllLeads(req);
     const tenantId = req.user.tenantId;
-    // Non-generic callers may pass ?status=... to scope values. Generic
-    // Leads passes ?includeCrmStatuses=true because its list intentionally
-    // includes every CRM status; the value list must use that same scope.
-    const genericLeadsPageScope =
+    // Leads pages for Generic and Wellness pass ?includeCrmStatuses=true
+    // because those lists intentionally include every CRM status; their
+    // filter value lists must use that same scope.
+    const allCrmStatusesScope =
       req.query.includeCrmStatuses === "true" &&
-      (req.user.vertical || "generic") === "generic";
+      ["generic", "wellness"].includes(req.user.vertical || "generic");
+    const genericLeadsPageScope =
+      allCrmStatusesScope && (req.user.vertical || "generic") === "generic";
     const statusScope =
-      !genericLeadsPageScope &&
+      !allCrmStatusesScope &&
       typeof req.query.status === "string" &&
       req.query.status
         ? req.query.status
         : null;
     const assignedToScope =
-      genericLeadsPageScope && !viewAllLeads
+      allCrmStatusesScope && !viewAllLeads
         ? { assignedToId: req.user.userId }
         : {};
     const valueSearch =
@@ -2568,6 +2571,26 @@ router.get("/filter-values/:field", async (req, res) => {
         .filter((status) => !normalizedSearch || status.toLowerCase().includes(normalizedSearch))
         .map((status) => ({ value: status, label: status }));
       return res.json({ values });
+    }
+    if (req.params.field === "status" && allCrmStatusesScope) {
+      const rows = await prisma.contact.findMany({
+        where: {
+          tenantId,
+          deletedAt: null,
+          ...scopeWhere,
+          ...(valueSearch ? { status: { contains: valueSearch } } : {}),
+        },
+        select: { status: true },
+        distinct: ["status"],
+        orderBy: { status: "asc" },
+        take: 200,
+      });
+      return res.json({
+        values: rows
+          .map(({ status }) => String(status || "").trim())
+          .filter(Boolean)
+          .map((status) => ({ value: status, label: status })),
+      });
     }
     if (req.params.field === "territoryId") {
       const territories = await prisma.territory.findMany({

@@ -345,7 +345,7 @@ describe('POST /api/gdpr/export/me — Article 15 self-export (#443 + perf cap)'
     prisma.smsMessage.findMany.mockResolvedValue([]);
     prisma.whatsAppMessage.findMany.mockResolvedValue([]);
     prisma.auditLog.findFirst.mockResolvedValue(null);
-    // auditLog.findMany is hit by /export/me only (not the chain lookup).
+    // auditLog.findMany is hit by /export/me only.
     // The router calls prisma.auditLog.findMany; make it return a small slice.
     prisma.auditLog.findMany = vi.fn().mockResolvedValue([{ id: 1 }, { id: 2 }]);
     const app = makeApp();

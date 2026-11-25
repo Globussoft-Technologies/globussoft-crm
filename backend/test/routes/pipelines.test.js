@@ -66,7 +66,7 @@
  * verifyToken (real middleware) + verifyRole(['ADMIN']) (real middleware)
  * both pass. CJS self-mocking seam on lib/audit replaces writeAudit +
  * diffFields with vi.fn()s so we can assert the audit call shape without
- * relying on the real hash-chain DB write succeeding. vi.mock against the
+ * relying on the real audit-log DB write succeeding. vi.mock against the
  * route's `require('../middleware/auth')` does NOT reliably intercept in
  * this repo's vitest config (documented elsewhere) — real-JWT is the
  * canonical workaround.
@@ -133,7 +133,7 @@ function makeBearer({ userId = 7, tenantId = 1, role = 'ADMIN', vertical = 'gene
 // module load. Node CJS caches modules by resolved path — so the require
 // inside the route returns the SAME object identity as our require here.
 // We mutate that object's exported fns in place with vi.fn() so we can
-// assert audit-emission shape (#568) without firing the real hash-chain
+// assert audit-emission shape (#568) without firing the real audit-log
 // write path. See cron-learnings 2026-05-24 ~01:43 UTC for the canonical
 // pattern.
 const auditModule = requireCJS('../../lib/audit');

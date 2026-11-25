@@ -96,20 +96,20 @@ A sibling `EmployeeProfile` model with a 1:1 FK to User cleanly separates concer
 - `backend/prisma/schema.prisma:4061` — existing `CommissionProfile` model — REUSE via FK link rather than duplicating commission scheme into EmployeeProfile
 - `backend/prisma/schema.prisma:3663` — existing `Attendance` model — sibling; out-of-scope for this PRD per §7
 - `backend/prisma/schema.prisma:795` — existing `Attachment` model — re-used as the polymorphic document storage for EmployeeProfile documents
-- `backend/lib/audit.js` `writeAudit()` — new `EMPLOYEE_PROFILE_*` action set flows through the existing tamper-evident chain
+- `backend/lib/audit.js` `writeAudit()` — records new `EMPLOYEE_PROFILE_*` events in the tenant audit log
 - `routes/wellness.js` photo-upload pattern — re-used for EmployeeProfile photo + documents
 
 ---
 
 ## §2 Use cases
 
-1. **ADMIN onboards a new wellness doctor — captures full HR profile in one form.** ADMIN navigates `/staff` → "Add Staff" → 2-step modal: Step 1 captures auth identity (name, email, password, role=USER, wellnessRole=doctor, sub-brand access). Step 2 captures the HR profile: PAN, Aadhaar, DOB, joiningDate, employmentType=FULL_TIME, baseSalaryCents=8500000 (₹85,000/month), commissionPercent=15, bankAccountNumber (masked-after-save), bankIfsc, bankName, emergencyContact (name + relation + phone), address (line1/2/city/state/postcode/country), bloodGroup=B+, notes. Uploads photo + signed offer letter PDF + Aadhaar scan. Saves. Audit chain captures `EMPLOYEE_PROFILE_CREATED` + `EMPLOYEE_PROFILE_DOC_UPLOADED ×3`. Sensitive fields (PAN / Aadhaar / bank account) are encrypted at rest via `fieldEncryption.js`.
+1. **ADMIN onboards a new wellness doctor — captures full HR profile in one form.** ADMIN navigates `/staff` → "Add Staff" → 2-step modal: Step 1 captures auth identity (name, email, password, role=USER, wellnessRole=doctor, sub-brand access). Step 2 captures the HR profile: PAN, Aadhaar, DOB, joiningDate, employmentType=FULL_TIME, baseSalaryCents=8500000 (₹85,000/month), commissionPercent=15, bankAccountNumber (masked-after-save), bankIfsc, bankName, emergencyContact (name + relation + phone), address (line1/2/city/state/postcode/country), bloodGroup=B+, notes. Uploads photo + signed offer letter PDF + Aadhaar scan. Saves. audit log captures `EMPLOYEE_PROFILE_CREATED` + `EMPLOYEE_PROFILE_DOC_UPLOADED ×3`. Sensitive fields (PAN / Aadhaar / bank account) are encrypted at rest via `fieldEncryption.js`.
 
-2. **Accountant exports payroll CSV — bank account + IFSC + base salary + commission %.** Month-end. Accountant (role=MANAGER with `payrollExportEnabled=true` per Q3) navigates `/staff/payroll-export` → selects month → clicks Export → backend returns CSV with columns: name, email, employeeCode, bankAccountNumber, bankIfsc, bankName, baseSalaryCents, commissionPercent, joiningDate, employmentType. Accountant sends to outside payroll service. Audit chain captures `EMPLOYEE_SALARY_VIEWED ×12` (one per row) — high-sensitivity field-view audit kept indefinitely per §4. Bank account number visibility is governed by Q3 (masking last-4 to MANAGER, full to ADMIN — operator-configurable).
+2. **Accountant exports payroll CSV — bank account + IFSC + base salary + commission %.** Month-end. Accountant (role=MANAGER with `payrollExportEnabled=true` per Q3) navigates `/staff/payroll-export` → selects month → clicks Export → backend returns CSV with columns: name, email, employeeCode, bankAccountNumber, bankIfsc, bankName, baseSalaryCents, commissionPercent, joiningDate, employmentType. Accountant sends to outside payroll service. audit log captures `EMPLOYEE_SALARY_VIEWED ×12` (one per row) — high-sensitivity field-view audit kept indefinitely per §4. Bank account number visibility is governed by Q3 (masking last-4 to MANAGER, full to ADMIN — operator-configurable).
 
-3. **Compliance — Aadhaar visible only to ADMIN.** A doctor's Aadhaar is requested for PF / ESIC filing. ADMIN navigates that doctor's `/staff/<userId>/profile` → views the Aadhaar field (decrypted from `fieldEncryption.js`). Audit chain captures `EMPLOYEE_AADHAAR_VIEWED`. A MANAGER on the same page sees `Aadhaar: ****-****-1234` (last-4 only, per Q3). A USER (the doctor themselves) viewing their own profile sees full Aadhaar (their own data, no privacy concern); viewing OTHER doctors' profile returns 403.
+3. **Compliance — Aadhaar visible only to ADMIN.** A doctor's Aadhaar is requested for PF / ESIC filing. ADMIN navigates that doctor's `/staff/<userId>/profile` → views the Aadhaar field (decrypted from `fieldEncryption.js`). audit log captures `EMPLOYEE_AADHAAR_VIEWED`. A MANAGER on the same page sees `Aadhaar: ****-****-1234` (last-4 only, per Q3). A USER (the doctor themselves) viewing their own profile sees full Aadhaar (their own data, no privacy concern); viewing OTHER doctors' profile returns 403.
 
-4. **Emergency — receptionist needs emergency contact for an unconscious doctor.** Doctor collapses in the consult room. Receptionist (role=USER, wellnessRole=helper) navigates `/staff/<userId>/profile` for that doctor — gets 403 (only own profile readable by USER). Receptionist asks a MANAGER on duty → MANAGER opens the profile → sees emergency contact (name + relation + phone) → calls. Audit chain captures `EMPLOYEE_PROFILE_VIEWED`. **Per Q5, emergency contact MAY be exempted from the USER-only-own-profile rule** — surface a per-tenant config flag `emergencyContactVisibleToAll Boolean @default(false)`.
+4. **Emergency — receptionist needs emergency contact for an unconscious doctor.** Doctor collapses in the consult room. Receptionist (role=USER, wellnessRole=helper) navigates `/staff/<userId>/profile` for that doctor — gets 403 (only own profile readable by USER). Receptionist asks a MANAGER on duty → MANAGER opens the profile → sees emergency contact (name + relation + phone) → calls. audit log captures `EMPLOYEE_PROFILE_VIEWED`. **Per Q5, emergency contact MAY be exempted from the USER-only-own-profile rule** — surface a per-tenant config flag `emergencyContactVisibleToAll Boolean @default(false)`.
 
 5. **Document attachments — passport / education certs / signed offer letter / work-visa.** ADMIN onboards a foreign-national doctor (UAE clinic). Uploads passport scan + medical-degree cert + signed offer letter + work-visa scan. Per Q4 (recommended YES): each document has an expiryDate column. The visa expires in 18 months. Cron `documentExpiryEngine.js` (out-of-scope per §7 — Phase 2) flags expiring documents at T-60d / T-30d / T-7d. ADMIN gets an in-app notification + email.
 
@@ -239,7 +239,7 @@ Three fields go through `backend/lib/fieldEncryption.js` (existing AES-256-GCM h
 
 Encryption key sourced from `WELLNESS_FIELD_KEY` env var (already in deploy + local-dev `.env`). Key rotation: when `WELLNESS_FIELD_KEY` rotates, a one-shot `backend/scripts/rotate-employee-profile-encryption.js` re-encrypts in-place (read with old key + write with new key). Out-of-scope for v1 — Phase 2.
 
-**Masking on read** (per FR-3.3): MANAGER reads return last-4 chars only (e.g. `"****-****-1234"`); ADMIN reads return full. The route inspects `req.user.role` + applies masking before returning the response. Audit chain captures the full action (`EMPLOYEE_AADHAAR_VIEWED` / `EMPLOYEE_BANK_VIEWED`) regardless of mask status.
+**Masking on read** (per FR-3.3): MANAGER reads return last-4 chars only (e.g. `"****-****-1234"`); ADMIN reads return full. The route inspects `req.user.role` + applies masking before returning the response. audit log captures the full action (`EMPLOYEE_AADHAAR_VIEWED` / `EMPLOYEE_BANK_VIEWED`) regardless of mask status.
 
 ### FR-3.5 Document upload — pluggable local-disk + S3 backends
 
@@ -251,7 +251,7 @@ Re-uses the existing `Attachment` model + storage pattern shipped for wellness p
 
 ### FR-3.6 Audit log integration
 
-New audit chain entity `EMPLOYEE_PROFILE` with actions (mirrors AI_HISTORY taxonomy from PRD_AI_CHAT_HISTORY.md):
+New audit log entity `EMPLOYEE_PROFILE` with actions (mirrors AI_HISTORY taxonomy from PRD_AI_CHAT_HISTORY.md):
 
 - `EMPLOYEE_PROFILE_CREATED` — on first PUT /api/employees/:userId/profile creating a row
 - `EMPLOYEE_PROFILE_UPDATED` — on subsequent PUT (incl. salary / bank / address / emergency-contact changes)
@@ -266,7 +266,7 @@ New audit chain entity `EMPLOYEE_PROFILE` with actions (mirrors AI_HISTORY taxon
 - `EMPLOYEE_SALARY_VIEWED` — on read of baseSalary OR commissionPercent (NOT throttled)
 - `EMPLOYEE_PAYROLL_EXPORTED` — on /api/employees/payroll-export (with row count metadata)
 
-All events go through `backend/lib/audit.js` `writeAudit()` for tamper-evident hashing. **Salary + statutory-ID + bank view events are kept INDEFINITELY** (no retention purge) per compliance — `retentionEngine.js` retention policy excludes `EMPLOYEE_*_VIEWED` actions.
+All events go through `backend/lib/audit.js` `writeAudit()` for audit logging. **Salary + statutory-ID + bank view events are kept INDEFINITELY** (no retention purge) per compliance — `retentionEngine.js` retention policy excludes `EMPLOYEE_*_VIEWED` actions.
 
 ### FR-3.7 New frontend page — `frontend/src/pages/admin/EmployeeProfile.jsx` linked from Staff page
 
@@ -280,7 +280,7 @@ All events go through `backend/lib/audit.js` `writeAudit()` for tamper-evident h
   - **Documents** — document table with type / label / expiryDate / uploadedAt / uploaded-by-user; "Upload" button.
   - **Audit log** — per-employee audit trail (filtered from main audit log to action=`EMPLOYEE_*` AND targetUserId=:userId).
   - **Notes** — free-text notes (ADMIN-only — per FR-3.3).
-- **Edit affordance** — each tab has an Edit button (gated per FR-3.3 RBAC). Save calls PUT /api/employees/:userId/profile. Audit chain captures `EMPLOYEE_PROFILE_UPDATED` with field-level diff in `meta`.
+- **Edit affordance** — each tab has an Edit button (gated per FR-3.3 RBAC). Save calls PUT /api/employees/:userId/profile. audit log captures `EMPLOYEE_PROFILE_UPDATED` with field-level diff in `meta`.
 - **Document upload modal** — multi-step: pick file → pick type → optional label + expiryDate → upload. Shows progress bar. Server validates MIME + size before persistence.
 
 Lazy-loaded per existing App.jsx pattern. ~30-50 KB gzipped (form fields + document table + audit log table).
@@ -307,7 +307,7 @@ CSV columns:
 - panNumber (full — same gating)
 - (regional fields per Q1 — Phase 2)
 
-The export captures membership at request-time. Audit chain captures `EMPLOYEE_PAYROLL_EXPORTED { rowCount, month }` + `EMPLOYEE_SALARY_VIEWED ×N` (per row).
+The export captures membership at request-time. audit log captures `EMPLOYEE_PAYROLL_EXPORTED { rowCount, month }` + `EMPLOYEE_SALARY_VIEWED ×N` (per row).
 
 ### FR-3.10 Self-edit affordance for non-ADMIN users
 
@@ -389,7 +389,7 @@ Per FR-3.3 + Q6/Q7, USER can edit own personal data (address, emergency contact,
 
 - **AC-6.2** MANAGER navigates EmployeeProfile of any tenant employee → reads Personal + Statutory IDs (masked: `"****-****-1234"`) + Bank (masked) → CANNOT see Base Salary / Commission % (field hidden in UI + 403 on raw API call). USER (the employee themselves) navigates own EmployeeProfile → sees all fields including own salary (full). USER attempts to read another USER's profile → 403. ADMIN sees everything across all employees in tenant.
 
-- **AC-6.3** ADMIN navigates `/api/employees/payroll-export?month=2026-05` → CSV downloads with all employees + full PAN + full bank account + baseSalary + commissionPercent. Audit chain captures `EMPLOYEE_PAYROLL_EXPORTED { rowCount, month }` + `EMPLOYEE_SALARY_VIEWED ×N` events. MANAGER attempts same endpoint → 403 (unless Q3 path b operator-configured for this MANAGER). USER attempts → 403.
+- **AC-6.3** ADMIN navigates `/api/employees/payroll-export?month=2026-05` → CSV downloads with all employees + full PAN + full bank account + baseSalary + commissionPercent. audit log captures `EMPLOYEE_PAYROLL_EXPORTED { rowCount, month }` + `EMPLOYEE_SALARY_VIEWED ×N` events. MANAGER attempts same endpoint → 403 (unless Q3 path b operator-configured for this MANAGER). USER attempts → 403.
 
 - **AC-6.4** USER navigates own EmployeeProfile → edits address + emergency contact → saves successfully (audit captures `EMPLOYEE_PROFILE_UPDATED { changedFields: ['address', 'emergencyContact'] }`). USER attempts to edit own baseSalary via raw API → 403 (only ADMIN can edit salary). USER attempts to edit own PAN via raw API → 403 (only ADMIN can edit statutory IDs).
 
@@ -421,10 +421,10 @@ Per FR-3.3 + Q6/Q7, USER can edit own personal data (address, emergency contact,
 
 - **`User` model** at `backend/prisma/schema.prisma:348-395` — gains a back-relation `employeeProfile EmployeeProfile?` (no field changes).
 - **`backend/lib/fieldEncryption.js`** — re-used as-is for PAN + Aadhaar + bank account encryption.
-- **`backend/lib/audit.js` `writeAudit()`** — new `EMPLOYEE_PROFILE_*` action set flows through the existing tamper-evident chain. No schema change.
+- **`backend/lib/audit.js` `writeAudit()`** — records new `EMPLOYEE_PROFILE_*` actions in the tenant audit log. No schema change.
 - **`backend/middleware/auth.js`** `verifyToken` + `verifyRole` — gates the new endpoints.
 - **`backend/routes/staff.js`** (existing) — extended to surface a "Profile" link in the list response + post EmployeeProfile alongside User on `POST /api/staff` (atomic).
-- **`backend/routes/audit.js`** `/verify` endpoint — accepts the EMPLOYEE_PROFILE_* event family without code change (entity = `EMPLOYEE_PROFILE`, actions per FR-3.6).
+- The tenant Audit Log viewer displays EMPLOYEE_PROFILE_* events.
 - **`backend/routes/retention.js`** (or retentionEngine config) — `EMPLOYEE_*_VIEWED` actions excluded from retention purge (kept indefinitely).
 - **Existing `CommissionProfile` model** at `backend/prisma/schema.prisma:4061` — FK target for EmployeeProfile.commissionProfileId.
 - **Existing `Attachment` model** at `backend/prisma/schema.prisma:795` — re-used as document storage; linked via new `EmployeeProfileDocument` join table.
@@ -528,7 +528,7 @@ Slices 1 + 2 + 3 must ship in order. Slice 4 + 5 can ship in parallel after slic
 
 **Cross-PRD coordination check:** Before implementation starts, confirm:
 
-- `routes/audit.js` `/verify` endpoint accepts the EMPLOYEE_PROFILE_* + EMPLOYEE_*_VIEWED event families without code change (entity = `EMPLOYEE_PROFILE` or per-action entity).
+- `writeAudit()` records the EMPLOYEE_PROFILE_* + EMPLOYEE_*_VIEWED event families in the tenant audit log.
 - `lib/fieldEncryption.js` (existing) is wired into `routes/employees.js` correctly — encryption tested against the existing wellness PII encryption pattern.
 - `EmployeeProfile.commissionProfileId` FK to existing `CommissionProfile` model is correctly nullable (employee may not have a commission scheme) + doesn't break existing CommissionProfile queries.
 - `Attachment` model (existing) accepts the new `EmployeeProfileDocument` join-table linkage without breaking existing patient-photo + ticket-attachment use cases.

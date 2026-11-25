@@ -2023,7 +2023,7 @@ export default function QuoteBuilder() {
   // transition guard (only Draft|Sent can move to Accepted|Rejected;
   // already-{Accepted,Rejected} is idempotent; opposite-terminal is
   // 409 INVALID_TRANSITION). Decline opens a confirm modal with an
-  // optional reason field (captured in the audit chain since the
+  // optional reason field (captured in the audit log since the
   // schema has no rejectionReason column).
   const handleAccept = async () => {
     if (!quoteId) {
@@ -4547,7 +4547,7 @@ export default function QuoteBuilder() {
               }}
             >
               The quote status will flip to <strong>Rejected</strong>. The
-              customer's reason (if provided) is captured in the audit chain.
+              customer's reason (if provided) is captured in the audit log.
             </p>
             <label style={fieldLabel}>
               Reason (optional)

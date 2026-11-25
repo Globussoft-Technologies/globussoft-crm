@@ -66,7 +66,7 @@
  * Operator-side `/usage-stats` + per-template analytics can join on this
  * action verb to expose "shared X times → rendered Y times" funnels.
  * Audit failure does NOT block the render — the public surface MUST
- * return the bytes; audit-chain integrity is a secondary concern.
+ * return the bytes; the audit write is a secondary concern.
  *
  * --- Server.js mount ---
  *
@@ -348,7 +348,7 @@ router.post(
 // 403 SUB_BRAND_DENIED          — operator lacks sub-brand access
 //
 // Audit row TRAVEL_FLYER_PUBLIC_SHARE_REVOKED is written either way (first
-// revoke OR idempotent re-revoke) so the audit chain reflects the operator
+// revoke OR idempotent re-revoke) so the audit log reflects the operator
 // intent even if the underlying row was already in place.
 router.post(
   '/:id/revoke-share',

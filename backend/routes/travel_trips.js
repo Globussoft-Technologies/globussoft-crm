@@ -292,6 +292,7 @@ router.get(
           where.OR = [
             { schoolContactId: cid },
             { teacherContactId: cid },
+            { teacherAssignments: { some: { tenantId: req.travelTenant.id, teacherContactId: cid } } },
             { parentPortalLinks: { some: { parentContactId: cid } } },
             ...(email ? [
               { participants: { some: { parentEmail: email } } },
@@ -327,6 +328,10 @@ router.get(
         findManyArgs.select = listProjection("TmcTrip", false);
       } else {
         findManyArgs.include = {
+          teacherAssignments: {
+            orderBy: { id: "asc" },
+            select: { teacherContactId: true },
+          },
           _count: {
             select: { participants: true, documentRequirements: true, familyVariants: true },
           },
@@ -1357,6 +1362,10 @@ router.get(
       const trip = await prisma.tmcTrip.findFirst({
         where: { id, tenantId: req.travelTenant.id },
         include: {
+          teacherAssignments: {
+            orderBy: { id: "asc" },
+            select: { teacherContactId: true },
+          },
           // PII payload reduction (same rationale as the #920 FR-3.5
           // ?fields=summary projection on GET /:id/participants): a bare
           // include ships passportNumber / passportExtractionJson (MRZ,
@@ -1809,6 +1818,7 @@ router.patch(
           id: true,
           status: true,
           teacherContactId: true,
+          teacherAssignments: { select: { teacherContactId: true } },
           driveFolderId: true,
           tripCode: true,
           destination: true,
@@ -1832,6 +1842,7 @@ router.patch(
         driveFolderId,
         tripType,
         teacherContactId,
+        teacherContactIds,
         familyParentId,
       } = req.body || {};
 
@@ -1889,22 +1900,41 @@ router.patch(
           currentTripId: id,
         });
       }
-      if (teacherContactId !== undefined) {
+      let teacherIdsToSave;
+      if (teacherContactIds !== undefined) {
+        if (!Array.isArray(teacherContactIds)) {
+          return res.status(400).json({
+            error: "teacherContactIds must be an array of positive integers",
+            code: "INVALID_TEACHER_IDS",
+          });
+        }
+        const parsedIds = teacherContactIds.map(Number);
+        if (parsedIds.some((teacherId) => !Number.isInteger(teacherId) || teacherId <= 0)) {
+          return res.status(400).json({
+            error: "teacherContactIds must contain only positive integers",
+            code: "INVALID_TEACHER_IDS",
+          });
+        }
+        teacherIdsToSave = [...new Set(parsedIds)];
+      } else if (teacherContactId !== undefined) {
         if (teacherContactId === null || teacherContactId === "") {
-          data.teacherContactId = null;
+          teacherIdsToSave = [];
         } else {
           const teacherId = Number(teacherContactId);
           if (!Number.isInteger(teacherId) || teacherId <= 0) {
-            return res
-              .status(400)
-              .json({
-                error: "teacherContactId must be a positive integer",
-                code: "INVALID_TEACHER_ID",
-              });
+            return res.status(400).json({
+              error: "teacherContactId must be a positive integer",
+              code: "INVALID_TEACHER_ID",
+            });
           }
-          const teacher = await prisma.contact.findFirst({
+          teacherIdsToSave = [teacherId];
+        }
+      }
+      if (teacherIdsToSave !== undefined) {
+        if (teacherIdsToSave.length) {
+          const teachers = await prisma.contact.findMany({
             where: {
-              id: teacherId,
+              id: { in: teacherIdsToSave },
               tenantId: req.travelTenant.id,
               subBrand: "tmc",
               portalRole: "TEACHER",
@@ -1912,16 +1942,16 @@ router.patch(
             },
             select: { id: true },
           });
-          if (!teacher) {
-            return res
-              .status(400)
-              .json({
-                error: "teacherContactId must belong to an active TMC teacher",
-                code: "INVALID_TMC_TEACHER",
-              });
+          if (teachers.length !== teacherIdsToSave.length) {
+            return res.status(400).json({
+              error: "All assigned contacts must be active TMC teachers in this organization",
+              code: "INVALID_TMC_TEACHER",
+            });
           }
-          data.teacherContactId = teacher.id;
         }
+        // Keep a lead teacher for older callers and parent-link attribution.
+        // The join rows below grant portal access to every selected teacher.
+        data.teacherContactId = teacherIdsToSave[0] ?? null;
       }
 
       if (Object.keys(data).length === 0) {
@@ -2020,28 +2050,49 @@ router.patch(
         }
       }
 
-      const updated = await prisma.tmcTrip.update({ where: { id }, data });
-
-      // Notify only when ownership changes to a teacher. Re-saving the same
-      // assignment must not create repeated notifications for that teacher.
-      if (
-        data.teacherContactId &&
-        data.teacherContactId !== existing.teacherContactId
-      ) {
-        travelPortalNotifications
-          .safeNotifyTravelCustomer({
-            contactId: data.teacherContactId,
-            tenantId: req.travelTenant.id,
-            title: "New trip assigned to you",
-            message: `${existing.destination || existing.tripCode} has been assigned to you. Open Trips to view the details and landing page.`,
-            type: "system",
-            link: "trips",
-          })
-          .catch((notificationError) => {
-            console.warn(
-              `[travel-trips] teacher assignment notification failed for tripCode=${existing.tripCode}: ${notificationError.message}`,
-            );
+      const updateTrip = (tx) => tx.tmcTrip.update({ where: { id }, data });
+      const updated = teacherIdsToSave === undefined
+        ? await updateTrip(prisma)
+        : await prisma.$transaction(async (tx) => {
+            const saved = await updateTrip(tx);
+            await tx.tmcTripTeacherAssignment.deleteMany({
+              where: { tenantId: req.travelTenant.id, tripId: id },
+            });
+            if (teacherIdsToSave.length) {
+              await tx.tmcTripTeacherAssignment.createMany({
+                data: teacherIdsToSave.map((teacherId) => ({
+                  tenantId: req.travelTenant.id,
+                  tripId: id,
+                  teacherContactId: teacherId,
+                })),
+              });
+            }
+            return saved;
           });
+
+      // Notify newly assigned teachers. Re-saving the same set does not
+      // generate duplicate notifications.
+      if (teacherIdsToSave !== undefined) {
+        const previousTeacherIds = new Set([
+          ...(existing.teacherAssignments || []).map((assignment) => Number(assignment.teacherContactId)),
+          ...(existing.teacherContactId ? [Number(existing.teacherContactId)] : []),
+        ]);
+        for (const contactId of teacherIdsToSave.filter((id) => !previousTeacherIds.has(id))) {
+          travelPortalNotifications
+            .safeNotifyTravelCustomer({
+              contactId,
+              tenantId: req.travelTenant.id,
+              title: "New trip assigned to you",
+              message: `${existing.destination || existing.tripCode} has been assigned to you. Open Trips to view the details and landing page.`,
+              type: "system",
+              link: "trips",
+            })
+            .catch((notificationError) => {
+              console.warn(
+                `[travel-trips] teacher assignment notification failed for tripCode=${existing.tripCode}: ${notificationError.message}`,
+              );
+            });
+        }
       }
 
       // PRD_TRAVEL_SUPPLIER_MASTER FR-3.2.a (G037) — auto-create draft PO on

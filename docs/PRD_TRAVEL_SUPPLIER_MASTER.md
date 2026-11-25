@@ -83,10 +83,10 @@ The supplier-payable side is the structural mirror of the customer-receivable si
 ### FR-3.3 Payable workflow (5 items)
 
 - **FR-3.3.a PO → Payable Record.** On PO-confirm, CRM creates a Payable Record with due date = PO-confirm-date + supplier's NET days (per FR-3.1.d).
-- **FR-3.3.b Payable state machine.** `pending` → `scheduled` (operator sets payment date + method) → `paid` (payment posted with reference: cheque no / UPI ref / bank ref / wire ref). Posts to audit chain.
+- **FR-3.3.b Payable state machine.** `pending` → `scheduled` (operator sets payment date + method) → `paid` (payment posted with reference: cheque no / UPI ref / bank ref / wire ref). Posts to audit log.
 - **FR-3.3.c Supplier invoice PDF upload + match-to-payable.** Supplier emails a PDF invoice; finance uploads it; CRM auto-matches by PNR + amount + supplier identity. Manual override path always available.
 - **FR-3.3.d Per-supplier aged payable bucket.** 0-30 / 31-60 / 61-90 / >90 day aging, exposed on supplier dashboard and tenant-level finance dashboard.
-- **FR-3.3.e Credit-limit hard-block + manager-approval override.** Booking-confirm blocked if `(current owed-amount + new PO total) > supplier.creditLimit`. Manager-role override prompt records `userId` + `reason` + `at` in the audit chain.
+- **FR-3.3.e Credit-limit hard-block + manager-approval override.** Booking-confirm blocked if `(current owed-amount + new PO total) > supplier.creditLimit`. Manager-role override prompt records `userId` + `reason` + `at` in the audit log.
 
 ### FR-3.4 Reconciliation (3 items)
 
@@ -118,7 +118,7 @@ The supplier-payable side is the structural mirror of the customer-receivable si
 
 - **Supplier index performance.** Tenant with up to 500 suppliers loads in <1s on demo box.
 - **PO PDF render.** <2s for a 20-line PO via pdfkit/pdf-lib (sibling to existing wellness PDF renderer at `backend/services/pdfRenderer.js`).
-- **Audit chain.** Every payment-state change, dispute change, and credit-limit override writes to the existing tamper-evident audit chain (sibling to current `routes/audit.js` writeAudit calls).
+- **Audit log.** Every payment-state change, dispute change, and credit-limit override is recorded through `writeAudit()`.
 - **Credit-limit check semantics.** Non-blocking (advisory chip) at quote-stage; blocking (hard stop + manager-approval override) at booking-confirm. Distinction matters for UX — operators draft quotes against speculative supplier capacity before confirming.
 - **Multi-currency.** Per FR-3.1.a, supplier carries primary currency. PO + payable + commission all stored in supplier-primary currency; converted to tenant base currency for tenant-level aggregate reports using daily FX snapshots.
 - **Audit log retention.** Dispute history + chargeback log retained for 7 years per Indian GST/IT statutory retention.
@@ -147,7 +147,7 @@ The supplier-payable side is the structural mirror of the customer-receivable si
 - **AC-6.1** Add new supplier "Air India Vacations" → GSTIN validated → appears in tenant supplier index sorted by recency → bookable from quote builder for whitelisted sub-brands.
 - **AC-6.2** Book a TMC trip referencing PNR `AI-XYZ123` against Air India → PO auto-created with `state=draft`, PNR linked, supplier-cost + customer-quoted populated, margin visible.
 - **AC-6.3** Upload supplier invoice PDF → auto-match against the corresponding PO by PNR + amount within tolerance → PO line transitions to `ready-to-settle`.
-- **AC-6.4** Payable scheduled at PO-confirm + 30 days (NET-30 supplier) → T-7 reminder fires → operator marks paid with UPI ref → payable transitions to `paid` → audit chain entry written.
+- **AC-6.4** Payable scheduled at PO-confirm + 30 days (NET-30 supplier) → T-7 reminder fires → operator marks paid with UPI ref → payable transitions to `paid` → audit log entry written.
 - **AC-6.5** Attempt booking that would push owed-to-supplier over credit limit → booking-confirm blocked → manager-approval prompt → manager overrides → audit entry includes `userId`, `reason`, `at`.
 - **AC-6.6** Per-supplier commission ledger for FY2026-27 shows accrued commissions per PO + recognized at settlement + TDS deductions for cumulative >₹5K.
 - **AC-6.7** Open dispute on PO-2026-0451 → status changes to `open` → supplier dashboard shows dispute → quote-builder warning chip appears on next quote against this supplier.
@@ -177,7 +177,7 @@ The supplier-payable side is the structural mirror of the customer-receivable si
 - **Existing `ItineraryItem` model** ([schema.prisma:4224](../backend/prisma/schema.prisma#L4224)) — already carries `supplierId`; same migration.
 - **Currency table** — multi-currency PO support; existing `Currency` model.
 - **PRD_RFU_GROUND_SERVICES** (future PRD) — RFU's per-portal hotel orchestrator will auto-register multiple Makkah/Madinah hotel suppliers; this PRD's supplier-master must accept programmatic supplier creation from RFU side.
-- **Audit chain infrastructure** (`routes/audit.js`, `lib/auditChain.js`) — payable + dispute state changes write here.
+- **Audit-log infrastructure** (`routes/audit.js`, `lib/audit.js`) — payable + dispute state changes write here.
 - **PDF renderer** (`backend/services/pdfRenderer.js`) — PO PDF export.
 
 ---

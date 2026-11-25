@@ -7,6 +7,307 @@
   overflow: visible !important;
 }
 
+.card.audit-log-toolbar {
+  position: relative;
+  z-index: 3;
+  overflow: visible;
+  padding: 0.8rem 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.audit-log-toolbar__main {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.audit-log-search {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex: 0 1 420px;
+  max-width: min(100%, 420px);
+  min-width: 0;
+  height: 2.65rem;
+  box-sizing: border-box;
+  padding: 0 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--text-secondary);
+}
+
+.audit-log-search > svg {
+  flex: 0 0 auto;
+  pointer-events: none;
+}
+
+.audit-log-search input {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  padding: 0 !important;
+  text-indent: 0 !important;
+  border: 0 !important;
+  border-radius: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.audit-log-search:focus-within {
+  outline: 2px solid color-mix(in srgb, var(--accent-color) 45%, transparent);
+  outline-offset: 1px;
+}
+
+/* Travel's shared toolbar density rule overrides direct toolbar labels.
+   Keep this search at a useful, bounded width instead of stretching across
+   the entire toolbar. */
+body[data-vertical="travel"] .travel-app-shell .travel-content-frame
+  .audit-log-toolbar__main > .audit-log-search {
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: min(100%, 420px) !important;
+  flex: 0 1 420px !important;
+}
+
+body[data-vertical="travel"] .travel-app-shell .travel-content-frame
+  .audit-log-toolbar .audit-log-search > input {
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  text-indent: 0 !important;
+}
+
+.audit-filter-control select:focus,
+.audit-filter-control input:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent-color) 45%, transparent);
+  outline-offset: 1px;
+}
+
+.audit-filter-picker {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.audit-filter-add-button,
+.audit-filter-clear-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 2.65rem;
+  padding: 0.45rem 0.8rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.82rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.audit-filter-add-button:hover,
+.audit-filter-clear-button:hover,
+.audit-filter-control > button:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.audit-filter-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  padding: 0 0.2rem;
+  border-radius: 999px;
+  background: var(--accent-color);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.audit-filter-menu {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  width: min(290px, calc(100vw - 2rem));
+  padding: 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--card-bg, var(--input-bg));
+  box-shadow: 0 14px 36px rgba(15, 23, 42, 0.22);
+}
+
+.audit-filter-menu__title {
+  margin: 0 0 0.2rem;
+  padding: 0.4rem 0.55rem 0.65rem;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.audit-filter-menu > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-width: 0;
+  min-height: 3.6rem;
+  margin: 0;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
+
+.audit-filter-menu > button:not(:disabled):hover {
+  background: color-mix(in srgb, var(--accent-color) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent-color) 24%, transparent);
+}
+
+.audit-filter-menu > button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-color) 55%, transparent);
+  outline-offset: 1px;
+}
+
+.audit-filter-menu > button:disabled {
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--accent-color) 6%, transparent);
+  border-color: color-mix(in srgb, var(--accent-color) 16%, transparent);
+  cursor: default;
+}
+
+body[data-vertical="travel"] .travel-app-shell .travel-content-frame
+  .audit-log-toolbar .audit-filter-menu > button {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: 100% !important;
+  min-height: 3.6rem !important;
+  max-height: none !important;
+  flex: 1 1 auto !important;
+  margin: 0 !important;
+  padding: 0.65rem 0.75rem !important;
+  white-space: normal !important;
+}
+
+.audit-filter-menu__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.audit-filter-menu__copy strong {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.audit-filter-menu__copy small {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+
+.audit-filter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border-color);
+}
+
+.audit-filter-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  padding: 0.35rem 0.4rem 0.35rem 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--input-bg) 75%, transparent);
+}
+
+.audit-filter-control > label,
+.audit-filter-range-field > label {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.audit-filter-control select {
+  min-width: 150px;
+}
+
+.audit-filter-control > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.audit-filter-control--range {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  flex: 1 1 560px;
+  gap: 0.55rem;
+}
+
+.audit-filter-timezone {
+  grid-column: 1 / -1;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+
+.audit-filter-timezone strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.audit-filter-range-field {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+.audit-filter-range-field input {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+}
+
 .audit-log-table-card,
 .audit-log-table-card .top-scroll-sync,
 .audit-log-table-card .top-scroll-sync__bottom {
@@ -20,11 +321,10 @@
 }
 
 .audit-log-expand-column { width: 4%; }
-.audit-log-timestamp-column { width: 25%; }
-.audit-log-user-column { width: 29%; }
-.audit-log-action-column { width: 19%; }
-.audit-log-entity-column { width: 14%; }
-.audit-log-id-column { width: 9%; }
+.audit-log-timestamp-column { width: 20%; }
+.audit-log-user-column { width: 21%; }
+.audit-log-activity-column { width: 29%; }
+.audit-log-details-column { width: 26%; }
 
 .audit-log-table :is(th, td) {
   min-width: 0;
@@ -38,6 +338,95 @@
 
 .audit-log-table td > :is(div, span) {
   max-width: 100%;
+}
+
+.audit-log-activity {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.audit-log-summary {
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.audit-overview {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.25rem;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--input-bg);
+}
+
+.audit-overview__heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.audit-overview__eyebrow {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.audit-overview__heading h2 {
+  margin: 0.25rem 0 0;
+  font-size: 1.1rem;
+  line-height: 1.35;
+}
+
+.audit-overview__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
+  gap: 0.75rem;
+}
+
+.audit-overview-item {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.audit-overview-item__label {
+  margin-bottom: 0.3rem;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.audit-overview-item__value {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  overflow-wrap: anywhere;
+  font-size: 0.82rem;
+}
+
+.audit-overview-item__value small {
+  color: var(--text-secondary);
+}
+
+.audit-overview__details h3 {
+  margin: 0 0 0.65rem;
+  font-size: 0.85rem;
+}
+
+.audit-detail-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  overflow-wrap: anywhere;
 }
 
 /* Generic CRM only: keep audit rows inside a stable viewport. Filtering,
@@ -62,6 +451,51 @@ body[data-vertical="generic"] .travel-audit-page .audit-log-table thead th {
 }
 
 @media (max-width: 700px) {
+  .card.audit-log-toolbar {
+    padding: 0.65rem;
+  }
+
+  .audit-log-toolbar__main {
+    gap: 0.45rem;
+  }
+
+  .audit-filter-add-button {
+    padding: 0.45rem 0.6rem;
+  }
+
+  .audit-filter-add-button > span:not(.audit-filter-count) {
+    display: none;
+  }
+
+  .audit-filter-controls {
+    align-items: stretch;
+  }
+
+  .audit-filter-control,
+  .audit-filter-control--range {
+    flex: 1 1 100%;
+  }
+
+  .audit-filter-control select {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .audit-filter-control--range {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+  }
+
+  .audit-filter-range-field {
+    grid-column: 1 / -1;
+    width: 100%;
+    flex: 1 1 auto;
+  }
+
+  .audit-filter-control--range > button {
+    align-self: flex-end;
+  }
+
   .audit-log-table :is(th, td) {
     padding: 0.45rem 0.3rem !important;
     font-size: 0.68rem !important;
@@ -69,8 +503,7 @@ body[data-vertical="generic"] .travel-audit-page .audit-log-table thead th {
 
   .audit-log-expand-column { width: 5%; }
   .audit-log-timestamp-column { width: 24%; }
-  .audit-log-user-column { width: 27%; }
-  .audit-log-action-column { width: 20%; }
-  .audit-log-entity-column { width: 14%; }
-  .audit-log-id-column { width: 10%; }
+  .audit-log-user-column { width: 28%; }
+  .audit-log-activity-column { width: 43%; }
+  .audit-log-details-column { display: none; }
 }

@@ -93,7 +93,7 @@ async function defaultStubNotifier(milestone, invoice, windowDays) {
 /**
  * Fire-and-forget audit wrapper. Mirrors walletExpiryEngine.writeAuditSafe.
  * Exposed via module.exports so the per-milestone loop can be self-spied
- * in tests without touching audit.js's real chain logic.
+ * in tests without touching audit.js's real Prisma write.
  */
 function writeAuditSafe(...args) {
   return writeAudit(...args).catch((err) => {

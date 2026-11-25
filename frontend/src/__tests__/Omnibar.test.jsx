@@ -42,6 +42,7 @@ import { MemoryRouter } from 'react-router-dom';
 import Omnibar from '../components/Omnibar';
 import { AuthContext } from '../App';
 import { SearchQueryProvider } from '../components/search/SearchQueryContext';
+import { ActiveSubBrandProvider } from '../utils/subBrand';
 
 const navigateMock = vi.fn();
 vi.mock('react-router-dom', async () => {
@@ -105,6 +106,7 @@ describe('Omnibar (inline top-bar)', () => {
   beforeEach(() => {
     navigateMock.mockClear();
     fetchApi.mockClear();
+    window.sessionStorage.removeItem('travel.activeSubBrand');
     fetchApi.mockImplementation((url) => {
       if (url === '/api/pages/me') {
         return Promise.resolve({
@@ -559,6 +561,55 @@ describe('Omnibar (inline top-bar)', () => {
     expect(meetingRow.querySelector('svg.lucide-calendar-clock')).toBeInTheDocument();
     fireEvent.click(row);
     expect(navigateMock).toHaveBeenCalledWith('/travel/forms');
+  });
+
+  it('finds and opens TMC Teacher OnBoarding from global search', async () => {
+    window.sessionStorage.setItem('travel.activeSubBrand', 'tmc');
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') {
+        return Promise.resolve({
+          pages: [
+            {
+              path: '/travel/tmc/teachers',
+              label: 'Teacher OnBoarding',
+              description: 'Register and manage TMC teachers',
+              category: 'Travel Administration',
+            },
+          ],
+        });
+      }
+      if (url.startsWith('/api/search?q=teacher')) {
+        return Promise.resolve({ contacts: [{ id: 9, name: 'Mr. Teacher', email: 'teacher@example.com' }] });
+      }
+      return Promise.resolve({});
+    });
+
+    render(
+      <SearchQueryProvider>
+        <MemoryRouter>
+          <AuthContext.Provider value={{
+            user: { userId: 1, role: 'ADMIN' },
+            token: 'tk',
+            tenant: { vertical: 'travel' },
+            loading: false,
+          }}>
+            <ActiveSubBrandProvider>
+              <Omnibar />
+            </ActiveSubBrandProvider>
+          </AuthContext.Provider>
+        </MemoryRouter>
+      </SearchQueryProvider>,
+    );
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith('/api/pages/me', { silent: true }));
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'teacher' } });
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 350)));
+    expect(fetchApi).toHaveBeenCalledWith('/api/search?q=teacher&subBrand=tmc', { silent: true });
+    const row = screen.getByRole('option', { name: /Teacher OnBoarding/i });
+    fireEvent.click(row);
+    expect(navigateMock).toHaveBeenCalledWith('/travel/tmc/teachers');
   });
 
   it('finds Travel CRM features by task aliases instead of requiring exact menu labels', async () => {

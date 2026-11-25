@@ -49,7 +49,7 @@
  *
  * Pattern
  * ───────
- * Mirrors backend/test/routes/audit-chain.test.js — prisma-singleton-patch
+ * Mirrors backend/test/routes/audit.test.js — prisma-singleton-patch
  * BEFORE requiring the router, bare-express mount, supertest, real HS256
  * JWTs signed against config/secrets.js's dev-fallback secret. We do NOT
  * mock middleware/auth — the actual verifyToken runs unmodified so the 401

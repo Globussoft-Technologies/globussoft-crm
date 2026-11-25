@@ -1268,6 +1268,39 @@ describe('<Invoices /> — page surface', () => {
     }
   });
 
+  it('opens the invoice in a branded preview dialog with a direct PDF download action', async () => {
+    const fetchSpy = vi.fn(() => Promise.resolve({
+      ok: true,
+      blob: () => Promise.resolve(new Blob(['%PDF-preview'], { type: 'application/pdf' })),
+    }));
+    const origFetch = global.fetch;
+    const origCreate = URL.createObjectURL;
+    const origRevoke = URL.revokeObjectURL;
+    global.fetch = fetchSpy;
+    URL.createObjectURL = vi.fn(() => 'blob:invoice-preview');
+    URL.revokeObjectURL = vi.fn();
+
+    try {
+      renderInvoices();
+      await waitFor(() => expect(screen.getByText('INV-001')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /View invoice INV-001/i }));
+
+      const dialog = await screen.findByRole('dialog', { name: 'Invoice preview INV-001' });
+      expect(within(dialog).getByText('Invoice PDF')).toBeInTheDocument();
+      expect(within(dialog).getByRole('link', { name: 'Download invoice INV-001' }))
+        .toHaveAttribute('download', 'INV-001.pdf');
+      expect(within(dialog).getByTitle('Invoice preview INV-001')).toHaveAttribute('src', 'blob:invoice-preview');
+
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close invoice preview' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    } finally {
+      global.fetch = origFetch;
+      URL.createObjectURL = origCreate;
+      URL.revokeObjectURL = origRevoke;
+    }
+  });
+
   it('PDF fetch failure surfaces a notify.error', async () => {
     const fetchSpy = vi.fn(() => Promise.resolve({ ok: false, blob: () => Promise.resolve(new Blob()) }));
     const origFetch = global.fetch;

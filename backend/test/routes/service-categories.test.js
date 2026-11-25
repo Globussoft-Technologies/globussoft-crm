@@ -46,7 +46,7 @@
  *   monkey-patch BEFORE the router is required, replace middleware/wellnessRole
  *   (loaded via require-cache injection) with a configurable pass-through, and
  *   patch lib/audit.writeAudit in the require cache to assert action/details
- *   without a live audit chain. Drive via supertest. No real DB.
+ *   without a real database-backed audit write. Drive via supertest. No real DB.
  */
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';
@@ -74,10 +74,6 @@ Module._cache[auditPath] = {
   exports: {
     writeAudit: writeAuditMock,
     diffFields: diffFieldsMock,
-    canonicalize: (x) => x,
-    computeHash: () => 'h',
-    genesisFor: () => 'g',
-    backfillTenantChain: async () => ({}),
   },
 };
 

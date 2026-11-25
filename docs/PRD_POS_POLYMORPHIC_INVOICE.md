@@ -86,7 +86,7 @@ Zylu's polymorphic invoice spine ships THREE tables (today's `Sale` + `SaleLineI
 - `backend/prisma/schema.prisma:3300-...` — existing `Membership` model (one of the 6 line types)
 - `backend/services/pdfRenderer.js::renderInvoicePDF()` — existing generic-invoice PDF renderer (extends with `renderWellnessInvoicePDF()` per FR-3.7)
 - `backend/routes/billing.js` — existing generic `/api/billing` routes (preserved against `DealInvoice` per DD-5.2)
-- `backend/lib/audit.js` `writeAudit()` — existing tamper-evident chain; new `INVOICE_*` + `PAYMENT_*` event family flows through unchanged
+- `backend/lib/audit.js` `writeAudit()` — records new `INVOICE_*` + `PAYMENT_*` events in the tenant audit log
 - `backend/lib/idempotency.js` — existing idempotency key replay-cache infrastructure (re-used per FR-3.6)
 - `PRD_POS_NEW_SALE.md` (D17) — UI consumer of the routes this PRD defines; both PRDs are dependent + ship in coordination
 - `PRD_WALLET_TOPUP.md` (D16) — `WALLET_TOPUP` line type is the schema reflection of D16's customer-portal top-up flow
@@ -99,7 +99,7 @@ The today shape has THREE structural gaps that the polymorphic spine needs to ad
 
 2. **The generic-CRM Billing page reads from `Invoice` directly.** If we add columns or change vocab on the existing `Invoice` model, the generic-CRM Billing page breaks. DD-5.2 (rename `Invoice` → `DealInvoice` clean-fork vs add `kind` discriminator) is the load-bearing decision. The PRD recommends the clean fork (rename) — the generic-CRM Invoice surface is small (Billing.jsx + Invoices.jsx + ~6 routes); the rename can ship in 1 commit with backward-compat aliasing for ~30 days post-deploy.
 
-3. **The audit-hash-chain is append-only.** Adding new event vocab (`INVOICE_DRAFTED / INVOICE_COMPLETED / INVOICE_VOIDED / INVOICE_REFUNDED / PAYMENT_RECORDED / PAYMENT_REFUNDED`) is purely additive — the `/api/audit/verify` engine accepts any new entity vocabulary without code change. BUT the existing `SALE_CREATED / SALE_FINALIZED` events stay on the chain (don't rewrite history); the new `INVOICE_*` events are emitted ALONGSIDE the existing SALE_* events during a transitional window so downstream tooling can adapt. Phase 2 sunsets the `SALE_*` events.
+3. **Audit history is retained.** Adding new event vocab (`INVOICE_DRAFTED / INVOICE_COMPLETED / INVOICE_VOIDED / INVOICE_REFUNDED / PAYMENT_RECORDED / PAYMENT_REFUNDED`) is additive. Existing `SALE_CREATED / SALE_FINALIZED` events remain in the audit log; the new `INVOICE_*` events are emitted ALONGSIDE the existing SALE_* events during a transitional window so downstream tooling can adapt. Phase 2 sunsets the `SALE_*` events.
 
 This PRD's slice 1 ships the schema + the routes; slice 2 ships the PDF renderer; slice 3 ships the per-location number sequence engine; slice 4 ships the migration of existing wellness Sale data into Invoice + InvoiceLine; slice 5 ships the wellness frontend Invoice page; slice 6 ships the generic-CRM Invoice rename + back-compat aliasing.
 
@@ -281,7 +281,7 @@ prisma.$transaction(async (tx) => {
   if (sum !== invoice.grandTotalCents) throw new Error('PAYMENT_SUM_MISMATCH');
   return invoice;
 });
-// 9. AFTER tx commits — emit audit INVOICE_COMPLETED + PAYMENT_RECORDED × M (outside tx for hash-chain reasons per existing pattern)
+// 9. AFTER tx commits — emit audit INVOICE_COMPLETED + PAYMENT_RECORDED × M (outside the transaction so logging failures cannot undo the completed transaction)
 ```
 
 If any step throws, the entire tx rolls back; no orphaned Invoice / partial wallet debit / inventory adjustment.
@@ -309,7 +309,7 @@ Extends `backend/services/pdfRenderer.js` with `renderWellnessInvoicePDF(invoice
 
 ### FR-3.8 Audit log: `INVOICE_*` + `PAYMENT_*` events
 
-New event vocab (additive — `/api/audit/verify` engine accepts without code change; entity = `INVOICE` or `PAYMENT`):
+New event vocab is recorded as audit events (entity = `INVOICE` or `PAYMENT`):
 
 - `INVOICE_DRAFTED` — emitted on POST /wellness-invoices (DRAFT created)
 - `INVOICE_COMPLETED` — emitted on POST /finalize (DRAFT → COMPLETED)
@@ -363,7 +363,7 @@ Idempotent (re-running re-creates only missing rows; `@@unique` on `saleId` prev
 
 - **Per-tenant + per-location scoping:** every query carries `tenantId` filter (enforced by global guard + per-route `tenantWhere()` helper); per-location queries add `locationId` filter; the unique constraint `@@unique([locationId, invoiceNumber])` enforces per-location uniqueness at the database level (not just route-layer validation).
 - **All monetary fields are CENTS (Int) not Decimal/Float** — consistent with `WalletTransaction` pattern per PRD_WALLET_TOPUP D16's DD-5.6. Avoids Float-rounding bugs across the GST + discount + wallet-redemption + payment-splitter computations. Frontend formats via `formatMoney(cents / 100, currency, locale)`.
-- **Audit immutability via existing audit-hash-chain** — `lib/audit.js`'s `writeAudit()` appends to the chain; `/api/audit/verify` traverses the chain; the new `INVOICE_*` + `PAYMENT_*` events flow through unchanged.
+- **Audit logging** — `lib/audit.js`'s `writeAudit()` records the new `INVOICE_*` + `PAYMENT_*` events in tenant history.
 - **PDF rendering via existing pdfRenderer.js** — extends with `renderWellnessInvoicePDF()`. Both formats (THERMAL + A4) render in <1s per invoice on the demo box's hardware budget (PDFKit is fast; no remote rendering).
 - **Idempotency on POST /wellness-invoices/* via `Idempotency-Key` header** — re-uses `lib/idempotency.js` cache + replay mechanism. Cache TTL = 24h (matches `lib/idempotency.js` default).
 - **Idempotency on the backfill script** — re-runnable; `@@unique` on `saleId` + `idempotencyKey` prevent duplicate Invoice creation.
@@ -469,7 +469,7 @@ None for v1 — pure schema + route work. No third-party credentials required.
 - **Existing generic `Invoice` model** at [backend/prisma/schema.prisma:842-881](../backend/prisma/schema.prisma#L842-L881) — RENAMED to `DealInvoice` per DD-5.2 path (a); back-compat adapter at `backend/lib/dealInvoiceAdapter.js` for 30d.
 - **Existing generic `Payment` model** at [backend/prisma/schema.prisma:2365-2384](../backend/prisma/schema.prisma#L2365-L2384) — RETAINED; `InvoicePayment.gatewayPaymentId Int?` FKs to it for CARD / ONLINE / UPI methods.
 - **Existing `pdfRenderer.js`** at `backend/services/pdfRenderer.js` — extends with `renderWellnessInvoicePDF()`.
-- **Existing `audit.js`** at `backend/lib/audit.js` — `writeAudit()` accepts the new `INVOICE_*` + `PAYMENT_*` events; `/api/audit/verify` is event-vocabulary-agnostic.
+- **Existing `audit.js`** at `backend/lib/audit.js` — `writeAudit()` records the new `INVOICE_*` + `PAYMENT_*` events.
 - **Existing `idempotency.js`** at `backend/lib/idempotency.js` — `Idempotency-Key` header replay-cache.
 - **Existing `notificationService.js`** — for email-receipt flow.
 - **Existing `sms.js`** + tenant SMS config — for SMS-receipt flow.
@@ -564,7 +564,7 @@ Slices 1 + 2 + 3 + 4 must ship in order (each depends on the prior). Slice 5 + 6
 
 **Cross-PRD coordination check:** Before implementation starts, confirm:
 
-- `routes/audit.js` `/verify` endpoint accepts the `INVOICE_*` + `PAYMENT_*` event family without code change (entity = `INVOICE` or `PAYMENT` per FR-3.8).
+- `writeAudit()` records the `INVOICE_*` + `PAYMENT_*` event family in the tenant audit log.
 - `backend/services/pdfRenderer.js` is willing to host a new `renderWellnessInvoicePDF()` helper alongside existing `renderInvoicePDF` (which now applies to `DealInvoice`).
 - `backend/lib/dealInvoiceAdapter.js` is a clean thin shim — deprecation warning logged, no behavioural divergence from `prisma.dealInvoice` direct calls.
 - `backend/scripts/backfill-wellness-invoices.js` is idempotent — re-runnable without duplicate Invoice creation; `@@unique([saleId])` on Invoice enforces it.
@@ -573,5 +573,5 @@ Slices 1 + 2 + 3 + 4 must ship in order (each depends on the prior). Slice 5 + 6
 - The legacy `/api/pos/sales/*` routes continue to write to `Sale` + `SaleLineItem` during the transitional window; the backfill script later mirrors that data into Invoice + InvoiceLine.
 - The wellness reporting layer (`backend/routes/wellness.js` rollup queries) is migrated to read from `Invoice` + `InvoiceLine` in Phase 2 (NOT Phase 1; Phase 1 keeps reading from `Sale` for stability).
 - The generic `/api/billing` routes + `/api/invoices` generic surface continue to work against `DealInvoice` via the adapter for 30d post-deploy; sunset decision in Phase 2.
-- Existing audit rows (`SALE_CREATED` / `SALE_FINALIZED` from before this PRD) remain on the chain; both vocab families coexist; Phase 2 sunsets `SALE_*` audit emission.
+- Existing audit rows (`SALE_CREATED` / `SALE_FINALIZED` from before this PRD) remain in tenant audit history; both vocab families coexist; Phase 2 sunsets `SALE_*` audit emission.
 - The `Tenant.gstRate Float?` field exists OR is added in this PRD's slice 1 schema migration (today's CRM has `Tenant.taxRate` per generic-CRM pattern; verify and either reuse or add `gstRate` explicitly for the GST-split shape).

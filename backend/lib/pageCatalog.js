@@ -950,6 +950,13 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'tmc_catalogue', action: 'read' }],
   },
   {
+    path: '/travel/tmc/teachers',
+    label: 'Teacher OnBoarding',
+    description: 'Register and manage TMC teachers, assigned trips, and parent registrations',
+    category: 'Travel Administration',
+    requiredPermissions: [{ module: 'roles', action: 'read' }],
+  },
+  {
     path: '/travel/web-checkins',
     label: 'Web Check-ins',
     description: 'Airline web check-in tracking',

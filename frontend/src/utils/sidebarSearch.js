@@ -9,6 +9,7 @@ export const TRAVEL_SIDEBAR_PAGE_SPECS = [
   // { path: '/travel/pois/pending', label: 'POI Approvals' }, // hidden 2026-08-28 — preserved for future re-enable
   { path: '/travel/trips', label: 'TMC Trips', brand: 'tmc' },
   { path: '/travel/tmc/catalogue', label: 'TMC Catalogue', brand: 'tmc' },
+  { path: '/travel/tmc/teachers', label: 'Teacher OnBoarding', description: 'Register and manage TMC teachers', brand: 'tmc' },
   { path: '/travel/web-checkins', label: 'Web Check-ins' },
   { path: '/travel/passport-verification', label: 'Passport' },
   { path: '/travel/cost-master', label: 'Cost Master' },
@@ -67,6 +68,7 @@ const TRAVEL_PAGE_ALIASES = {
   '/travel/itineraries': ['trip planner', 'day by day', 'tour plan'],
   '/travel/trips': ['school trips', 'educational tours'],
   '/travel/tmc/catalogue': ['packages', 'school tour catalogue'],
+  '/travel/tmc/teachers': ['teacher management', 'registered teachers', 'teacher portal', 'tmc teachers'],
   '/travel/web-checkins': ['airline check in', 'boarding pass'],
   '/travel/passport-verification': ['passport ocr', 'passport validation'],
   '/travel/cost-master': ['costing', 'rates', 'prices'],
@@ -315,6 +317,8 @@ const TMC_HIDDEN_TRAVEL_PAGE_PATHS = new Set([
   '/gmail',
 ]);
 
+const TMC_ACTIVE_ONLY_TRAVEL_PAGE_PATHS = new Set(['/travel/tmc/teachers']);
+
 // Entries returned by /api/pages/me are merged with the local catalogue.
 // Keep this deny-list Generic-only so a stale/server-provided entry cannot
 // make intentionally hidden pages appear in search again.
@@ -415,6 +419,7 @@ export function filterSidebarPages(
   for (const page of tenantVisiblePages) {
     const spec = TRAVEL_SIDEBAR_PAGE_MAP.get(page?.path);
     if (!spec) continue;
+    if (TMC_ACTIVE_ONLY_TRAVEL_PAGE_PATHS.has(page?.path) && activeSubBrand !== 'tmc') continue;
     // Mirror the travel sidebar's conditional links. TMC has no web
     // check-ins, sightseeing, supplier credentials, quote-builder, or Gmail
     // entry. These remain searchable for other sub-brands and in All mode.

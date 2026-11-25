@@ -102,7 +102,7 @@ async function defaultStubNotifier(payable, supplier, windowDays) {
 /**
  * Fire-and-forget audit wrapper. Mirrors travelMilestoneRemindersEngine's
  * shape. Exposed via module.exports so the per-payable loop can be self-
- * spied in tests without touching audit.js's real chain logic.
+ * spied in tests without touching audit.js's real Prisma write.
  */
 function writeAuditSafe(...args) {
   return writeAudit(...args).catch((err) => {

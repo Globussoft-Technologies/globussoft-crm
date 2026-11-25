@@ -12,16 +12,14 @@
  *
  * Why this file is distinct from sibling audit test files
  * ───────────────────────────────────────────────────────
- *   audit-chain.test.js pins GET /verify + POST /backfill (the #558 strict
- *   hash-chain tamper-evidence trail). audit-viewer.test.js pins
- *   /api/audit-viewer (the separate viewer router for #621 ADMIN-only
- *   contract). NEITHER covers GET /api/audit, the simple LIST handler — this
- *   file fills that gap.
+ *   audit-viewer.test.js pins /api/audit-viewer (the separate viewer router
+ *   for #621 ADMIN-only contract). This file covers the simple GET /api/audit
+ *   list handler.
  *
  * Contracts asserted
  * ──────────────────
  *   Happy path:
- *     1. ADMIN + no filters → 200 + array; findMany called with where={tenantId} only.
+ *     1. ADMIN + no filters → 200 + array; findMany is scoped by tenant and vertical.
  *     2. ADMIN + ?entity=Contact → where includes entity:'Contact'.
  *     3. ADMIN + ?action=DELETE → where includes action:'DELETE'.
  *     4. ADMIN + ?entity=X&action=Y → both filters AND'd.
@@ -29,7 +27,7 @@
  *     6. Response is a JSON array (not envelope).
  *     7. take: 100 enforced.
  *     8. orderBy: { createdAt: 'desc' } enforced.
- *     9. include: { user: { select: { id, name, email } } } enforced.
+ *     9. Actor names are hydrated in a separate tenant/vertical-scoped query.
  *   Auth/RBAC:
  *    10. MANAGER → 403 RBAC_DENIED.
  *    11. USER    → 403 RBAC_DENIED.
@@ -42,7 +40,7 @@
  *
  * Mocking strategy
  * ────────────────
- *   Mirror audit-chain.test.js: patch the prisma singleton's auditLog model
+ *   Exercise the audit list endpoint using a patched prisma singleton's auditLog model
  *   with vi.fn() BEFORE requiring the router (CJS top-level require resolves
  *   the singleton at import time). Mount on a bare express app with
  *   supertest. Real verifyToken + verifyRole middleware run unmodified —
@@ -56,10 +54,11 @@ import prisma from '../../lib/prisma.js';
 // Patch BEFORE requiring the router.
 prisma.auditLog = {
   findMany: vi.fn(),
-  findFirst: vi.fn(),
-  create: vi.fn(),
-  update: vi.fn(),
 };
+prisma.user = prisma.user || {};
+prisma.user.findMany = vi.fn();
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -96,8 +95,6 @@ function sampleLog(overrides = {}) {
     tenantId: 1,
     details: JSON.stringify({ name: 'Test Row' }),
     createdAt: new Date('2026-05-26T10:00:00Z'),
-    prevHash: 'a'.repeat(64),
-    hash: 'b'.repeat(64),
     user: { id: 5, name: 'Test User', email: 'test@x.local' },
     ...overrides,
   };
@@ -111,10 +108,12 @@ beforeAll(() => {
 beforeEach(() => {
   prisma.auditLog.findMany.mockReset();
   prisma.auditLog.findMany.mockResolvedValue([]);
+  prisma.user.findMany.mockReset().mockResolvedValue([]);
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
 });
 
 describe('GET /api/audit — ADMIN-only listing, no filters', () => {
-  test('ADMIN + no filters → 200 + JSON array; findMany where={tenantId:1} only', async () => {
+  test('ADMIN + no filters → 200 + JSON array; findMany is tenant and vertical scoped', async () => {
     const rows = [sampleLog({ id: 1 }), sampleLog({ id: 2 })];
     prisma.auditLog.findMany.mockResolvedValueOnce(rows);
 
@@ -127,9 +126,19 @@ describe('GET /api/audit — ADMIN-only listing, no filters', () => {
     expect(res.body.length).toBe(2);
     expect(prisma.auditLog.findMany).toHaveBeenCalledTimes(1);
     const callArg = prisma.auditLog.findMany.mock.calls[0][0];
-    expect(callArg.where).toEqual({ tenantId: 1 });
+    expect(callArg.where).toEqual({ tenantId: 1, tenant: { is: { vertical: 'generic' } } });
     expect(callArg.where.entity).toBeUndefined();
     expect(callArg.where.action).toBeUndefined();
+  });
+
+  test('fails closed when the tenant has no valid vertical', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce(null);
+    const res = await request(makeApp())
+      .get('/api/audit')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN', 1)}`);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('AUDIT_SCOPE_INVALID');
+    expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
   });
 
   test('empty query string (just ?) → no spurious entity/action keys in where', async () => {
@@ -140,7 +149,7 @@ describe('GET /api/audit — ADMIN-only listing, no filters', () => {
 
     expect(res.status).toBe(200);
     const callArg = prisma.auditLog.findMany.mock.calls[0][0];
-    expect(callArg.where).toEqual({ tenantId: 1 });
+    expect(callArg.where).toEqual({ tenantId: 1, tenant: { is: { vertical: 'generic' } } });
     expect('entity' in callArg.where).toBe(false);
     expect('action' in callArg.where).toBe(false);
   });
@@ -153,7 +162,11 @@ describe('GET /api/audit — ?entity / ?action filters', () => {
       .get('/api/audit?entity=Contact')
       .set('Authorization', `Bearer ${tokenFor('ADMIN', 1)}`);
     const callArg = prisma.auditLog.findMany.mock.calls[0][0];
-    expect(callArg.where).toEqual({ tenantId: 1, entity: 'Contact' });
+    expect(callArg.where).toEqual({
+      tenantId: 1,
+      tenant: { is: { vertical: 'generic' } },
+      entity: 'Contact',
+    });
   });
 
   test('?action=DELETE → where includes action:"DELETE"', async () => {
@@ -162,7 +175,11 @@ describe('GET /api/audit — ?entity / ?action filters', () => {
       .get('/api/audit?action=DELETE')
       .set('Authorization', `Bearer ${tokenFor('ADMIN', 1)}`);
     const callArg = prisma.auditLog.findMany.mock.calls[0][0];
-    expect(callArg.where).toEqual({ tenantId: 1, action: 'DELETE' });
+    expect(callArg.where).toEqual({
+      tenantId: 1,
+      tenant: { is: { vertical: 'generic' } },
+      action: 'DELETE',
+    });
   });
 
   test('?entity=Deal&action=UPDATE → both filters AND-composed into where', async () => {
@@ -173,13 +190,14 @@ describe('GET /api/audit — ?entity / ?action filters', () => {
     const callArg = prisma.auditLog.findMany.mock.calls[0][0];
     expect(callArg.where).toEqual({
       tenantId: 1,
+      tenant: { is: { vertical: 'generic' } },
       entity: 'Deal',
       action: 'UPDATE',
     });
   });
 });
 
-describe('GET /api/audit — pagination, ordering, includes', () => {
+describe('GET /api/audit — pagination, ordering, and actor scope', () => {
   test('take: 100 enforced on findMany call', async () => {
     prisma.auditLog.findMany.mockResolvedValueOnce([]);
     await request(makeApp())
@@ -198,14 +216,26 @@ describe('GET /api/audit — pagination, ordering, includes', () => {
     expect(callArg.orderBy).toEqual({ createdAt: 'desc' });
   });
 
-  test('include: { user: { select: { id, name, email } } } enforced', async () => {
-    prisma.auditLog.findMany.mockResolvedValueOnce([]);
+  test('actor lookup is tenant and vertical scoped instead of using an unfiltered relation include', async () => {
+    prisma.auditLog.findMany.mockResolvedValueOnce([sampleLog()]);
     await request(makeApp())
       .get('/api/audit')
       .set('Authorization', `Bearer ${tokenFor('ADMIN', 1)}`);
     const callArg = prisma.auditLog.findMany.mock.calls[0][0];
-    expect(callArg.include).toEqual({
-      user: { select: { id: true, name: true, email: true } },
+    expect(callArg.include).toBeUndefined();
+    expect(prisma.user.findMany).toHaveBeenCalledWith({
+      where: {
+        id: { in: [5] },
+        tenantId: 1,
+        tenant: { is: { vertical: 'generic' } },
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        tenantId: true,
+        tenant: { select: { vertical: true } },
+      },
     });
   });
 
@@ -263,7 +293,7 @@ describe('GET /api/audit — RBAC + auth gate', () => {
 });
 
 describe('GET /api/audit — multi-tenant isolation', () => {
-  test("token's tenantId=99 → findMany scoped to where.tenantId === 99 (from req.user, not req.body)", async () => {
+  test("token's tenantId=99 → findMany scoped to tenant 99 and its vertical", async () => {
     prisma.auditLog.findMany.mockResolvedValueOnce([]);
     const res = await request(makeApp())
       .get('/api/audit')
@@ -275,6 +305,7 @@ describe('GET /api/audit — multi-tenant isolation', () => {
     expect(res.status).toBe(200);
     const callArg = prisma.auditLog.findMany.mock.calls[0][0];
     expect(callArg.where.tenantId).toBe(99);
+    expect(callArg.where.tenant).toEqual({ is: { vertical: 'generic' } });
   });
 });
 

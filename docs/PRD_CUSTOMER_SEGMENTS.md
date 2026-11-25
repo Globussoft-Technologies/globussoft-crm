@@ -101,7 +101,7 @@ Operators tolerate the gap because the bookmark workaround mostly works. The pai
 - `frontend/src/pages/wellness/Patients.jsx` + `frontend/src/pages/Contacts.jsx` + `frontend/src/pages/Leads.jsx` + `frontend/src/pages/Pipeline.jsx` + `frontend/src/pages/Invoices.jsx` — the 5 consumer pages that will gain "Save as Segment" affordances
 - `backend/routes/wellness.js` (Patients list endpoint) + `backend/routes/contacts.js` + `backend/routes/deals.js` + `backend/routes/billing.js` (or invoices route) — the 5 backend list endpoints that gain the `?segmentId=:id` parameter for filter composition
 - `backend/cron/` engine pattern (per CLAUDE.md cron taxonomy — 22 engines today) — new `segmentEvaluationEngine.js` follows the same pattern
-- `backend/lib/audit.js` `writeAudit()` — new `SEGMENT_*` action set flows through the existing tamper-evident chain
+- `backend/lib/audit.js` `writeAudit()` — new `SEGMENT_*` actions are recorded in the tenant audit log
 - `PRD_TAG_MASTER.md` (D12) — segments can reference tag names in predicates; cross-dependency on the Tag Master read API
 - `PRD_AI_CHAT_HISTORY.md` (D13) — segments feed AI-summarisation Phase 2 ("describe this segment in 1 sentence")
 - `PRD_IMPORT_EXPORT_JOBS.md` (D10) — segment-membership CSV exports flow through the async job infra for >10k-row sets
@@ -324,7 +324,7 @@ Adds `segmentEvaluationEngine` to the cron taxonomy table in `CLAUDE.md` (engine
 
 ### FR-3.10 Audit log integration
 
-New audit chain entity `SEGMENT` with actions (mirrors AI_HISTORY taxonomy from PRD_AI_CHAT_HISTORY.md):
+New audit log entity `SEGMENT` with actions (mirrors AI_HISTORY taxonomy from PRD_AI_CHAT_HISTORY.md):
 
 - `SEGMENT_CREATED` — on POST /api/segments
 - `SEGMENT_UPDATED` — on PUT /api/segments/:id (incl. filter / name / description / color changes)
@@ -336,7 +336,7 @@ New audit chain entity `SEGMENT` with actions (mirrors AI_HISTORY taxonomy from 
 - `SEGMENT_SNAPSHOT_TAKEN` — Phase 2 (when DD-5.5 snapshot cron ships)
 - `SEGMENT_EXPORTED_CSV` — when membership exported as CSV
 
-All events go through `backend/lib/audit.js` `writeAudit()` for tamper-evident hashing.
+All events go through `backend/lib/audit.js` `writeAudit()` for audit logging.
 
 ### FR-3.11 RBAC visibility
 
@@ -447,11 +447,11 @@ The schema changes are 1 nullable FK column on Campaign + 1 on Sequence — addi
 
 - **AC-6.2** Operator filters Patients page via URL params → clicks "Save filter as Segment" → modal opens pre-populated with the current filter as predicate → operator types name + description + color + visibility=PRIVATE → saves → toast confirms → operator navigates back to Patients with `?segmentId=<saved-id>` → list renders with the segment's filter applied → "Segment: <name>" pill visible near filter strip.
 
-- **AC-6.3** Operator opens a saved segment with visibility=TENANT → second operator (different user, same tenant) navigates to `/segments` → sees the segment in their list → opens it → views predicate + count → uses it as target audience in a new SMS Blast (target dropdown surfaces all visible segments) → Blast schedules. At send-time the SMS engine resolves segment members + sends → audit chain captures `SEGMENT_USED_IN_CAMPAIGN` event linking segment to campaign.
+- **AC-6.3** Operator opens a saved segment with visibility=TENANT → second operator (different user, same tenant) navigates to `/segments` → sees the segment in their list → opens it → views predicate + count → uses it as target audience in a new SMS Blast (target dropdown surfaces all visible segments) → Blast schedules. At send-time the SMS engine resolves segment members + sends → audit log captures `SEGMENT_USED_IN_CAMPAIGN` event linking segment to campaign.
 
 - **AC-6.4** Cron `segmentEvaluationEngine.js` fires every hour → updates `lastEvaluatedAt + lastEvaluatedCount + lastEvaluationMs` for all non-archived DYNAMIC segments → segments with `lastEvaluatedCount > 50000` are SKIPPED with audit `SEGMENT_EVAL_SKIPPED_OVERSIZED` event unless `forceReevaluate` flag set. Manual trigger `POST /api/segments/admin/run-evaluation` works for ADMIN; returns 403 for non-ADMIN.
 
-- **AC-6.5** ADMIN soft-deletes a segment via DELETE /api/segments/:id → `archivedAt` set → segment no longer appears in default list → still appears in Archived tab → audit chain captures `SEGMENT_ARCHIVED`. ADMIN restores via PUT /api/segments/:id `{archivedAt: null}` → reappears in default list → audit captures `SEGMENT_RESTORED`. Predicate validation: posting a predicate with field outside the per-resourceType allowlist returns `400 INVALID_FIELD`; tree depth >5 returns `400 PREDICATE_TOO_DEEP`; leaf count >30 returns `400 PREDICATE_TOO_LARGE`.
+- **AC-6.5** ADMIN soft-deletes a segment via DELETE /api/segments/:id → `archivedAt` set → segment no longer appears in default list → still appears in Archived tab → audit log captures `SEGMENT_ARCHIVED`. ADMIN restores via PUT /api/segments/:id `{archivedAt: null}` → reappears in default list → audit captures `SEGMENT_RESTORED`. Predicate validation: posting a predicate with field outside the per-resourceType allowlist returns `400 INVALID_FIELD`; tree depth >5 returns `400 PREDICATE_TOO_DEEP`; leaf count >30 returns `400 PREDICATE_TOO_LARGE`.
 
 ---
 
@@ -477,7 +477,7 @@ The schema changes are 1 nullable FK column on Campaign + 1 on Sequence — addi
 
 - **Existing list-endpoint filter conventions** at `backend/routes/wellness.js` (Patient list — extended in tick #191) + `backend/routes/contacts.js` + `backend/routes/deals.js` + `backend/routes/leads.js` (or equivalent) + `backend/routes/billing.js` (or invoices route) — each gains a `?segmentId=:id` query param handler that loads the segment + injects its predicate as additional WHERE conditions.
 - **Existing `frontend/src/utils/api.js` `fetchApi` helper** — standard auth + 401 handling for the new /api/segments calls.
-- **`backend/lib/audit.js` `writeAudit()`** — new `SEGMENT_*` action set flows through the existing tamper-evident chain. No schema change.
+- **`backend/lib/audit.js` `writeAudit()`** — new `SEGMENT_*` actions are recorded in the tenant audit log. No schema change.
 - **`backend/middleware/auth.js`** `verifyToken` + `verifyRole` — gates the new endpoints.
 - **Existing cron engine pattern** at `backend/cron/*Engine.js` (22 engines today) — `segmentEvaluationEngine.js` (engine #23) follows the same shape. Updates the cron taxonomy table in CLAUDE.md.
 - **PRD_TAG_MASTER.md (D12)** — segments can reference tag names in `tagContains` predicates; cross-dependency on the eventual `TagMaster.name` API (Phase 2 — for now segments reference free-text tags per the existing Patient.tags JSON-string convention).
@@ -573,6 +573,6 @@ Slices 1 + 2 must ship in order. Slice 3 + 4 + 5 can ship in parallel after slic
 **Cross-PRD coordination check:** Before implementation starts, confirm:
 - `PRD_TAG_MASTER.md` ships before or in parallel — the `tagContains` predicate operator works against free-text Patient.tags today; gracefully upgrades to TagMaster.name resolution when D12 ships.
 - `PRD_IMPORT_EXPORT_JOBS.md` CSV export jobs include the `segment_members` job type — long-running exports (>10k members) flow through the async job infra rather than blocking the page.
-- `routes/audit.js` `/verify` endpoint accepts the SEGMENT_* event family without code change (entity = `SEGMENT`, actions per FR-3.10).
+- `writeAudit()` records the SEGMENT_* event family in the tenant audit log.
 - The cron taxonomy table in CLAUDE.md is updated to list `segmentEvaluationEngine.js` (engine #23, every 1h IST) when implementation lands.
 - `Campaign` + `Sequence` model schema extensions (additive `targetSegmentId Int?` nullable FK) coordinate with any concurrent work on the same models (currently none in flight per `git log -- backend/prisma/schema.prisma | head -20`).

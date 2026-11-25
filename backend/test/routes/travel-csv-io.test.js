@@ -37,9 +37,9 @@
  * (the bufferParser helper for binary-ish CSV bodies). Prisma singleton patched
  * BEFORE the router require so verifyToken's revokedToken probe + the route's
  * findFirst/create probes both land on the stubs. Audit-log create is mocked to a
- * pass-through resolve — the chained-hash compute in lib/audit.js still executes
+ * pass-through resolve — writeAudit still runs through its normal helper path
  * (it's exception-safe and bounded; we just don't pin its details here, since
- * audit-chain.test.js owns that contract).
+ * backend/test/lib/audit.test.js covers that contract).
  */
 
 import { describe, test, expect, beforeEach, vi } from 'vitest';

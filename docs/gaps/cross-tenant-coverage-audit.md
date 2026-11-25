@@ -174,11 +174,11 @@ Per PRD §FR-3.4(e): **the 22 cron engines under `backend/cron/` are NOT covered
 
 - Loop per-tenant in an explicit outer loop (`for (const tenant of tenants) { ... }`), passing the tenant id into every Prisma call, OR
 - Include `tenantId` in every WHERE clause when processing tenant-scoped work, OR
-- Be documented as cross-tenant by design (audit hash chain, retention sweep, demo hygiene) and the lack-of-tenant-scope is intentional.
+- Be documented as cross-tenant by design (retention sweep, demo hygiene) and the lack-of-tenant-scope is intentional.
 
 This audit pass is tracked as **#919 follow-up** — see TODOS.md.
 
-Cron-engine catalogue (per CLAUDE.md): leadScoringEngine, sequenceEngine, marketplaceEngine, workflowEngine, campaignEngine, reportEngine, recurringInvoiceEngine, forecastSnapshotEngine, dealInsightsEngine, sentimentEngine, scheduledEmailEngine, retentionEngine, backupEngine, orchestratorEngine, appointmentRemindersEngine, wellnessOpsEngine, slaBreachEngine, leadSlaEngine, lowStockEngine, leavePolicyEngine, demoHygieneEngine, auditIntegrityEngine.
+Cron-engine catalogue (per CLAUDE.md): leadScoringEngine, sequenceEngine, marketplaceEngine, workflowEngine, campaignEngine, reportEngine, recurringInvoiceEngine, forecastSnapshotEngine, dealInsightsEngine, sentimentEngine, scheduledEmailEngine, retentionEngine, backupEngine, orchestratorEngine, appointmentRemindersEngine, wellnessOpsEngine, slaBreachEngine, leadSlaEngine, lowStockEngine, leavePolicyEngine, demoHygieneEngine.
 
 A separate cron-callsite audit will produce a table (engine | tenant-scope mechanism | verified-OK or fix-needed) when scheduled.
 

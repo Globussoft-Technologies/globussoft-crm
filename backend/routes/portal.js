@@ -223,7 +223,14 @@ router.post("/register", async (req, res) => {
         select: { id: true },
       });
       const trip = await prisma.tmcTrip.findFirst({
-        where: { id: tmcContext.tripId, tenantId, teacherContactId: tmcContext.teacherContactId },
+        where: {
+          id: tmcContext.tripId,
+          tenantId,
+          OR: [
+            { teacherContactId: tmcContext.teacherContactId },
+            { teacherAssignments: { some: { tenantId, teacherContactId: tmcContext.teacherContactId } } },
+          ],
+        },
         select: { id: true },
       });
       if (!teacher || !trip) {

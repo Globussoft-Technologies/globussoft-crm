@@ -278,6 +278,15 @@ describe('filterSidebarPages', () => {
     expect(filtered.map((page) => page.path)).toEqual(['/travel/forms', '/developer']);
   });
 
+  it('shows Teacher OnBoarding only while the TMC sub-brand is active', () => {
+    const page = { path: '/travel/tmc/teachers', label: 'Teacher OnBoarding', brand: 'tmc' };
+
+    expect(filterSidebarPages([page], { vertical: 'travel', activeSubBrand: 'tmc' }))
+      .toMatchObject([{ path: '/travel/tmc/teachers', label: 'Teacher OnBoarding' }]);
+    expect(filterSidebarPages([page], { vertical: 'travel', activeSubBrand: 'rfu' })).toEqual([]);
+    expect(filterSidebarPages([page], { vertical: 'travel' })).toEqual([]);
+  });
+
   it('mirrors granted sub-brand access while All is selected', () => {
     const pages = [
       { path: '/travel/trips', label: 'TMC Trips' },
@@ -305,6 +314,7 @@ describe('filterSidebarPages', () => {
       '/travel/itineraries',
       '/travel/trips',
       '/travel/tmc/catalogue',
+      '/travel/tmc/teachers',
       '/travel/web-checkins',
       '/travel/passport-verification',
       '/travel/cost-master',

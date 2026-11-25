@@ -67,7 +67,7 @@ The cross-product is `(tenant) × (gateway) × (mode)` configurations — a tena
 
 4. **Test-mode operator training.** Trainer Sumit at Globussoft onboards Owner Rishu to the new POS module. Rishu wants to click through a full purchase flow without spending real money. Rishu's tenant is in TEST mode for Razorpay → all Pay Now buttons hit the Razorpay sandbox → test card succeeds → invoice marks PAID → receipt fires → workflow rules run. Zero real-money exposure during training. Trainer flips the toggle to LIVE on a real customer transaction.
 
-5. **Audit trail for compliance.** PCI-DSS auditor asks: "Show every key rotation event for tenant T5 in the last 12 months — who, when, which gateway, which mode." Audit log query against `entity = 'PaymentGatewayConfig'` AND `action = 'KEY_ROTATED'` AND tenantId=5 returns the timeline. Cross-references the audit hash chain via `routes/audit.js` `/verify` endpoint (tamper-evident).
+5. **Audit trail for compliance.** PCI-DSS auditor asks: "Show every key rotation event for tenant T5 in the last 12 months — who, when, which gateway, which mode." Audit log query against `entity = 'PaymentGatewayConfig'` AND `action = 'KEY_ROTATED'` AND tenantId=5 returns the timeline.
 
 6. **Adding a new gateway provider (extensibility).** A future tenant needs PayPal (e.g. a North-American wellness clinic). The provider-extension hook (FR-3.2) lets a backend engineer add `provider: 'paypal'` to the `SUPPORTED_PROVIDERS` map + ship a `paypalGateway.js` adapter that conforms to the gateway-adapter interface. UI auto-renders the new provider card. **No UI code change required** to add new providers — the provider-list is data-driven.
 
@@ -83,7 +83,7 @@ The cross-product is `(tenant) × (gateway) × (mode)` configurations — a tena
 - **FR-3.1.b Detail endpoint.** `GET /api/payment-gateways/:id` → returns single row (same shape).
 - **FR-3.1.c Create endpoint.** `POST /api/payment-gateways` body `{ provider, mode, publishableKey, secretKey, webhookSecret, enabled }`. ADMIN role only. `provider` must match `SUPPORTED_PROVIDERS`. Server encrypts `secretKey` + `webhookSecret` via `encryptCredential()` before persisting.
 - **FR-3.1.d Update endpoint.** `PUT /api/payment-gateways/:id` body same shape. ADMIN role only. Fields ending in the masked-sentinel pattern (`****<tail>`) are SKIPPED per `looksLikeMaskedSentinel()` — preserves existing values when operator leaves a field blank. Publishable key + enabled + mode are non-sensitive and update directly.
-- **FR-3.1.e Delete endpoint.** `DELETE /api/payment-gateways/:id` → soft-delete (set `deletedAt`). ADMIN role only. Hard-delete blocked because: (a) audit chain references; (b) historic invoices reference the gatewayConfig's webhook secret for past reconciliation. A soft-deleted row's secrets remain decryptable for the chain but the row is hidden from the UI list endpoint + excluded from routing-rule resolution.
+- **FR-3.1.e Delete endpoint.** `DELETE /api/payment-gateways/:id` → soft-delete (set `deletedAt`). ADMIN role only. Hard-delete blocked because: (a) audit log references; (b) historic invoices reference the gatewayConfig's webhook secret for past reconciliation. A soft-deleted row's secrets remain decryptable for the chain but the row is hidden from the UI list endpoint + excluded from routing-rule resolution.
 - **FR-3.1.f Tenant-scoping invariant.** Every handler scopes by `req.user.tenantId`. Cross-tenant FK access impossible. Mirrors all other CRM routes' tenantWhere pattern. ESLint `req.body.tenantId` rule applies — gateway-config never accepts a body-supplied tenantId.
 
 ### FR-3.2 Provider extensibility hook
@@ -132,7 +132,7 @@ The cross-product is `(tenant) × (gateway) × (mode)` configurations — a tena
 
 ### FR-3.8 Audit log integration
 
-Audit chain entries (via `backend/lib/audit.js` `writeAudit(entity, action, entityId, userId, tenantId, details)`):
+audit log entries (via `backend/lib/audit.js` `writeAudit(entity, action, entityId, userId, tenantId, details)`):
 
 - `PAYMENT_GATEWAY_CONFIG` + `CREATED` — on new gateway-config row; details = `{ provider, mode, enabled, publishableKeyLast4 }` (secrets masked).
 - `PAYMENT_GATEWAY_CONFIG` + `UPDATED` — on PUT; details = `{ provider, mode, fieldsChanged: ['publishableKey','enabled', ...] }` (which non-secret fields changed; secrets only enumerated by name, never by value).
@@ -142,7 +142,7 @@ Audit chain entries (via `backend/lib/audit.js` `writeAudit(entity, action, enti
 - `PAYMENT_GATEWAY_CONFIG` + `DELETED` — on soft-delete; details = `{ provider, mode, reason: req.body.reason }`.
 - `PAYMENT_ROUTING_RULE` + `CREATED` / `UPDATED` / `DELETED` — on routing-rule changes; details = `{ currency, gatewayConfigId, priority, enabled }`.
 
-Chain inherits the existing hash-chain immutability. The `/api/audit/verify` endpoint at `routes/audit.js` works against these entries with zero code changes.
+Key-rotation events are written to the tenant audit log through `writeAudit()`.
 
 ### FR-3.9 RBAC
 
@@ -163,7 +163,7 @@ Chain inherits the existing hash-chain immutability. The `/api/audit/verify` end
 
 - **Per-tenant scoping.** Every row carries `tenantId` FK to Tenant. Every handler scopes by `req.user.tenantId`. Cross-tenant access impossible. Mirrors all other CRM route patterns.
 - **Encryption at rest.** Secret key + webhook secret + previousWebhookSecret stored as AES-256-GCM ciphertext via `fieldEncryption.js`. Plaintext never persisted. Migration enforces `WELLNESS_FIELD_KEY` presence before schema lands.
-- **Audit immutability.** All state changes write to the tamper-evident audit chain via `lib/audit.js`. Hash-chain integrity preserved.
+- **Audit history.** All state changes write to the tenant audit log via `lib/audit.js`.
 - **Rate limit on /test endpoint.** 20 calls / 15 min / tenant / config. Prevents ToS violations.
 - **Mask in logs.** Audit payloads never carry plaintext credentials. Console logs scrub via existing log-redactor where possible (Q22 follow-up for systematic log redaction is a separate PRD).
 - **Test Connection latency.** Stripe `balance.retrieve()` typically <500ms; Razorpay `orders.all({count:1})` typically <800ms. p95 timeout set to 5s; failure returns `{ ok: false, message: 'timed out' }`.
@@ -194,7 +194,7 @@ Chain inherits the existing hash-chain immutability. The `/api/audit/verify` end
   - **(c) Tenant.paymentRouterJson:** Single JSON blob on Tenant carrying the routing table. Pro: zero migrations + simple. Con: large JSON updates + no FK integrity (gatewayConfigId could dangle).
   **Recommendation: (b) NEW TABLE.** Routing is a first-class operator concern + needs admin UI + the priority/fallback resolution is too complex for JSON. Mirrors the `LeadRoutingRule` shape that already exists in the codebase for lead-routing.
 - **DD-5.7 Wellness-style PHI-class "writer/reader" gate split for the keys themselves?** Should the operator who CAN see "configured: true" be different from the operator who CAN edit? Probably no — both should require ADMIN. The "reader" role would be MANAGER (audit settings without write). **Recommendation: ADMIN-write + MANAGER+ADMIN-read per FR-3.9.** USER blocked entirely.
-- **DD-5.8 Audit-log retention for key rotation events — match GDPR DSAR window (7 years) or longer (10 years for SOC2 / PCI-DSS)?** Currently audit-chain has no retention policy (retained indefinitely). **Recommendation: KEEP INDEFINITE for v1.** Audit-chain volume is tiny relative to overall DB (a few key rotations per tenant per year). Implement retention sweep in a separate audit-management PRD when DB size becomes a concern.
+- **DD-5.8 Audit-log retention for key rotation events — match GDPR DSAR window (7 years) or longer (10 years for SOC2 / PCI-DSS)?** Currently audit log has no retention policy (retained indefinitely). **Recommendation: KEEP INDEFINITE for v1.** audit log volume is tiny relative to overall DB (a few key rotations per tenant per year). Implement retention sweep in a separate audit-management PRD when DB size becomes a concern.
 
 ### Cred chase
 
@@ -213,7 +213,7 @@ Chain inherits the existing hash-chain immutability. The `/api/audit/verify` end
 
 ## §6 Acceptance criteria
 
-- **AC-6.1** Owner with ADMIN role logs in → navigates to `/settings/payment-gateways` → sees a list of Stripe + Razorpay cards. Cards show "Not configured" badge initially. Clicking a card opens the config form. POST `/api/payment-gateways` with valid keys → row created + audit-chain entry written + form returns to list view showing "Configured" badge with `last4` tail.
+- **AC-6.1** Owner with ADMIN role logs in → navigates to `/settings/payment-gateways` → sees a list of Stripe + Razorpay cards. Cards show "Not configured" badge initially. Clicking a card opens the config form. POST `/api/payment-gateways` with valid keys → row created + audit log entry written + form returns to list view showing "Configured" badge with `last4` tail.
 - **AC-6.2** Owner clicks "Rotate Secret" on an existing config → form's secretKey field is empty (NOT pre-filled with the masked sentinel) → Owner pastes new key → Save → backend overwrites encrypted at rest → audit log records `KEY_ROTATED` with no plaintext → UI returns to list showing updated `lastRotatedAt`.
 - **AC-6.3** Owner toggles Mode from TEST to LIVE on a Stripe config → form clears the secretKey field → Owner pastes live key → Test Connection succeeds → Save. New (tenant=T, provider=stripe, mode=LIVE) row created; the TEST row preserved (unique constraint on `(tenantId, provider, mode, deletedAt)` allows both). Routing-rule UI shows the new LIVE row available for routing-rule selection.
 - **AC-6.4** Operator creates a routing rule `{ currency: 'INR', gatewayConfigId: <razorpay-live-row>, priority: 1 }`. Owner creates an invoice with currency=INR → Pay Now button generates a Razorpay order. Resolver picks the priority-1 rule. If razorpay-live row is disabled, resolver falls through to the wildcard rule (if any) or shows "Payment not configured for currency INR".
@@ -222,7 +222,7 @@ Chain inherits the existing hash-chain immutability. The `/api/audit/verify` end
 - **AC-6.7** Owner rotates a webhook secret → the old secret persists in `previousWebhookSecret` for 24h (configurable). During the window, incoming webhooks verify against EITHER secret. After 24h, a cleanup cron clears `previousWebhookSecret`. Audit log records both the rotation and the cleanup.
 - **AC-6.8** USER role hits `GET /api/payment-gateways` → 403 Forbidden (RBAC). MANAGER role → 200 OK with masked rows. ADMIN role → 200 OK with masked rows + write endpoints accessible.
 - **AC-6.9** Owner soft-deletes a gateway-config row → row no longer appears in list endpoint → routing rules referencing the row are auto-disabled (with operator-facing notice in the routing-rules UI) → audit log records `DELETED`.
-- **AC-6.10** Cross-tenant attack: User in tenant T1 sends `PUT /api/payment-gateways/<T2-row-id>` → 404 Not Found (tenantWhere clause). Audit chain has zero T2-row entries written by T1.
+- **AC-6.10** Cross-tenant attack: User in tenant T1 sends `PUT /api/payment-gateways/<T2-row-id>` → 404 Not Found (tenantWhere clause). audit log has zero T2-row entries written by T1.
 
 ---
 
@@ -250,7 +250,7 @@ Chain inherits the existing hash-chain immutability. The `/api/audit/verify` end
 - **`Tenant.country`** ([backend/prisma/schema.prisma:66](../backend/prisma/schema.prisma#L66)) — Existing. Read by admin UI to suggest default gateway (IN → Razorpay; else Stripe).
 - **`backend/lib/fieldEncryption.js`** ([backend/lib/fieldEncryption.js:1](../backend/lib/fieldEncryption.js)) — AES-256-GCM helper. Existing. Used directly via `encryptCredential()` / `decryptCredential()`.
 - **`backend/lib/credentialMasking.js`** ([backend/lib/credentialMasking.js:1](../backend/lib/credentialMasking.js)) — Existing. Reused verbatim for `describeCredential()` + `looksLikeMaskedSentinel()` + `maskConfigRow()`.
-- **`backend/lib/audit.js`** ([backend/lib/audit.js:99](../backend/lib/audit.js#L99)) — `writeAudit(entity, action, entityId, userId, tenantId, details)`. Existing. New entity values `'PaymentGatewayConfig'` + `'PaymentRoutingRule'` written transparently; hash chain inherits.
+- **`backend/lib/audit.js`** ([backend/lib/audit.js](../backend/lib/audit.js)) — `writeAudit(entity, action, entityId, userId, tenantId, details)`. Existing. New entity values `'PaymentGatewayConfig'` + `'PaymentRoutingRule'` are written to audit history.
 - **`backend/routes/payments.js`** ([backend/routes/payments.js:1](../backend/routes/payments.js)) — Refactor: webhook handlers (`/webhook/stripe` :110 + `/webhook/razorpay` :163) lookup per-tenant config by `webhookToken` query-param + verify HMAC against the row's encrypted webhookSecret. Lazy SDK loaders (`getStripe()` :16 + `getRazorpay()` :28) refactor to per-tenant lookups.
 - **`backend/routes/integrations.js`** ([backend/routes/integrations.js:20](../backend/routes/integrations.js#L20)) — `AVAILABLE_INTEGRATIONS` array's `stripe` + `razorpay` entries get a deprecation notice (Phase 1.5) — they remain as discoverability hints in the integrations UI but the actual config UI shifts to `/settings/payment-gateways`. After 90-day grace, remove from `AVAILABLE_INTEGRATIONS`.
 - **New file `backend/lib/paymentGatewayRegistry.js`** — SUPPORTED_PROVIDERS map; adapter interface contract.

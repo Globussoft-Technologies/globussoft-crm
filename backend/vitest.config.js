@@ -61,7 +61,7 @@ module.exports = defineConfig({
           /backend\/utils\//,
           /backend\/cron\//,
           // scripts/ is inlined for unit tests over operator/forensic
-          // CLI tools (e.g. verify-audit-chain.js for #558). Same reason
+          // CLI tools. Same reason
           // as cron: the script's `require('../lib/prisma')` must
           // resolve through vitest's loader to see the test's mocked
           // singleton, not the real Prisma client.

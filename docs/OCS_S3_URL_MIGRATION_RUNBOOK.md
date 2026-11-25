@@ -173,7 +173,7 @@ BEGIN
       ON tb.TABLE_SCHEMA = col.TABLE_SCHEMA AND tb.TABLE_NAME = col.TABLE_NAME
     WHERE col.TABLE_SCHEMA = DATABASE()
       AND tb.TABLE_TYPE = 'BASE TABLE'
-      -- AuditLog is immutable evidence. Rewriting details invalidates its stored hash.
+      -- Preserve AuditLog details as historical records.
       AND LOWER(col.TABLE_NAME) <> 'auditlog'
       AND col.DATA_TYPE IN ('char','varchar','tinytext','text','mediumtext','longtext');
   DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
@@ -218,10 +218,9 @@ empty in the local dump):
 | visit.photosBefore | 1 |
 
 `auditlog.details` is deliberately excluded even when it contains the old URL.
-Audit details are hash-chained historical evidence; rewriting them invalidates
-the stored digest. If an older version of this runbook already rewrote an audit
-row, use `backend/scripts/repair-audit-storage-url.js` to restore it only after
-the script proves the reverse substitution matches the existing hash.
+This migration preserves audit history unchanged. If an older run already
+rewrote an audit row, restore it from a verified database backup or investigate
+the source data manually; this runbook does not modify audit rows.
 
 Sanity check: the list should be plausible URL-bearing columns, counts should
 look like real data volume. `whatsappmessage.mediaUrl` will dominate and is
@@ -251,7 +250,7 @@ BEGIN
       ON tb.TABLE_SCHEMA = col.TABLE_SCHEMA AND tb.TABLE_NAME = col.TABLE_NAME
     WHERE col.TABLE_SCHEMA = DATABASE()
       AND tb.TABLE_TYPE = 'BASE TABLE'
-      -- Never rewrite hash-chained audit content.
+      -- Keep historical audit-log details unchanged.
       AND LOWER(col.TABLE_NAME) <> 'auditlog'
       AND col.DATA_TYPE IN ('char','varchar','tinytext','text','mediumtext','longtext');
   DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;

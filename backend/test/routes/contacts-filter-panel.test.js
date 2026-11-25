@@ -85,11 +85,11 @@ const ADDED_TRACKING_FIELDS = [
   'campaign_name', 'adset_name', 'ad_name', 'placement', 'site_source_name',
 ];
 
-function makeApp({ tenantId = 1, userId = 7, role = "ADMIN" } = {}) {
+function makeApp({ tenantId = 1, userId = 7, role = "ADMIN", vertical = "generic" } = {}) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.user = { userId, tenantId, role };
+    req.user = { userId, tenantId, role, vertical };
     next();
   });
   app.use("/api/contacts", contactsRouter);
@@ -481,6 +481,30 @@ describe("GET /api/contacts/filter-values/:field", () => {
       { value: "Churned", label: "Churned" },
     ]);
     expect(prisma.contact.findMany).not.toHaveBeenCalled();
+  });
+
+  test("Wellness Leads status filters expose the tenant's stored CRM statuses", async () => {
+    prisma.contact.findMany.mockResolvedValue([
+      { status: "Customer" },
+      { status: "Lead" },
+    ]);
+
+    const res = await request(makeApp({ vertical: "wellness" })).get(
+      "/api/contacts/filter-values/status?includeCrmStatuses=true",
+    );
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, deletedAt: null },
+      select: { status: true },
+      distinct: ["status"],
+      orderBy: { status: "asc" },
+      take: 200,
+    });
+    expect(res.body.values).toEqual([
+      { value: "Customer", label: "Customer" },
+      { value: "Lead", label: "Lead" },
+    ]);
   });
 
   test("?q searches the complete text column before the DISTINCT result limit", async () => {

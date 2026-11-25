@@ -161,7 +161,7 @@ and 2026-05-25. Spec name listed where it differs from the original
 
 Plus 16 additional cron vitests landed beyond the original Section B list
 (orchestratorEngine, retentionEngine, slaBreachEngine, leavePolicyEngine,
-auditIntegrityEngine, demoHygieneEngine, sentimentEngine,
+demoHygieneEngine, sentimentEngine,
 contactGreetingsEngine, religiousGuidanceEngine, travelDiagnosticAdvisorAlerts,
 travelJourneyReminders, tripPaymentReminders, tripPostTripFeedback,
 webCheckinScheduler, visaRiskFlagEngine, noShowRisk, etc.) for a current

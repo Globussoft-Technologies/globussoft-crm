@@ -402,7 +402,7 @@ router.put("/:id", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
  * DELETE /api/wallet/rules/:id
  * ADMIN-only SOFT-delete — flips active=false. WalletCreditBatch rows
  * reference rules via sourceRuleId so hard-delete is forbidden (would
- * break the audit chain for already-issued bonus batches).
+ * break the audit history for already-issued bonus batches).
  *
  * Idempotent: deleting an already-inactive rule is a no-op 200, not 404
  * (the row still exists; "delete" is just "make inactive" here).

@@ -2748,10 +2748,6 @@ if (process.env.DISABLE_CRONS === "1") {
   const { initLeadSlaCron } = require("./cron/leadSlaEngine");
   initLeadSlaCron();
 
-  // #558 — AuditLog hash-chain integrity sweep (daily 04:00, after retention).
-  const { initAuditIntegrityCron } = require("./cron/auditIntegrityEngine");
-  initAuditIntegrityCron();
-
   // Wave 8b — POS receipt dispatcher subscribes to sale.completed events
   // and queues SMS (always) + WhatsApp (if Contact opted-in) receipt rows.
   // Event-driven, no cron tick. Fire-and-forget: a dispatch hiccup never

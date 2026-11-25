@@ -543,6 +543,17 @@ describe('Vertical isolation — getCatalogForVertical', () => {
     });
   });
 
+  it('includes TMC Teacher OnBoarding in the travel catalog behind roles.read', () => {
+    const page = getCatalogForVertical('travel').find((entry) => entry.path === '/travel/tmc/teachers');
+    expect(page).toMatchObject({
+      path: '/travel/tmc/teachers',
+      label: 'Teacher OnBoarding',
+      category: 'Travel Administration',
+      requiredPermissions: [{ module: 'roles', action: 'read' }],
+    });
+    expect(getCatalogForVertical('wellness').some((entry) => entry.path === '/travel/tmc/teachers')).toBe(false);
+  });
+
   it('wellness catalog keeps /signatures (it is a wellness-only surface)', () => {
     const wellness = getCatalogForVertical('wellness');
     expect(wellness.find((p) => p.path === '/signatures')).toBeDefined();

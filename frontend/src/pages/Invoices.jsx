@@ -4031,50 +4031,105 @@ export default function Invoices() {
           <div
             onClick={(e) => e.stopPropagation()}
             className="card"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Invoice preview ${pdfPreview.invoiceNum}`}
             style={{
               display: "flex",
               flexDirection: "column",
-              width: "min(980px, 100%)",
-              height: "min(92vh, 900px)",
+              width: "min(1180px, 100%)",
+              height: "min(94vh, 1040px)",
               overflow: "hidden",
               padding: 0,
               background: "var(--surface-color)",
               border: "1px solid var(--border-color)",
+              boxShadow: "0 24px 70px rgba(15, 23, 42, 0.28)",
             }}
           >
             <div
+              className="invoice-pdf-preview__toolbar"
               style={{
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
-                gap: "1rem",
-                padding: "0.85rem 1rem",
+                gap: "1.25rem",
+                flexWrap: "wrap",
+                padding: "0.8rem 1.1rem",
                 borderBottom: "1px solid var(--border-color)",
+                background: "var(--surface-color)",
               }}
             >
-              <strong style={{ color: "var(--text-primary)" }}>
-                Invoice preview: {pdfPreview.invoiceNum}
-              </strong>
-              <button
-                type="button"
-                onClick={() => setPdfPreview(null)}
-                aria-label="Close invoice preview"
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: "2rem",
-                  height: "2rem",
-                  padding: 0,
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "8px",
-                  background: "transparent",
-                  color: "var(--text-secondary)",
-                  cursor: "pointer",
-                }}
-              >
-                <X size={17} />
-              </button>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.8rem", minWidth: 0 }}>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: "2.65rem",
+                    height: "2.65rem",
+                    flex: "0 0 auto",
+                    borderRadius: "12px",
+                    color: "var(--primary-color, var(--accent-color))",
+                    background: "color-mix(in srgb, var(--primary-color, var(--accent-color)) 12%, transparent)",
+                  }}
+                >
+                  <Receipt size={20} />
+                </span>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ color: "var(--text-secondary)", fontSize: "0.72rem", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase" }}>
+                    Invoice PDF
+                  </div>
+                  <strong style={{ display: "block", color: "var(--text-primary)", fontSize: "1rem", overflowWrap: "anywhere" }}>
+                    {pdfPreview.invoiceNum}
+                  </strong>
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.55rem", marginLeft: "auto" }}>
+                <a
+                  href={pdfPreview.url}
+                  download={`${pdfPreview.invoiceNum || "invoice"}.pdf`}
+                  aria-label={`Download invoice ${pdfPreview.invoiceNum}`}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "0.45rem",
+                    minHeight: "2.35rem",
+                    padding: "0.4rem 0.75rem",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "9px",
+                    background: "var(--surface-color)",
+                    color: "var(--text-primary)",
+                    textDecoration: "none",
+                    fontSize: "0.84rem",
+                    fontWeight: 600,
+                  }}
+                >
+                  <Download size={15} />
+                  <span>Download PDF</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPdfPreview(null)}
+                  aria-label="Close invoice preview"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: "2.35rem",
+                    height: "2.35rem",
+                    padding: 0,
+                    border: "1px solid var(--border-color)",
+                    borderRadius: "9px",
+                    background: "transparent",
+                    color: "var(--text-secondary)",
+                    cursor: "pointer",
+                  }}
+                >
+                  <X size={17} />
+                </button>
+              </div>
             </div>
             <iframe
               src={pdfPreview.url}

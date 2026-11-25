@@ -65,6 +65,15 @@ afterEach(() => {
 });
 
 describe("CsvImportExportToolbar", () => {
+  it('combines import and export into one menu without losing format choices', async () => {
+    render(<CsvImportExportToolbar entity="contacts" label="Leads" combinedMenu genericLeadWizard formats={['csv', 'xlsx']} />);
+    expect(screen.queryByRole('button', { name: 'Import contacts' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Import & export' }));
+    expect(screen.getByRole('menuitem', { name: 'Import contacts' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Export leads' }));
+    expect(screen.getByRole('menuitem', { name: 'CSV' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Excel (XLSX)' })).toBeInTheDocument();
+  });
   it("renders default endpoints when no endpoint overrides are supplied", () => {
     render(<CsvImportExportToolbar entity="bookings" label="Bookings" />);
 
@@ -348,6 +357,22 @@ describe("CsvImportExportToolbar", () => {
     fireEvent.change(within(listbox).getByRole("searchbox", { name: "CRM field for Email search" }), { target: { value: "zeta" } });
     expect(within(listbox).getByRole("option", { name: "Zeta" })).toBeInTheDocument();
     expect(within(listbox).queryByRole("option", { name: "Alpha" })).not.toBeInTheDocument();
+  });
+
+  it("matches Generic CRM headers case-insensitively", async () => {
+    render(<CsvImportExportToolbar entity="contacts" label="Contacts" genericLeadWizard skipMeta
+      mappingFields={[{ key: "email", fieldKey: "email", label: "Email", fieldType: "text" }]}
+      endpoints={{ import: "/api/csv/contacts/import.csv" }} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Import Contacts$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Next$/i }));
+    const csv = "EMAIL\nsales@example.com\n";
+    const file = new File([csv], "contacts.csv", { type: "text/csv" });
+    Object.defineProperty(file, "text", { value: vi.fn().mockResolvedValue(csv) });
+    fireEvent.change(screen.getByLabelText("Select CSV file"), { target: { files: [file] } });
+
+    const field = await screen.findByRole("combobox", { name: "CRM field for EMAIL" });
+    expect(field).toHaveValue("email");
   });
 
   it("reuses an existing custom field whose key matches an automatic tracking key", async () => {

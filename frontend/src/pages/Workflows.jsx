@@ -1281,6 +1281,15 @@ const DEFAULT_LEAD_WEBHOOK_FIELDS = new Set([
   "utm_id",
   "utm_term",
   "utm_content",
+  "gclid",
+  "gbraid",
+  "wbraid",
+  "fbclid",
+  "fbc",
+  "fbp",
+  "campaign_id",
+  "adset_id",
+  "ad_id",
 ]);
 
 const defaultWebhookSelectedFields = (module) => {
@@ -1806,9 +1815,14 @@ function WebhookSettingsModal({
   isGenericCrm = false,
 }) {
   const notify = useNotify();
+  const availableWebhookFields = catalogue.fields[module] || [];
+  const configuredSelectedFields = Array.isArray(initialConfig?.selectedFields)
+    ? [...new Set(initialConfig.selectedFields.filter((field) => availableWebhookFields.includes(field)))]
+    : null;
   const [draft, setDraft] = useState({
     ...defaultWebhookConfig(module),
     ...initialConfig,
+    ...(configuredSelectedFields ? { selectedFields: configuredSelectedFields } : {}),
   });
   const [fieldQuery, setFieldQuery] = useState("");
   const [testing, setTesting] = useState(false);
@@ -1842,7 +1856,10 @@ function WebhookSettingsModal({
   const saveSettings = async () => {
     setSavingSettings(true);
     try {
-      const saved = await onSave(draft);
+      const saved = await onSave({
+        ...draft,
+        selectedFields: (draft.selectedFields || []).filter((field) => availableWebhookFields.includes(field)),
+      });
       if (!saved) return;
       notify.success("Webhook settings saved");
       onClose();
@@ -3790,7 +3807,7 @@ function WorkflowEditor({
             onClick={() => save(false)}
             disabled={saving}
           >
-            Save as draft
+            Save
           </button>
           {!webhookOnly && (
             <button

@@ -51,6 +51,24 @@ function newRequestId() {
 // are already handled by assertAccessOrThrow before any provider call
 // happens.
 function friendlyProviderErrorOrNull(err, accessType) {
+  const raw = String(err?.message || err || "").toLowerCase();
+  const status = Number(err?.status || err?.statusCode || err?.response?.status);
+  if ([401, 403].includes(status) || /(invalid|incorrect|expired|revoked).{0,30}(api|provider)?\s*key|api key.{0,20}(invalid|incorrect|expired|revoked)|authentication failed/.test(raw)) {
+    const friendly = new Error("The AI provider API key is invalid, expired, or revoked. Update the Gemini/OpenAI key in Settings and try again.");
+    friendly.code = "AI_PROVIDER_AUTH_FAILED";
+    friendly.status = 502;
+    friendly.friendly = true;
+    friendly.cause = err;
+    return friendly;
+  }
+  if (status === 402 || /(subscription|billing).{0,30}(expired|inactive|past due)|payment required/.test(raw)) {
+    const friendly = new Error("The AI provider subscription or billing is inactive. Renew it or update the provider account, then try again.");
+    friendly.code = "AI_PROVIDER_SUBSCRIPTION_EXPIRED";
+    friendly.status = 402;
+    friendly.friendly = true;
+    friendly.cause = err;
+    return friendly;
+  }
   if (!isGeminiLimitError(err)) return null;
   const friendly = new Error(
     accessType === "byok"

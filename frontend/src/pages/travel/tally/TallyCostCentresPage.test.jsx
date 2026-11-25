@@ -20,6 +20,19 @@ const pageResponse = ({ sourcePage = 1, hasMore = false } = {}) => ({
 describe("TallyCostCentresPage", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it("renders the page heading and complete pagination controls", async () => {
+    fetchApi.mockResolvedValue(pageResponse());
+
+    render(<TallyCostCentresPage />);
+
+    expect(screen.getByRole("heading", { name: "Trip Cost Centres" })).toBeInTheDocument();
+    expect(screen.getByText(/Cost centres are tracked for itineraries/)).toBeInTheDocument();
+    expect(await screen.findByRole("navigation", { name: "Cost centre pages" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous" })).toBeInTheDocument();
+    expect(screen.getByText("Page 1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next" })).toBeInTheDocument();
+  });
+
   it("loads later source pages without replacing earlier options", async () => {
     fetchApi.mockImplementation(async (url) => url.includes("sourcePage=2")
       ? pageResponse({ sourcePage: 2 })

@@ -21,7 +21,16 @@ const LEAD_CUSTOM_FIELD_TYPES_WITH_OPTIONS = new Set([
   "multiselect",
 ]);
 
-export default function LeadFieldCreateModal({ onClose, onCreated, notify }) {
+function normalizeFieldIdentity(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 50);
+}
+
+export default function LeadFieldCreateModal({ onClose, onCreated, notify, existingFields = [], reservedFields = [] }) {
   const [label, setLabel] = useState("");
   const [fieldType, setFieldType] = useState("text");
   const [optionsText, setOptionsText] = useState("");
@@ -29,6 +38,7 @@ export default function LeadFieldCreateModal({ onClose, onCreated, notify }) {
   const [placeholder, setPlaceholder] = useState("");
   const [isRequired, setIsRequired] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [labelError, setLabelError] = useState("");
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -38,13 +48,27 @@ export default function LeadFieldCreateModal({ onClose, onCreated, notify }) {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [onClose, saving]);
 
+  const validateLabel = () => {
+    const trimmedLabel = label.trim();
+    if (!trimmedLabel) {
+      setLabelError("Label is required.");
+      return false;
+    }
+    const candidate = normalizeFieldIdentity(trimmedLabel);
+    const duplicateExists = [...existingFields, ...reservedFields].some((field) => (
+      [field?.fieldKey, field?.key, field?.value, field?.id, field?.label]
+        .map(normalizeFieldIdentity)
+        .filter(Boolean)
+        .includes(candidate)
+    ));
+    setLabelError(duplicateExists ? "A field with this name already exists." : "");
+    return !duplicateExists;
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     const trimmedLabel = label.trim();
-    if (!trimmedLabel) {
-      notify.error("Label is required");
-      return;
-    }
+    if (!validateLabel()) return;
 
     const options = optionsText
       .split(",")
@@ -74,11 +98,16 @@ export default function LeadFieldCreateModal({ onClose, onCreated, notify }) {
       const created = await fetchApi("/api/lead-custom-fields", {
         method: "POST",
         body: JSON.stringify(body),
+        silent: true,
       });
       notify.success("Field created");
       onCreated(created);
     } catch (err) {
-      notify.error(err?.message || "Failed to create field");
+      if (["DUPLICATE_FIELD_KEY", "RESERVED_FIELD_KEY"].includes(err?.code)) {
+        setLabelError("A field with this name already exists.");
+      } else {
+        notify.error(err?.message || "Failed to create field");
+      }
     } finally {
       setSaving(false);
     }
@@ -185,12 +214,15 @@ export default function LeadFieldCreateModal({ onClose, onCreated, notify }) {
               type="text"
               className="input-field"
               value={label}
-              onChange={(event) => setLabel(event.target.value)}
+              onChange={(event) => { setLabel(event.target.value); if (labelError) setLabelError(""); }}
+              onBlur={validateLabel}
               placeholder="e.g. Referral Source"
               maxLength={80}
               autoFocus
+              aria-invalid={Boolean(labelError)}
               style={{ width: "100%", maxWidth: "100%", minWidth: 0 }}
             />
+            {labelError ? <span role="alert" style={{ color: "var(--danger-color, #ef4444)", fontSize: "0.75rem", fontWeight: 400 }}>{labelError}</span> : null}
           </label>
 
           <label style={{ display: "flex", flexDirection: "column", gap: "0.4rem", minWidth: 0, fontSize: "0.85rem", fontWeight: 600 }}>

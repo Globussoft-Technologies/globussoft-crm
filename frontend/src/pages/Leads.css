@@ -1,15 +1,267 @@
-/* Create Lead modal layout overrides for Generic and Travel CRM. */
-.auto-campaign-rule-checkbox {
-  width: 16px !important;
-  min-width: 16px !important;
-  height: 16px !important;
-  min-height: 16px !important;
-  padding: 0 !important;
-  margin: 0 0 0 0.25rem !important;
-  justify-self: start;
-  align-self: center;
+.leads-selection-checkbox {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  margin: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  vertical-align: middle;
 }
 
+/* The shared control scale is for form fields. Keep table checkboxes square. */
+body[data-vertical="generic"] .leads-page-root--generic input.leads-selection-checkbox[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  min-height: 20px;
+  padding: 0 !important;
+}
+
+@media (forced-colors: none) {
+  .leads-page-root--generic .leads-selection-checkbox {
+    --selection-accent: var(--primary-color, var(--accent-color));
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    appearance: none;
+    display: inline-grid;
+    place-items: center;
+    box-sizing: border-box;
+    padding: 0;
+    border: 1px solid color-mix(in srgb, var(--text-secondary) 65%, var(--border-color));
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-on-primary, #fff);
+  }
+
+  .leads-page-root--generic .leads-selection-checkbox:is(:checked, :indeterminate) {
+    border-color: var(--selection-accent);
+    background: var(--selection-accent);
+  }
+
+  .leads-page-root--generic .leads-selection-checkbox:is(:checked, :indeterminate)::before {
+    content: "";
+    width: 7px;
+    border-radius: 1px;
+  }
+
+  .leads-page-root--generic .leads-selection-checkbox:checked:not(:indeterminate)::before {
+    height: 4px;
+    border-left: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: translateY(-1px) rotate(-45deg);
+  }
+
+  .leads-page-root--generic .leads-selection-checkbox:indeterminate::before {
+    height: 2px;
+    background: currentColor;
+  }
+
+  .leads-page-root--generic .leads-selection-checkbox:hover:not(:disabled) {
+    border-color: var(--selection-accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--selection-accent) 16%, transparent);
+  }
+
+  .leads-page-root--generic .leads-selection-checkbox:focus-visible {
+    outline: 2px solid var(--selection-accent);
+    outline-offset: 2px;
+  }
+}
+
+@media (forced-colors: none) and (prefers-reduced-motion: no-preference) {
+  .leads-page-root--generic .leads-selection-checkbox {
+    transition: background-color .15s ease, border-color .15s ease, box-shadow .15s ease;
+  }
+}
+
+.leads-page-root--generic .leads-assignee-control {
+  position: relative;
+}
+.leads-assignee-display {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  box-sizing: border-box;
+  padding: 0 9px;
+  font-size: .8rem;
+  line-height: 1.25;
+  color: var(--text-primary);
+  background: var(--input-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+.leads-assignee-display > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.leads-assignee-display svg { flex-shrink: 0; }
+.leads-assignee-control:focus-within .leads-assignee-display {
+  outline: 2px solid var(--primary-color, var(--accent-color));
+  outline-offset: -2px;
+}
+.leads-page-root--generic table.leads-table .leads-assignee-control > select.input-field {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  min-height: 0;
+  opacity: 0;
+  appearance: auto;
+}
+.leads-page-root--generic .leads-assignee-control select::picker(select) {
+  appearance: auto;
+}
+
+/* Shared dropdown language for Generic Leads, including portal menus. */
+.leads-page-root--generic select,
+.leads-page-root--generic .crm-select-trigger,
+.leads-page-root--generic .crm-searchable-select-trigger,
+body:has(.leads-page-root--generic) .leads-bulk-actions-menu select {
+  appearance: none;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--border-color, #dce1e9) !important;
+  border-radius: 9px !important;
+  background-color: var(--bg-color, #fff) !important;
+  color: var(--text-primary, #273449) !important;
+  font-family: inherit;
+  font-size: .8rem;
+  font-weight: 500;
+  line-height: 1.4;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 3%);
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.leads-page-root--generic select,
+body:has(.leads-page-root--generic) .leads-bulk-actions-menu select {
+  padding: 7px 30px 7px 11px !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 10 5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  cursor: pointer;
+}
+.leads-page-root--generic .crm-select-trigger {
+  padding: 7px 10px !important;
+  gap: 9px !important;
+}
+.leads-page-root--generic .crm-select-trigger > span { min-width: 0; }
+.leads-status-select--qualified { --lead-status-bg: var(--status-success-bg); --lead-status-text: var(--status-success-text); }
+.leads-status-select--junk { --lead-status-bg: var(--toast-error-bg); --lead-status-text: var(--toast-error-text); }
+.leads-status-select--dnp { --lead-status-bg: #e4e7ec; --lead-status-text: #394352; }
+[data-theme="dark"] .leads-status-select--dnp { --lead-status-bg: #393f49; --lead-status-text: #e2e6ed; }
+.leads-status-select--pending { --lead-status-bg: #ede9fe; --lead-status-text: #5b21b6; }
+[data-theme="dark"] .leads-status-select--pending { --lead-status-bg: #352352; --lead-status-text: #ddd0ff; }
+.leads-status-select--connected { --lead-status-bg: var(--status-warning-bg); --lead-status-text: var(--status-warning-text); }
+
+.leads-page-root--generic .crm-select-trigger.leads-status-select:not(.leads-status-select--yet_to_call) {
+  background-color: var(--lead-status-bg) !important;
+  color: var(--lead-status-text) !important;
+  border-color: color-mix(in srgb, var(--lead-status-text) 26%, var(--lead-status-bg)) !important;
+}
+.leads-page-root--generic .crm-select-trigger.leads-status-select:not(.leads-status-select--yet_to_call):hover:not(:disabled) {
+  border-color: var(--lead-status-text) !important;
+}
+.leads-page-root--generic .crm-select-trigger.leads-status-select:not(.leads-status-select--yet_to_call) svg {
+  color: currentColor !important;
+}
+.leads-page-root--generic .leads-column-menu-trigger {
+  border-color: transparent !important;
+  background: transparent !important;
+  border-radius: 6px !important;
+  width: 22px !important;
+  height: 26px !important;
+  transition: background .15s ease, color .15s ease;
+}
+.leads-page-root--generic .leads-column-menu-trigger:hover,
+.leads-page-root--generic .leads-column-menu-trigger[aria-expanded="true"] {
+  color: var(--primary-color, var(--accent-color)) !important;
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 9%, transparent) !important;
+}
+.leads-page-root--generic select:hover:not(:disabled),
+.leads-page-root--generic .crm-select-trigger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--primary-color, var(--accent-color)) 40%, var(--border-color)) !important;
+}
+.leads-page-root--generic select:focus-visible,
+.leads-page-root--generic .crm-select-trigger:focus-visible {
+  outline: 0;
+  border-color: var(--primary-color, var(--accent-color)) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color, var(--accent-color)) 13%, transparent);
+}
+.leads-page-root--generic select:disabled { opacity: .55; cursor: not-allowed; }
+.leads-page-root--generic select option,
+body:has(.leads-page-root--generic) .leads-bulk-actions-menu select option {
+  color: var(--text-primary, #273449);
+  background: var(--bg-color, #fff);
+  font-size: .8rem;
+}
+body:has(.leads-page-root--generic) .crm-select-popover {
+  border-radius: 12px !important;
+  border: 1px solid var(--border-color, #dce1e9) !important;
+  padding: 5px !important;
+  background: var(--bg-color, #fff) !important;
+  box-shadow: 0 12px 32px rgb(15 23 42 / 14%), 0 2px 6px rgb(15 23 42 / 5%) !important;
+}
+body:has(.leads-page-root--generic) .crm-select-popover [role="option"] {
+  display: flex !important;
+  align-items: center;
+  min-height: 34px;
+  gap: 8px;
+  padding: 8px 10px !important;
+  border: 0 !important;
+  border-radius: 7px;
+  font-size: .8rem !important;
+  line-height: 1.4;
+}
+body:has(.leads-page-root--generic) .crm-select-popover [role="option"]:hover,
+body:has(.leads-page-root--generic) .crm-select-popover [role="option"]:focus-visible {
+  outline: 0;
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 7%, var(--bg-color)) !important;
+}
+body:has(.leads-page-root--generic) .crm-select-popover [aria-selected="true"] {
+  color: var(--primary-color, var(--accent-color)) !important;
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 10%, var(--bg-color)) !important;
+  font-weight: 600 !important;
+}
+/* Keep native form behavior, with a styled popup where supported. */
+@supports (appearance: base-select) {
+  .leads-page-root--generic select,
+  .leads-page-root--generic select::picker(select),
+  body:has(.leads-page-root--generic) .leads-bulk-actions-menu select,
+  body:has(.leads-page-root--generic) .leads-bulk-actions-menu select::picker(select) { appearance: base-select; }
+  .leads-page-root--generic select::picker-icon,
+  body:has(.leads-page-root--generic) .leads-bulk-actions-menu select::picker-icon { display: none; }
+  .leads-page-root--generic select::picker(select),
+  body:has(.leads-page-root--generic) .leads-bulk-actions-menu select::picker(select) {
+    padding: 5px;
+    margin-block: 5px;
+    border: 1px solid var(--border-color, #dce1e9);
+    border-radius: 12px;
+    max-height: min(280px, 50dvh);
+    overflow: auto;
+    background: var(--bg-color, #fff);
+    box-shadow: 0 12px 32px rgb(15 23 42 / 14%);
+  }
+  .leads-page-root--generic select option,
+  body:has(.leads-page-root--generic) .leads-bulk-actions-menu select option {
+    padding: 8px 10px;
+    border-radius: 7px;
+    min-height: 34px;
+  }
+  .leads-page-root--generic select option:hover,
+  .leads-page-root--generic select option:checked,
+  body:has(.leads-page-root--generic) .leads-bulk-actions-menu select option:hover,
+  body:has(.leads-page-root--generic) .leads-bulk-actions-menu select option:checked {
+    background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 9%, var(--bg-color));
+    color: var(--primary-color, var(--accent-color));
+  }
+}
+
+/* Create Lead modal layout overrides for Generic and Travel CRM. */
 .auto-campaign-rule-on-heading {
   justify-self: start;
   text-align: left;
@@ -273,5 +525,23 @@
 
   .create-lead-modal--generic .create-lead-form--generic {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.leads-page-root--generic .leads-mobile-actions-toggle {
+  display: none;
+}
+@media (max-width: 600px) {
+  .leads-page-root--generic .leads-mobile-actions-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+  .leads-page-root--generic #leads-secondary-actions:not(.is-open) {
+    display: none !important;
+  }
+  .leads-page-root--generic #leads-secondary-actions.is-open {
+    display: flex;
+    flex-wrap: wrap;
   }
 }

@@ -1,26 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Building2,
+  Check,
+  ChevronDown,
   CheckCircle2,
   CircleHelp,
+  Filter,
   Leaf,
-  LockKeyhole,
   Plane,
   RefreshCw,
   Search,
   ShieldCheck,
-  UsersRound,
 } from "lucide-react";
 import { superAdminFetch } from "../../utils/superAdminApi";
 import "./super-admin.css";
-
-const EMPTY_SUMMARY = {
-  totalTenants: 0,
-  cappedTenants: 0,
-  totalCustomRoles: 0,
-  tenantsAtLimit: 0,
-};
 
 const VERTICAL_FILTERS = [
   { value: "all", label: "All" },
@@ -66,35 +60,24 @@ function rolePercentage(tenant) {
   return Math.min(Math.round((tenant.customRoleCount / tenant.maxCustomRoles) * 100), 100);
 }
 
-function SummaryCard({ label, value, icon: Icon, tone }) {
-  return (
-    <div className={`role-limit-kpi role-limit-kpi-${tone}`}>
-      <div className="role-limit-kpi-icon"><Icon size={22} /></div>
-      <div>
-        <div className="role-limit-kpi-label">{label}</div>
-        <strong className="role-limit-kpi-value">{value}</strong>
-      </div>
-    </div>
-  );
-}
-
 function SortLabel({ children }) {
   return <span className="role-limit-sort-label">{children}</span>;
 }
 
 export default function SuperAdminRoleManagement() {
   const [tenants, setTenants] = useState([]);
-  const [summary, setSummary] = useState(EMPTY_SUMMARY);
   const [drafts, setDrafts] = useState({});
-  const [organizationFilter, setOrganizationFilter] = useState("all");
   const [verticalFilter, setVerticalFilter] = useState("all");
   const [searchDraft, setSearchDraft] = useState("");
   const [search, setSearch] = useState("");
   const [searchFocused, setSearchFocused] = useState(false);
+  const [showVerticalOptions, setShowVerticalOptions] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState(null);
   const [message, setMessage] = useState("");
+  const verticalMenuRef = useRef(null);
+  const verticalTriggerRef = useRef(null);
 
   const load = async () => {
     setLoading(true);
@@ -102,7 +85,6 @@ export default function SuperAdminRoleManagement() {
       const result = await superAdminFetch("/tenant-management/role-limits");
       const rows = Array.isArray(result?.tenants) ? result.tenants : [];
       setTenants(rows);
-      setSummary(result?.summary || EMPTY_SUMMARY);
       setDrafts(Object.fromEntries(rows.map((tenant) => [
         tenant.tenantId,
         tenant.maxCustomRoles == null ? "" : String(tenant.maxCustomRoles),
@@ -118,10 +100,30 @@ export default function SuperAdminRoleManagement() {
     load();
   }, []);
 
+  useEffect(() => {
+    if (!showVerticalOptions) return undefined;
+
+    const closeOnOutsidePointer = (event) => {
+      if (!verticalMenuRef.current?.contains(event.target)) setShowVerticalOptions(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") {
+        setShowVerticalOptions(false);
+        verticalTriggerRef.current?.focus();
+      }
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [showVerticalOptions]);
+
   const visibleTenants = useMemo(() => {
     const term = search.trim().toLowerCase();
     return tenants.filter((tenant) => {
-      if (organizationFilter !== "all" && String(tenant.tenantId) !== organizationFilter) return false;
       if (verticalFilter !== "all" && (tenant.vertical || "generic") !== verticalFilter) return false;
       if (!term) return true;
       return [tenant.organization, tenant.slug, tenant.ownerEmail, tenant.vertical, tenant.tenantId]
@@ -130,20 +132,30 @@ export default function SuperAdminRoleManagement() {
         .toLowerCase()
         .includes(term);
     });
-  }, [organizationFilter, search, tenants, verticalFilter]);
+  }, [search, tenants, verticalFilter]);
+
+  const visibleSummary = useMemo(() => ({
+    totalTenants: visibleTenants.length,
+    cappedTenants: visibleTenants.filter((tenant) => tenant.maxCustomRoles != null).length,
+    totalCustomRoles: visibleTenants.reduce((total, tenant) => total + Number(tenant.customRoleCount || 0), 0),
+    tenantsAtLimit: visibleTenants.filter((tenant) => tenant.roleLimitReached).length,
+  }), [visibleTenants]);
 
   const searchSuggestions = useMemo(() => {
     const term = searchDraft.trim().toLowerCase();
     if (!term) return [];
 
     return tenants
-      .filter((tenant) => [tenant.organization, tenant.slug, tenant.ownerEmail, tenant.vertical, tenant.tenantId]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase()
-        .includes(term))
+      .filter((tenant) => {
+        if (verticalFilter !== "all" && (tenant.vertical || "generic") !== verticalFilter) return false;
+        return [tenant.organization, tenant.slug, tenant.ownerEmail, tenant.vertical, tenant.tenantId]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(term);
+      })
       .slice(0, 6);
-  }, [searchDraft, tenants]);
+  }, [searchDraft, tenants, verticalFilter]);
 
   const saveLimit = async (tenant) => {
     const raw = String(drafts[tenant.tenantId] ?? "").trim();
@@ -173,16 +185,21 @@ export default function SuperAdminRoleManagement() {
   const chooseSearchSuggestion = (tenant) => {
     setSearchDraft(tenant.organization);
     setSearch(tenant.organization);
-    setOrganizationFilter(String(tenant.tenantId));
     setSearchFocused(false);
   };
 
+  const chooseVertical = (value) => {
+    setVerticalFilter(value);
+    setShowVerticalOptions(false);
+    verticalTriggerRef.current?.focus();
+  };
+
   const clearFilters = () => {
-    setOrganizationFilter("all");
     setVerticalFilter("all");
     setSearchDraft("");
     setSearch("");
     setSearchFocused(false);
+    setShowVerticalOptions(false);
   };
 
   return (
@@ -210,41 +227,13 @@ export default function SuperAdminRoleManagement() {
         </div>
       )}
 
-      <section className="role-limit-filter-panel" aria-label="Organization filters">
-        <label className="role-limit-organization-filter">
-          <span>Organization</span>
-          <span className="role-limit-select-wrap">
-            <Building2 size={17} aria-hidden="true" />
-            <select aria-label="Organization" value={organizationFilter} onChange={(event) => setOrganizationFilter(event.target.value)}>
-              <option value="all">All organizations</option>
-              {tenants.map((tenant) => <option key={tenant.tenantId} value={tenant.tenantId}>{tenant.organization}</option>)}
-            </select>
-          </span>
-        </label>
-
-        <fieldset className="role-limit-vertical-filter">
-          <legend>Vertical</legend>
-          <div className="role-limit-filter-pills">
-            {VERTICAL_FILTERS.map((filter) => (
-              <button
-                type="button"
-                key={filter.value}
-                className={verticalFilter === filter.value ? "is-active" : ""}
-                aria-pressed={verticalFilter === filter.value}
-                onClick={() => setVerticalFilter(filter.value)}
-              >
-                {filter.label}
-              </button>
-            ))}
-          </div>
-        </fieldset>
-
+      <section className="role-limit-filter-panel" aria-label="Role limit filters">
         <div className="role-limit-search-control">
           <label className="role-limit-search-filter">
             <Search size={17} aria-hidden="true" />
             <input
               aria-label="Search organizations"
-              placeholder="Search by organization name, slug, or owner..."
+              placeholder="Search organizations by name, slug, owner, or ID..."
               value={searchDraft}
               onChange={(event) => setSearchDraft(event.target.value)}
               onFocus={() => setSearchFocused(true)}
@@ -278,27 +267,64 @@ export default function SuperAdminRoleManagement() {
           ) : null}
         </div>
 
+        <div className="role-limit-vertical-menu" ref={verticalMenuRef}>
+          <button
+            type="button"
+            ref={verticalTriggerRef}
+            className={`role-limit-filter-trigger${verticalFilter !== "all" ? " is-active" : ""}`}
+            aria-label={verticalFilter === "all" ? "Filter by vertical" : `Filter by vertical: ${verticalLabel(verticalFilter)}`}
+            aria-expanded={showVerticalOptions}
+            aria-controls="role-limit-vertical-options"
+            onClick={() => setShowVerticalOptions((open) => !open)}
+          >
+            <Filter size={16} />
+            <span>Filter</span>
+            {verticalFilter !== "all" && <span className="role-limit-filter-active-value">{verticalLabel(verticalFilter)}</span>}
+            <ChevronDown size={14} aria-hidden="true" />
+          </button>
+
+          {showVerticalOptions && (
+            <div id="role-limit-vertical-options" className="role-limit-filter-popover" role="group" aria-label="Filter by vertical">
+              <strong>Vertical</strong>
+              {VERTICAL_FILTERS.map((filter) => (
+                <button
+                  type="button"
+                  key={filter.value}
+                  className={verticalFilter === filter.value ? "is-active" : ""}
+                  aria-pressed={verticalFilter === filter.value}
+                  onClick={() => chooseVertical(filter.value)}
+                >
+                  <span>{filter.label}</span>
+                  {verticalFilter === filter.value && <Check size={15} aria-hidden="true" />}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
         <div className="role-limit-filter-actions">
-          <button type="button" className="role-limit-clear-button" onClick={clearFilters}>Clear</button>
+          {(verticalFilter !== "all" || searchDraft.trim() || search) && (
+            <button type="button" className="role-limit-clear-button" onClick={clearFilters}>Clear</button>
+          )}
           <button type="button" className="role-limit-refresh-button" onClick={load} disabled={loading} aria-label="Refresh role limits" title="Refresh">
             <RefreshCw size={16} />
           </button>
         </div>
       </section>
 
-      <section className="role-limit-kpi-grid" aria-label="Role limit summary">
-        <SummaryCard label="Total organizations" value={fmtNumber(summary.totalTenants)} icon={Building2} tone="blue" />
-        <SummaryCard label="With role limit" value={fmtNumber(summary.cappedTenants)} icon={ShieldCheck} tone="green" />
-        <SummaryCard label="Total managed roles" value={fmtNumber(summary.totalCustomRoles)} icon={UsersRound} tone="purple" />
-        <SummaryCard label="Blocked from creating more" value={fmtNumber(summary.tenantsAtLimit)} icon={LockKeyhole} tone="red" />
+      <section className="role-limit-summary-strip" aria-label="Role limit summary">
+        <div className="role-limit-summary-item"><span>Organizations</span><strong>{fmtNumber(visibleSummary.totalTenants)}</strong></div>
+        <div className="role-limit-summary-item"><span>Limited orgs</span><strong>{fmtNumber(visibleSummary.cappedTenants)}</strong></div>
+        <div className="role-limit-summary-item"><span>Managed roles</span><strong>{fmtNumber(visibleSummary.totalCustomRoles)}</strong></div>
+        <div className="role-limit-summary-item"><span>At role limit</span><strong>{fmtNumber(visibleSummary.tenantsAtLimit)}</strong></div>
       </section>
 
       {loading ? (
         <div className="role-limit-empty-state">Loading organizations...</div>
       ) : (
         <section className="role-limit-table-card" aria-label="Organizations role limits">
-          <div className="role-limit-table-scroll">
-            <table className="stable-table super-admin-role-limits-table">
+          <div className="role-limit-table-scroll" role="region" aria-label="Scrollable organization role limits" tabIndex={0}>
+            <table className="super-admin-role-limits-table">
               <colgroup>
                 <col className="role-limit-organization-column" />
                 <col className="role-limit-vertical-column" />
@@ -382,7 +408,7 @@ export default function SuperAdminRoleManagement() {
           </div>
           <footer className="role-limit-table-footer">
             <span>Showing {visibleTenants.length} of {tenants.length} organizations</span>
-            <span className="role-limit-footer-hint">Select an organization above to focus on one account.</span>
+            <span className="role-limit-footer-hint">Use the vertical filters and search to narrow this list.</span>
           </footer>
         </section>
       )}

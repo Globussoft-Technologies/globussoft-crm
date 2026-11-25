@@ -1,3 +1,4 @@
+import { formatDateMedium } from '../utils/date';
 import React, { useState, useEffect, useContext, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
@@ -58,6 +59,12 @@ import TravelIntegrationTiles from "../components/settings/TravelIntegrationTile
 // picker swatch, the placeholder hint, and the color actually applied
 // when no brand color is set all match. Mirrors --accent-color in
 // index.css.
+const DEFAULT_CALLIFIED_BASE_URL = "https://app.callified.ai";
+const WORKSPACE_TIMEZONES = [...new Set([
+  "UTC", "Asia/Kolkata",
+  ...(Intl.supportedValuesOf?.("timeZone") || ["Asia/Dubai", "Europe/London", "America/New_York", "America/Los_Angeles", "Australia/Sydney"])
+    .filter((zone) => zone !== "Asia/Calcutta"),
+])];
 const DEFAULT_BRAND_COLOR = "#3b82f6";
 const DEFAULT_TRANSFER_PORT = { ftp: 21, ftps: 21, sftp: 22 };
 
@@ -268,7 +275,7 @@ export default function Settings() {
   const [callifiedApiKey, setCallifiedApiKey] = useState("");
   const [callifiedEmail, setCallifiedEmail] = useState("");
   const [callifiedPassword, setCallifiedPassword] = useState("");
-  const [callifiedBaseUrl, setCallifiedBaseUrl] = useState("https://app.callified.ai");
+  const [callifiedBaseUrl, setCallifiedBaseUrl] = useState(DEFAULT_CALLIFIED_BASE_URL);
   const [callifiedWebhookSecret, setCallifiedWebhookSecret] = useState("");
   const [callifiedShowKey, setCallifiedShowKey] = useState(false);
   const [callifiedShowPassword, setCallifiedShowPassword] = useState(false);
@@ -321,6 +328,9 @@ export default function Settings() {
         setAdsgptConnection({ ready: null, loading: false });
         /* adsgpt config may not be available */
       });
+  }, []);
+
+  useEffect(() => {
     // Fetch Callified integration status for all verticals; only base URL is
     // pre-filled. Sensitive values (API key, email, password, webhook secret) are
     // not restored into the form to avoid accidentally exposing them via the eye
@@ -331,16 +341,15 @@ export default function Settings() {
         if (config) {
           setCallifiedConnected(!!config.isActive);
           setCallifiedUpdatedAt(config.updatedAt || null);
-          // Generic CRM keeps the URL empty until an administrator enters it;
-          // the input placeholder explains what belongs there.
-          setCallifiedBaseUrl(config.isActive ? (config.baseUrl || "") : "");
+          const savedBaseUrl = config.isActive ? config.baseUrl?.trim() : "";
+          setCallifiedBaseUrl(savedBaseUrl || (isGenericVertical ? DEFAULT_CALLIFIED_BASE_URL : ""));
           setCallifiedApiKey(config.apiKey || "");
           // Do not pre-fill email/password/webhookSecret from the DB; keep them blank.
         }
         setCallifiedLoading(false);
       })
       .catch(() => setCallifiedLoading(false));
-  }, []);
+  }, [isGenericVertical]);
 
   useEffect(() => {
     if (ctxTenant?.vertical !== "travel" || ctxUser?.role !== "ADMIN" || !canManageSettings) return undefined;
@@ -722,8 +731,15 @@ export default function Settings() {
         body: JSON.stringify({
           name: tenant.name,
           ownerEmail: tenant.ownerEmail,
+          ...(isGenericVertical ? { timezone: tenant.timezone || "UTC" } : {}),
         }),
       });
+      // Shared date formatters read the cached tenant during render.
+      if (isGenericVertical) {
+        try { localStorage.setItem("tenant", JSON.stringify(updated)); } catch { /* Keep the in-memory tenant current. */ }
+      }
+      setTenantState(updated);
+      if (setTenant) setTenant(updated);
       const reviewUrl = externalReviewUrl.trim();
       if (reviewUrl) {
         await fetchApi("/api/tenant-settings/travel.externalReviewUrl", {
@@ -741,8 +757,6 @@ export default function Settings() {
         }
       }
       setExternalReviewUrl(reviewUrl);
-      setTenantState(updated);
-      if (setTenant) setTenant(updated);
       notify.success("Organization details updated");
     } catch (err) {
       notify.error(err?.message || "Failed to update organization");
@@ -986,7 +1000,7 @@ export default function Settings() {
       setCallifiedApiKey("");
       setCallifiedEmail("");
       setCallifiedPassword("");
-      setCallifiedBaseUrl(isGenericVertical ? "" : "https://app.callified.ai");
+      setCallifiedBaseUrl(DEFAULT_CALLIFIED_BASE_URL);
       setCallifiedWebhookSecret("");
       setCallifiedUpdatedAt(null);
       setCallifiedMsg("");
@@ -1299,6 +1313,15 @@ export default function Settings() {
                     Slug is read-only after organization creation.
                   </p>
                 </div>
+                {isGenericVertical && <div style={{ minWidth: 0 }}>
+                  <label htmlFor="workspace-timezone" style={{ display: "block", marginBottom: "0.4rem", fontSize: "0.875rem", color: "var(--text-secondary)" }}>Workspace timezone</label>
+                  <select id="workspace-timezone" className="input-field" value={tenant.timezone || "UTC"} onChange={(event) => setTenantState({ ...tenant, timezone: event.target.value })}>
+                    {[...new Set([...WORKSPACE_TIMEZONES, tenant.timezone || "UTC"])].map((zone) => (
+                      <option key={zone} value={zone}>{zone === "Asia/Kolkata" ? "India (IST)" : zone}</option>
+                    ))}
+                  </select>
+                  <p style={{ fontSize: "0.75rem", color: "var(--text-secondary)", marginTop: "0.4rem" }}>Used for CRM timestamps and new dialing schedules.</p>
+                </div>}
                 {/* #441: surface the public booking URL with a one-click copy
                   button. Pre-fix the owner had to view-source / DOM-inspect
                   to retrieve the URL — friction at the "send me your booking
@@ -2249,7 +2272,7 @@ export default function Settings() {
                           }}
                         >
                           Connected since:{" "}
-                          {new Date(callifiedUpdatedAt).toLocaleDateString()}
+                          {formatDateMedium(callifiedUpdatedAt)}
                         </p>
                       )}
                     </div>
@@ -5173,7 +5196,7 @@ function NotificationPreferencesCard({ notify }) {
           }}
         >
           <div style={{ minWidth: 0 }}>
-            <label
+            <label htmlFor="quiet-hours-timezone"
               style={{
                 display: "block",
                 marginBottom: "0.4rem",
@@ -5183,7 +5206,7 @@ function NotificationPreferencesCard({ notify }) {
             >
               Timezone
             </label>
-            <select
+            <select id="quiet-hours-timezone"
               className="input-field"
               value={prefs.timezone || ""}
               onChange={(e) =>

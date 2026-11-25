@@ -1194,8 +1194,16 @@ router.get("/reports/visit/:id", phiReadGate, getPatientDetails);
 
 router.get("/patients", phiReadGate, async (req, res) => {
   try {
-    const { q, limit = 50, offset = 0, locationId } = req.query;
+    const { q, limit = 50, offset = 0, locationId, contactId } = req.query;
     const where = tenantWhere(req);
+    if (contactId !== undefined) {
+      const contactIdText = typeof contactId === "string" ? contactId : "";
+      const parsedContactId = Number(contactIdText);
+      if (!/^\d+$/.test(contactIdText) || !Number.isSafeInteger(parsedContactId) || parsedContactId < 1) {
+        return res.status(400).json({ error: "Invalid contact ID", code: "INVALID_CONTACT_ID" });
+      }
+      where.contactId = parsedContactId;
+    }
     if (q) {
       where.OR = [
         { name: { contains: q } },
@@ -1292,6 +1300,7 @@ router.get("/patients", phiReadGate, async (req, res) => {
       {
         count: patients.length,
         query: q || null,
+        contactId: contactId ? Number.parseInt(contactId, 10) : null,
         locationId: locationId ? parseInt(locationId) : null,
         // Pin the shape into the audit row so reviewers can answer "did
         // this list call disclose PHI?" without joining two tables.
@@ -1328,11 +1337,11 @@ router.get("/patients", phiReadGate, async (req, res) => {
     // name-only slim read isn't in that risk class.
     if (!wantFullShape) {
       const outPatientsSlim = shouldMaskForViewer(req)
-        ? maskRows(patients, ["name"])
+        ? maskRows(patients, ["name", "firstName", "lastName", "displayName"])
         : patients;
       return res.json({ patients: outPatientsSlim, total });
     }
-    const piiFields = ["name", "phone", "email", "dob"];
+    const piiFields = ["name", "firstName", "lastName", "displayName", "phone", "email", "dob"];
     const outPatients = shouldMaskForViewer(req)
       ? maskRows(patients, piiFields)
       : patients;
@@ -3208,6 +3217,7 @@ router.get("/visits", phiReadGate, async (req, res) => {
   try {
     const {
       patientId,
+      contactId,
       doctorId,
       status,
       displayStatus,
@@ -3219,9 +3229,29 @@ router.get("/visits", phiReadGate, async (req, res) => {
       offset = 0,
       page,
       paginate,
+      upcoming,
+      sortBy,
     } = req.query;
     const where = tenantWhere(req);
     if (patientId) where.patientId = parseInt(patientId);
+    if (contactId) {
+      const parsedContactId = typeof contactId === "string" && /^\d+$/.test(contactId)
+        ? Number(contactId)
+        : NaN;
+      if (!Number.isFinite(parsedContactId) || parsedContactId < 1) {
+        return res.status(400).json({ error: "Invalid contact ID", code: "INVALID_ID" });
+      }
+      const contact = await prisma.contact.findFirst({
+        where: { id: parsedContactId, tenantId: req.user.tenantId },
+        select: { id: true },
+      });
+      if (!contact) return res.status(404).json({ error: "Contact not found", code: "CONTACT_NOT_FOUND" });
+      const linkedPatients = await prisma.patient.findMany({
+        where: tenantWhere(req, { contactId: parsedContactId, deletedAt: null }),
+        select: { id: true },
+      });
+      where.patientId = { in: linkedPatients.map((patient) => patient.id) };
+    }
     if (doctorId) where.doctorId = parseInt(doctorId);
     if (status) where.status = status;
     if (displayStatus === "pending") {
@@ -3249,6 +3279,10 @@ router.get("/visits", phiReadGate, async (req, res) => {
       // Both bounds unusable → drop the filter entirely rather than leave an
       // empty object on the where clause.
       if (!validFrom && !validTo) delete where.visitDate;
+    }
+    if (upcoming === "true" || upcoming === "1") {
+      where.visitDate = { ...(where.visitDate || {}), gte: new Date() };
+      where.status = { notIn: ["cancelled", "completed", "no-show"] };
     }
     const term = String(q || "").trim();
     if (term) {
@@ -3317,7 +3351,7 @@ router.get("/visits", phiReadGate, async (req, res) => {
       where,
       take,
       skip,
-      orderBy: { visitDate: "desc" },
+      orderBy: sortBy === "asc" ? [{ visitDate: "asc" }, { id: "asc" }] : { visitDate: "desc" },
     };
     if (wantFullShape) {
       visitFindArgs.include = {
@@ -3366,6 +3400,7 @@ router.get("/visits", phiReadGate, async (req, res) => {
         count: visits.length,
         filters: {
           patientId: patientId ? parseInt(patientId) : null,
+          contactId: contactId ? parseInt(contactId) : null,
           doctorId: doctorId ? parseInt(doctorId) : null,
           status: status || null,
           displayStatus: displayStatus || null,
@@ -3373,6 +3408,8 @@ router.get("/visits", phiReadGate, async (req, res) => {
           q: term || null,
           from: from || null,
           to: to || null,
+          upcoming: upcoming === "true" || upcoming === "1",
+          sortBy: sortBy === "asc" ? "asc" : "desc",
         },
         shape: wantFullShape ? "full" : "summary",
       },
@@ -5865,6 +5902,16 @@ router.all("/treatments/*", treatmentsGone);
 
 router.get("/services", async (req, res) => {
   try {
+    const where = tenantWhere(req, { NOT: { isActive: false } });
+    const q = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 120) : "";
+    if (q) {
+      where.OR = [
+        { name: { contains: q } },
+        { category: { contains: q } },
+        { serviceCategory: { is: { name: { contains: q } } } },
+        { description: { contains: q } },
+      ];
+    }
     const paginated = req.query.page !== undefined || req.query.pageSize !== undefined;
     if (paginated) {
       const page = Math.max(1, parseInt(req.query.page, 10) || 1);
@@ -5875,7 +5922,6 @@ router.get("/services", async (req, res) => {
         : sortBy === "oldest"
           ? [{ createdAt: "asc" }, { id: "asc" }]
           : [{ ticketTier: "desc" }, { name: "asc" }, { id: "asc" }];
-      const where = tenantWhere(req, { NOT: { isActive: false } });
       const [services, total] = await prisma.$transaction([
         prisma.service.findMany({
           where,
@@ -5895,7 +5941,7 @@ router.get("/services", async (req, res) => {
     // pre-fill on BookAppointment whenever the linked service sorted past
     // position 200.
     const services = await prisma.service.findMany({
-      where: tenantWhere(req, { NOT: { isActive: false } }),
+      where,
       orderBy: [{ ticketTier: "desc" }, { name: "asc" }],
       take: 2000,
     });
@@ -14237,7 +14283,7 @@ router.post("/public/enquiry", publicEnquiryLimiter, async (req, res) => {
 
     if (duplicate) {
       const existing = duplicate.contact;
-      const nextDescription = [existing.description, note].filter(Boolean).join("\n\n") || note;
+      const nextNote = [existing.note, note].filter(Boolean).join("\n\n") || note;
       await prisma.contact.update({
         where: { id: existing.id },
         data: {
@@ -14246,7 +14292,7 @@ router.post("/public/enquiry", publicEnquiryLimiter, async (req, res) => {
           email: existing.email || syntheticEmail,
           phone: existing.phone || phone || null,
           firstTouchSource: existing.firstTouchSource || "Dr. Enhance Wellness website enquiry",
-          description: nextDescription,
+          note: nextNote,
         },
       });
       return res.json({ created: false, duplicate: true, contactId: existing.id, message: "Thanks - we'll be in touch shortly." });
@@ -14261,7 +14307,7 @@ router.post("/public/enquiry", publicEnquiryLimiter, async (req, res) => {
         status: "Lead",
         source: "website",
         firstTouchSource: "Dr. Enhance Wellness website enquiry",
-        description: note,
+        note,
         aiScore: 30,
         aiScoreLastComputedAt: new Date(),
       },
@@ -17801,9 +17847,17 @@ router.post(
 // ("ending in WXYZ") and explicitly omit `codeHash`.
 router.get("/giftcards", verifyRole(["ADMIN", "MANAGER"]), async (req, res) => {
   try {
-    const { status, limit = 100, offset = 0 } = req.query;
+    const { status, limit = 100, offset = 0, issuedTo } = req.query;
     const where = tenantWhere(req);
     if (status) where.status = String(status);
+    if (issuedTo !== undefined) {
+      const patientIdText = String(issuedTo);
+      const patientId = Number(patientIdText);
+      if (!/^\d+$/.test(patientIdText) || !Number.isSafeInteger(patientId) || patientId < 1) {
+        return res.status(400).json({ error: "issuedTo must be a valid patient ID", code: "INVALID_PATIENT_ID" });
+      }
+      where.issuedTo = patientId;
+    }
     const [giftCards, total] = await Promise.all([
       prisma.giftCard.findMany({
         where,

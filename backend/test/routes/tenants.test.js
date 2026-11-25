@@ -107,6 +107,7 @@ function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
 }
 
 beforeEach(() => {
+  prisma.tenantSetting.findUnique = vi.fn().mockResolvedValue(null);
   prisma.tenant.findUnique.mockReset();
   prisma.tenant.update.mockReset();
   prisma.user.findMany.mockReset();
@@ -135,6 +136,7 @@ describe('GET /api/tenants/current', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       id: 42,
+      timezone: 'UTC',
       name: 'Acme Corp',
       plan: 'enterprise',
       ownerEmail: 'owner@acme.test',
@@ -163,6 +165,33 @@ describe('GET /api/tenants/current', () => {
 // ── PUT /current ──────────────────────────────────────────────────────
 
 describe('PUT /api/tenants/current', () => {
+  test('saves the Generic workspace timezone and only recalculates local-time retries', async () => {
+    const timezoneKey = 'feature.callified.retry.timezone';
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    prisma.tenant.update.mockResolvedValue({ id: 1, vertical: 'generic' });
+    prisma.tenantSetting.upsert = vi.fn();
+    prisma.tenantSetting.findMany = vi.fn().mockResolvedValue([{ key: 'feature.callified.pending_retry.mode' }]);
+    prisma.contact.updateMany = vi.fn();
+    prisma.$transaction = vi.fn(async (work) => work(prisma));
+    const result = await request(makeApp()).put('/api/tenants/current').send({ timezone: 'Asia/Kolkata' });
+    expect(result.status).toBe(200);
+    expect(result.body.timezone).toBe('Asia/Kolkata');
+    expect(prisma.tenantSetting.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { tenantId_key: { tenantId: 1, key: timezoneKey } },
+      update: { value: 'Asia/Kolkata' },
+    }));
+    expect(prisma.contact.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tenantId: 1, callifiedLeadStatus: { in: ['pending'] } }),
+      data: { callifiedDnpNextRetryAt: null },
+    }));
+  });
+
+  test('rejects invalid workspace timezones before making a change', async () => {
+    const result = await request(makeApp()).put('/api/tenants/current').send({ timezone: 'Mars/Olympus' });
+    expect(result.status).toBe(400);
+    expect(result.body.code).toBe('INVALID_TIMEZONE');
+    expect(prisma.tenant.update).not.toHaveBeenCalled();
+  });
   test('happy path (ADMIN): only whitelisted fields reach Prisma.update', async () => {
     prisma.tenant.update.mockResolvedValue({
       id: 42,

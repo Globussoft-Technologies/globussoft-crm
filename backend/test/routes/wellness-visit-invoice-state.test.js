@@ -14,13 +14,17 @@ import prisma from '../../lib/prisma.js';
 
 prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn();
+prisma.patient.findMany = vi.fn();
 prisma.visit = prisma.visit || {};
 prisma.visit.findMany = vi.fn();
+prisma.visit.count = vi.fn();
 prisma.invoice = prisma.invoice || {};
 prisma.invoice.findMany = vi.fn();
 prisma.auditLog = { create: vi.fn().mockResolvedValue({ id: 1 }) };
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'wellness' });
+prisma.contact = prisma.contact || {};
+prisma.contact.findFirst = vi.fn();
 prisma.referral = prisma.referral || {
   findMany: vi.fn(), count: vi.fn(), findFirst: vi.fn(), update: vi.fn(),
 };
@@ -49,7 +53,10 @@ function makeApp() {
 
 beforeEach(() => {
   prisma.patient.findFirst.mockReset();
+  prisma.patient.findMany.mockReset();
   prisma.visit.findMany.mockReset();
+  prisma.visit.count.mockReset();
+  prisma.contact.findFirst.mockReset();
   prisma.invoice.findMany.mockReset();
   prisma.auditLog.create.mockReset();
   prisma.auditLog.create.mockResolvedValue({ id: 1 });
@@ -150,5 +157,60 @@ describe('GET /api/wellness/patients/:id/visits', () => {
       },
     });
     expect(res.body[1]).not.toHaveProperty('invoice');
+  });
+});
+
+describe('GET /api/wellness/visits — contact appointments', () => {
+  test('returns upcoming visits for linked patients in paginated ascending order', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce({ id: 51 });
+    prisma.patient.findMany.mockResolvedValueOnce([{ id: 22 }, { id: 23 }]);
+    prisma.visit.findMany.mockResolvedValueOnce([
+      {
+        id: 501,
+        patientId: 23,
+        visitDate: new Date('2027-01-03T10:00:00.000Z'),
+        status: 'booked',
+        service: { name: 'Consultation' },
+        doctor: { name: 'Dr. Rao' },
+      },
+    ]);
+    prisma.visit.count.mockResolvedValueOnce(21);
+
+    const res = await request(makeApp()).get(
+      '/api/wellness/visits?contactId=51&upcoming=true&page=2&limit=20&paginate=true&sortBy=asc',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      visits: [{ id: 501, patientId: 23, status: 'booked' }],
+      pagination: { total: 21, page: 2, limit: 20, pages: 2, hasNext: false },
+    });
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith({
+      where: { id: 51, tenantId: 1 },
+      select: { id: true },
+    });
+    expect(prisma.patient.findMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, contactId: 51, deletedAt: null },
+      select: { id: true },
+    });
+    expect(prisma.visit.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        tenantId: 1,
+        patientId: { in: [22, 23] },
+        status: { notIn: ['cancelled', 'completed', 'no-show'] },
+        visitDate: { gte: expect.any(Date) },
+      }),
+      take: 20,
+      skip: 20,
+      orderBy: [{ visitDate: 'asc' }, { id: 'asc' }],
+    }));
+    expect(prisma.visit.count).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        tenantId: 1,
+        patientId: { in: [22, 23] },
+        status: { notIn: ['cancelled', 'completed', 'no-show'] },
+        visitDate: { gte: expect.any(Date) },
+      }),
+    }));
   });
 });

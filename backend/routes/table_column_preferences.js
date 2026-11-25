@@ -71,6 +71,13 @@ function normalizeVisibleColumnsForTable(visible, available) {
 const BUILTIN_COLUMNS = {
   leads: [
     { key: "name", label: "Name", lockedVisible: true }, // always shown — the row's identity, hiding it would leave no way to tell rows apart
+    {
+      key: "id",
+      label: "Lead ID",
+      webhookField: "contactId",
+      filterField: "id",
+      filterKind: "number",
+    },
     { key: "email", label: "Email" },
     { key: "phone", label: "Phone" },
     { key: "whatsappPhone", label: "WhatsApp Number" },
@@ -78,12 +85,6 @@ const BUILTIN_COLUMNS = {
     { key: "aiScore", label: "Lead Score" },
     { key: "source", label: "Source" },
     { key: "webForm", label: "Web Form" },
-    {
-      key: "lifecycleStage",
-      label: "Lifecycle Stage",
-      filterField: "lifecycleStageKey",
-      filterKind: "enum",
-    },
     { key: "medium", label: "Medium" }, // Contact.medium — web-form Medium, kept separate from Source
     { key: "location", label: "Location" },
     { key: "pickupLocation", label: "Pickup Location" },
@@ -113,7 +114,7 @@ const BUILTIN_COLUMNS = {
     { key: "industry", label: "Service Type" }, // Contact.industry
     { key: "companySize", label: "No Of Employee" }, // Contact.companySize — same data as the web-form No Of Employee field
     { key: "subBrand", label: "Sub-brand" }, // Contact.subBrand — the web-form Sub-brand field writes here even on generic tenants
-    { key: "description", label: "Note" }, // Contact.description (conversation-summary narrative)
+    { key: "note", label: "Note" }, // Contact.note (conversation-summary narrative)
     { key: "stateCode", label: "State" }, // Contact.stateCode (ISO 3166-2, e.g. IN-KA)
     { key: "lastUpdated", label: "Last Updated" }, // Contact.updatedAt
     // Web-form parity set — every entry is a real Contact column, so the

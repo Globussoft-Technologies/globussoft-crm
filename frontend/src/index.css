@@ -1318,12 +1318,13 @@ button {
   max-width: 1392px;
   margin: 0 auto;
   padding: 24px 0 48px;
-  color: #24213a;
+  background: var(--bg-color, #f0f2f5);
+  color: var(--text-primary, #24213a);
 }
 
 .tally-cost-centres-page > h1 {
   margin: 20px 0 2px;
-  color: #211e37;
+  color: var(--text-primary, #211e37);
   font-size: 32px;
   font-weight: 700;
   letter-spacing: -0.8px;
@@ -1332,7 +1333,7 @@ button {
 
 .tally-cost-centres-description {
   margin: 0;
-  color: #5d6373;
+  color: var(--text-secondary, #5d6373);
   font-size: 15px;
   line-height: 1.6;
 }
@@ -1345,9 +1346,9 @@ button {
   min-height: 59px;
   margin: 19px 0 25px;
   padding: 12px 16px;
-  border: 1px solid #d9dce1;
+  border: 1px solid var(--border-color, #d9dce1);
   border-radius: 12px;
-  background: #fff;
+  background: var(--surface-color, #fff);
   box-shadow: 0 1px 2px rgba(27, 34, 48, 0.02);
 }
 
@@ -1356,7 +1357,7 @@ button {
   align-items: center;
   gap: 0;
   min-width: 0;
-  color: #29263e;
+  color: var(--text-primary, #29263e);
   font-size: 15px;
   font-weight: 500;
   white-space: nowrap;
@@ -1367,10 +1368,10 @@ button {
   height: 30px;
   margin-left: 0;
   padding: 3px 8px;
-  border: 1px solid #8e8e8e;
+  border: 1px solid var(--border-color, #8e8e8e);
   border-radius: 0;
-  background: #fff;
-  color: #24213a;
+  background: var(--input-bg, #fff);
+  color: var(--text-primary, #24213a);
   font: inherit;
   font-size: 13px;
 }
@@ -1378,10 +1379,10 @@ button {
 .tally-cost-centres-form button {
   height: 30px;
   padding: 3px 8px;
-  border: 1px solid #c8cbd1;
+  border: 1px solid var(--border-color, #c8cbd1);
   border-radius: 3px;
-  background: #fff;
-  color: #26233b;
+  background: var(--surface-color, #fff);
+  color: var(--text-primary, #26233b);
   font: inherit;
   font-size: 13px;
   line-height: 1;
@@ -1392,8 +1393,8 @@ button {
 }
 
 .tally-cost-centres-form button:hover {
-  border-color: #8d91a0;
-  background: #f5f6f8;
+  border-color: var(--accent-color, #8d91a0);
+  background: var(--surface-hover, #f5f6f8);
 }
 
 .tally-cost-centres-message,
@@ -1418,7 +1419,7 @@ button {
   width: 850px;
   max-width: 100%;
   border-collapse: collapse;
-  color: #28253d;
+  color: var(--text-primary, #28253d);
   font-size: 15px;
   line-height: 1.35;
   text-align: left;
@@ -1426,7 +1427,7 @@ button {
 
 .tally-cost-centres-table th {
   padding: 4px 10px 5px 0;
-  color: #252239;
+  color: var(--text-secondary, #252239);
   font-size: 15px;
   font-weight: 700;
   white-space: nowrap;
@@ -1508,7 +1509,7 @@ button {
 }
 
 .tally-cost-centres-form label span {
-  color: #3d4660;
+  color: var(--text-secondary, #3d4660);
   font-size: 12px;
   font-weight: 700;
 }
@@ -1517,7 +1518,7 @@ button {
   width: 100%;
   height: 43px;
   padding: 8px 12px;
-  border: 1px solid #d9dce1;
+  border: 1px solid var(--border-color, #d9dce1);
   border-radius: 9px;
   font-size: 14px;
 }
@@ -1527,16 +1528,16 @@ button {
   align-self: end;
   padding: 0 16px;
   border-radius: 9px;
-  border-color: #d7d9e1;
-  color: #29304a;
+  border-color: var(--border-color, #d7d9e1);
+  color: var(--text-primary, #29304a);
   font-weight: 600;
 }
 
 .tally-cost-centres-table-wrap {
   margin-top: 25px;
-  border: 1px solid #dfe1e6;
+  border: 1px solid var(--border-color, #dfe1e6);
   border-radius: 16px;
-  background: #fff;
+  background: var(--surface-color, #fff);
   overflow: hidden;
 }
 
@@ -1550,16 +1551,16 @@ button {
 .tally-cost-centres-table th {
   height: 44px;
   padding: 0 12px;
-  border-bottom: 1px solid #dfe1e6;
-  background: #fcfcfd;
-  color: #3d4660;
+  border-bottom: 1px solid var(--border-color, #dfe1e6);
+  background: var(--table-header-bg, #fcfcfd);
+  color: var(--text-secondary, #3d4660);
   font-size: 12px;
 }
 
 .tally-cost-centres-table td {
   height: 58px;
   padding: 0 12px;
-  border-bottom: 1px solid #e1e3e7;
+  border-bottom: 1px solid var(--border-color, #e1e3e7);
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -1618,6 +1619,10 @@ button {
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  flex-wrap: wrap;
   margin-top: 16px;
 }
 
@@ -1633,6 +1638,34 @@ button {
 .tally-cost-centres-pagination button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+html[data-theme="dark"] .tally-cost-centres-page {
+  color: var(--text-primary);
+}
+
+html[data-theme="dark"] .tally-cost-centres-page > h1 {
+  color: var(--text-primary);
+}
+
+html[data-theme="dark"] .tally-cost-centres-description {
+  color: var(--text-secondary);
+}
+
+html[data-theme="dark"] .tally-cost-centres-pagination {
+  color: var(--text-secondary);
+}
+
+@media (max-width: 480px) {
+  .tally-cost-centres-pagination {
+    justify-content: center;
+    gap: 6px;
+  }
+
+  .tally-cost-centres-pagination button {
+    padding-right: 10px;
+    padding-left: 10px;
+  }
 }
 
 @media (max-width: 760px) {
@@ -2755,7 +2788,7 @@ button {
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 768px) {
   .app-main > main.generic-page-content:has(.reports-page) {
     padding-left: 0.25rem !important;
     padding-right: 0.25rem !important;
@@ -2805,6 +2838,243 @@ button {
   }
 }
 
+/* Wellness Leads uses the fixed Name pane and synchronized bottom
+   scrollbar from Generic CRM, scoped to the Wellness theme. */
+.leads-page-root--wellness .wellness-leads-table-card {
+  padding: 0 !important;
+  overflow: clip !important;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+}
+.leads-page-root--wellness .wellness-leads-controls-toolbar {
+  gap: 0.55rem !important;
+  padding: 0.65rem 0.75rem !important;
+  border-bottom: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--surface-color) 94%, var(--accent-color));
+}
+.leads-page-root--wellness .wellness-leads-controls-toolbar > div:first-child {
+  flex: 1 1 260px !important;
+  background: transparent !important;
+}
+.leads-page-root--wellness .wellness-leads-search-field {
+  flex: 0 1 320px;
+  width: min(100%, 320px) !important;
+  height: 38px;
+  box-sizing: border-box;
+  gap: 8px !important;
+  padding: 0 10px !important;
+  border-radius: 8px !important;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.leads-page-root--wellness .wellness-leads-search-field:focus-within {
+  border-color: var(--accent-color) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 18%, transparent);
+}
+.leads-page-root--wellness .wellness-leads-search-input {
+  min-width: 0;
+  height: 34px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  outline: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--text-primary) !important;
+  font-size: 0.8125rem !important;
+}
+.leads-page-root--wellness .wellness-leads-search-input:focus {
+  border: 0 !important;
+  outline: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.leads-page-root--wellness .wellness-leads-search-input::placeholder {
+  color: var(--text-tertiary);
+}
+.leads-page-root--wellness .wellness-leads-controls-toolbar input[type="search"] {
+  height: 34px !important;
+  font-size: 0.8125rem !important;
+}
+.leads-page-root--wellness .wellness-leads-controls-toolbar :is(button, .btn-primary, .btn-secondary) {
+  min-height: 34px;
+  height: 34px !important;
+  border-radius: 6px;
+  box-shadow: none;
+}
+.leads-page-root--wellness .leads-split-table--wellness-sticky {
+  display: flex;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  align-items: stretch;
+  width: 100%;
+  max-width: 100%;
+  height: clamp(300px, calc(100dvh - 24rem), 640px);
+  min-height: 300px;
+  max-height: 640px !important;
+  box-sizing: border-box;
+  border-radius: 0 !important;
+  overflow-x: clip !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain;
+  scrollbar-color: rgba(128, 128, 128, 0.72) transparent;
+  scrollbar-width: thin;
+}
+.leads-page-root--wellness .leads-split-table--wellness-sticky::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+.leads-page-root--wellness .leads-split-table--wellness-sticky::-webkit-scrollbar-track {
+  background: transparent;
+}
+.leads-page-root--wellness .leads-split-table--wellness-sticky::-webkit-scrollbar-thumb {
+  background: rgba(128, 128, 128, 0.72);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 8px;
+}
+.leads-page-root--wellness .leads-split-table--wellness-sticky::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.95);
+  border-width: 2px;
+}
+.leads-page-root--wellness .leads-split-table--wellness-sticky.leads-split-table--compact-count {
+  height: auto;
+  min-height: 0;
+  max-height: none !important;
+  overflow-y: visible !important;
+  overscroll-behavior: auto;
+}
+.leads-page-root--wellness .leads-table-frozen-pane {
+  align-self: stretch;
+  flex: 0 0 auto;
+  width: var(--leads-name-pane-width, 320px) !important;
+  max-width: 80%;
+  overflow-x: clip;
+  overflow-y: visible;
+  position: relative;
+  z-index: 2;
+  background: var(--surface-color);
+  box-shadow: none;
+}
+.leads-page-root--wellness .leads-table-scroll-pane,
+.leads-page-root--wellness .leads-table-scroll-pane > .top-scroll-sync {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.leads-page-root--wellness .leads-table-scroll-pane {
+  position: relative;
+  z-index: 1;
+  overflow-x: clip;
+  overflow-y: visible;
+  isolation: isolate;
+}
+.leads-page-root--wellness .leads-table-scroll-pane .top-scroll-sync__bottom {
+  flex: 1 0 auto;
+  overflow-x: visible !important;
+  overflow-y: visible !important;
+  clip-path: none !important;
+}
+.leads-page-root--wellness .leads-table-scroll-pane .top-scroll-sync__sticky-bottom {
+  display: block;
+  flex: 0 0 16px;
+  scrollbar-width: auto;
+  scrollbar-color: rgba(128, 128, 128, 0.78) rgba(128, 128, 128, 0.14);
+}
+.leads-page-root--wellness .leads-table-scroll-pane .top-scroll-sync__sticky-bottom::-webkit-scrollbar {
+  height: 16px;
+}
+.leads-page-root--wellness .leads-table-scroll-pane .top-scroll-sync__sticky-bottom::-webkit-scrollbar-track {
+  background: rgba(128, 128, 128, 0.14);
+  border-radius: 8px;
+}
+.leads-page-root--wellness .leads-table-scroll-pane .top-scroll-sync__sticky-bottom::-webkit-scrollbar-thumb {
+  min-width: 48px;
+  background: rgba(128, 128, 128, 0.78);
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background-clip: padding-box;
+}
+.leads-page-root--wellness .leads-table-scroll-pane .top-scroll-sync__sticky-bottom::-webkit-scrollbar-thumb:hover {
+  background: rgba(128, 128, 128, 0.95);
+  border-width: 2px;
+}
+.leads-page-root--wellness .leads-table-frozen-pane table.leads-table thead,
+.leads-page-root--wellness .leads-table-scroll-pane table.leads-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--surface-color);
+  isolation: isolate;
+}
+.leads-page-root--wellness table.leads-table thead tr,
+.leads-page-root--wellness table.leads-table thead th {
+  background-color: var(--surface-color) !important;
+}
+.leads-page-root--wellness table.leads-table thead th {
+  position: relative !important;
+  top: auto !important;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+.leads-page-root--wellness .leads-split-table--density-compact table.leads-table thead tr {
+  height: 38px;
+}
+.leads-page-root--wellness .leads-split-table--density-compact table.leads-table tbody tr {
+  height: 40px;
+}
+.leads-page-root--wellness .leads-split-table--density-compact table.leads-table th,
+.leads-page-root--wellness .leads-split-table--density-compact table.leads-table td,
+.leads-page-root--wellness table.leads-table th,
+.leads-page-root--wellness table.leads-table td {
+  height: 40px !important;
+  padding-top: 0.3rem !important;
+  padding-bottom: 0.3rem !important;
+  font-size: 0.8125rem;
+}
+.leads-page-root--wellness .leads-table-frozen-pane table.leads-table tbody td:first-child {
+  overflow: hidden;
+}
+.leads-page-root--wellness .leads-table-frozen-pane table.leads-table tbody td:first-child > div,
+.leads-page-root--wellness .leads-table-frozen-pane table.leads-table tbody td:first-child > div > div {
+  min-width: 0;
+}
+.leads-page-root--wellness .leads-table-frozen-pane table.leads-table tbody td:first-child a {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.leads-page-root--wellness table.leads-table thead th > div > span:first-of-type {
+  min-width: 0;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+.leads-page-root--wellness table.leads-table tbody .input-field {
+  min-height: 30px !important;
+  height: 30px;
+  padding-top: 0.25rem !important;
+  padding-bottom: 0.25rem !important;
+}
+.leads-page-root--wellness table.leads-table tbody tr:hover td {
+  background: color-mix(in srgb, var(--surface-color) 90%, var(--accent-color));
+}
+.leads-page-root--wellness .leads-pagination-footer {
+  padding-top: 0.6rem !important;
+  padding-bottom: 0.6rem !important;
+}
+.leads-page-root--wellness [role="separator"][aria-label^="Resize "] {
+  border-right-color: transparent !important;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+.leads-page-root--wellness [role="separator"][aria-label^="Resize "]:hover {
+  border-right-color: var(--primary-color, var(--accent-color)) !important;
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 10%, transparent);
+}
 /* Remove the legacy empty rail column from the Generic Reports detail table. */
 body[data-vertical="generic"] main.generic-page-content .reports-page__table-shell--generic {
   grid-template-columns: minmax(0, 1fr) !important;
@@ -5596,10 +5866,6 @@ table.leads-table thead th {
   padding-top: 0.6rem !important;
 }
 
-.leads-page-root--generic .leads-mobile-actions-toggle {
-  display: none;
-}
-
 .leads-page-root--generic
   .leads-actions-toolbar
   :is(button, .btn-primary, .btn-secondary),
@@ -6270,15 +6536,6 @@ table.leads-table thead th {
     left: auto !important;
     right: 0 !important;
   }
-
-  .leads-page-root--generic .leads-toolbar-shell .leads-density-menu {
-    left: auto !important;
-    right: 0 !important;
-    width: min(220px, calc(100vw - 3.5rem)) !important;
-    max-width: calc(100vw - 3.5rem) !important;
-    min-width: 0 !important;
-    box-sizing: border-box;
-  }
 }
 
 @media (max-width: 600px) {
@@ -6419,28 +6676,6 @@ table.leads-table thead th {
     right: auto !important;
     width: min(420px, calc(100vw - 3.5rem)) !important;
     max-width: calc(100vw - 3.5rem) !important;
-  }
-
-  .leads-page-root--generic .leads-mobile-actions-toggle {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.35rem;
-    width: 100%;
-  }
-
-  .leads-page-root--generic
-    .leads-generic-actions-host:not(.leads-generic-actions-host--open)
-    .leads-actions-toolbar {
-    display: none !important;
-  }
-
-  .leads-page-root--generic
-    .leads-generic-actions-host--open
-    .leads-actions-toolbar {
-    display: grid !important;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    margin-top: 0.5rem;
   }
 
   .leads-page-root--generic .leads-actions-toolbar > span[aria-hidden="true"] {
@@ -7462,6 +7697,225 @@ body[data-vertical="travel"]
   .leads-page-root
   .travel-leads-table-card:hover::before {
   display: none !important;
+}
+
+/* The Travel action row is portalled into the search toolbar. Let its
+   controls shrink and wrap rather than making the table card wider than the
+   page. The Bulk actions menu is right-anchored in Leads.jsx because this card
+   deliberately clips its wide data grid. */
+body[data-vertical="travel"] .leads-page-root .travel-leads-actions-host,
+body[data-vertical="travel"] .leads-page-root .travel-leads-actions-toolbar,
+body[data-vertical="travel"] .leads-page-root .lead-bulk-actions-control {
+  min-width: 0;
+}
+
+body[data-vertical="travel"] .leads-page-root .travel-leads-actions-toolbar {
+  flex-wrap: wrap;
+}
+
+body[data-vertical="travel"]
+  .leads-page-root
+  .travel-leads-actions-toolbar
+  .lead-bulk-actions-menu {
+  left: auto !important;
+  right: 0 !important;
+  width: min(420px, calc(100vw - 2rem)) !important;
+  max-width: calc(100vw - 2rem) !important;
+  max-height: calc(100dvh - 1rem);
+  overflow-y: auto;
+}
+
+/* On phones the menu is portalled to <body> so the table card's clipping and
+   backdrop filter cannot turn it into content below the grid. Present it as
+   a centered, independently scrollable action dialog. */
+.lead-bulk-actions-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1199;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.lead-bulk-actions-menu--mobile-dialog {
+  position: fixed !important;
+  top: 50% !important;
+  right: auto !important;
+  bottom: auto !important;
+  left: 50% !important;
+  width: min(28rem, calc(100vw - 1.5rem)) !important;
+  max-width: calc(100vw - 1.5rem) !important;
+  max-height: calc(100dvh - 1.5rem) !important;
+  overflow-y: auto !important;
+  transform: translate(-50%, -50%);
+  z-index: 1200 !important;
+}
+
+@media (max-width: 899px) {
+  .leads-page-root--travel {
+    padding: var(--crm-card-padding, 0.75rem) !important;
+  }
+
+  body[data-vertical="travel"] .leads-page-root .travel-leads-search-toolbar {
+    align-items: stretch !important;
+    padding: 0.75rem !important;
+  }
+
+  body[data-vertical="travel"] .leads-page-root .travel-leads-search-controls {
+    width: 100%;
+    flex-basis: 100% !important;
+  }
+
+  /* At tablet widths the portalled action row wraps beneath search and its
+     trigger sits near the card's left edge. Open toward the right here; the
+     desktop right anchor would otherwise push most of the menu off-canvas. */
+  body[data-vertical="travel"]
+    .leads-page-root
+    .travel-leads-actions-toolbar
+    .lead-bulk-actions-menu {
+    left: 0 !important;
+    right: auto !important;
+  }
+}
+
+@media (max-width: 600px) {
+  body[data-vertical="travel"] .leads-page-root .travel-leads-search-controls {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: stretch !important;
+    gap: 0.5rem !important;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root
+    .travel-leads-search-controls
+    > div:first-child {
+    grid-column: 1 / -1;
+    width: 100% !important;
+  }
+
+  body[data-vertical="travel"] .leads-page-root .travel-leads-actions-host {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  body[data-vertical="travel"] .leads-page-root .travel-leads-actions-toolbar {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100% !important;
+    gap: 0.5rem !important;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root
+    .travel-leads-actions-toolbar
+    > :is(button, .lead-bulk-actions-control),
+  body[data-vertical="travel"]
+    .leads-page-root
+    .travel-leads-actions-toolbar
+    .lead-bulk-actions-control
+    > button {
+    width: 100%;
+    min-width: 0;
+    justify-content: center;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root
+    .travel-leads-actions-toolbar
+    > span[aria-hidden="true"] {
+    display: none;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root
+    .travel-leads-actions-toolbar
+    .lead-bulk-actions-menu {
+    left: auto !important;
+    right: 0 !important;
+    width: calc(100vw - 1.5rem) !important;
+    max-width: calc(100vw - 1.5rem) !important;
+  }
+}
+
+@media (max-width: 380px) {
+  /* A two-column action row is too wide once the application content pane is
+     below 380px. Stack every Travel Leads control and explicitly neutralize
+     the shared phone rule that caps unclassified buttons at 96% width. */
+  body[data-vertical="travel"] .leads-page-root--travel .travel-leads-search-controls,
+  body[data-vertical="travel"] .leads-page-root--travel .travel-leads-actions-toolbar,
+  body[data-vertical="travel"] .leads-page-root--travel .travel-leads-search-actions {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    width: 100% !important;
+    min-width: 0;
+    justify-content: stretch !important;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root--travel
+    :is(.travel-leads-search-controls, .travel-leads-actions-toolbar, .travel-leads-search-actions)
+    > * {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    box-sizing: border-box;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root--travel
+    :is(.travel-leads-search-controls, .travel-leads-actions-toolbar, .travel-leads-search-actions)
+    :is(button, .btn-secondary) {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: none !important;
+    justify-content: center;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root--travel
+    .travel-leads-search-actions
+    .column-picker-control {
+    display: block !important;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root--travel
+    .travel-leads-actions-toolbar
+    .lead-bulk-actions-menu {
+    left: 0 !important;
+    right: auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root--travel
+    .lead-bulk-actions-menu
+    :is(.lead-bulk-selection-actions, .lead-bulk-assignment-actions) {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body[data-vertical="travel"]
+    .leads-page-root--travel
+    .lead-bulk-actions-menu
+    :is(select, button) {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
+
+  .lead-bulk-actions-menu--mobile-dialog
+    :is(.lead-bulk-selection-actions, .lead-bulk-assignment-actions) {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lead-bulk-actions-menu--mobile-dialog :is(select, button) {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
 }
 
 /* Keep long source labels inside their pill instead of letting the nested
@@ -11502,336 +11956,6 @@ body[data-vertical="generic"] .cpq-deal-list > button > svg {
    page instead of dimming it. Individual modal panels own their surface
    background (for example .generic-import-wizard and .cp-modal). */
 
-/* Generic CRM Call Settings — Ant Design Menu-inspired hierarchy. */
-.call-settings-backdrop {
-  background: rgba(15, 23, 42, 0.52) !important;
-  backdrop-filter: blur(3px);
-}
-
-.call-settings-dialog {
-  width: min(92vw, 540px) !important;
-  max-height: min(88vh, 780px) !important;
-  padding: 0 16px 14px !important;
-  border: 1px solid color-mix(in srgb, var(--border-color) 78%, transparent) !important;
-  border-radius: 16px !important;
-  background: color-mix(in srgb, var(--bg-color) 94%, #f5f7fa) !important;
-  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28) !important;
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--text-secondary) 35%, transparent)
-    transparent;
-  scrollbar-gutter: stable;
-}
-
-.call-settings-dialog::-webkit-scrollbar {
-  width: 8px;
-}
-
-.call-settings-dialog::-webkit-scrollbar-track {
-  margin-block: 12px;
-  background: transparent;
-}
-
-.call-settings-dialog::-webkit-scrollbar-thumb {
-  border: 2px solid transparent;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--text-secondary) 38%, transparent);
-  background-clip: padding-box;
-}
-
-.call-settings-header {
-  position: sticky;
-  top: 0;
-  z-index: 3;
-  margin: 0 -16px 12px !important;
-  padding: 16px 18px 14px;
-  border-bottom: 1px solid var(--border-color);
-  background: color-mix(in srgb, var(--bg-color) 96%, transparent);
-  backdrop-filter: blur(12px);
-}
-
-.call-settings-heading {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 11px;
-}
-
-.call-settings-heading-icon {
-  display: grid;
-  width: 38px;
-  height: 38px;
-  flex: 0 0 38px;
-  place-items: center;
-  border-radius: 10px;
-  color: var(--primary-color, var(--accent-color));
-  background: color-mix(
-    in srgb,
-    var(--primary-color, var(--accent-color)) 12%,
-    transparent
-  );
-}
-
-.call-settings-heading h3 {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 1rem;
-  line-height: 1.35;
-}
-
-.call-settings-heading > span:last-child > span {
-  display: block;
-  margin-top: 2px;
-  color: var(--text-secondary);
-  font-size: 0.72rem;
-  line-height: 1.35;
-}
-
-.call-settings-close {
-  width: 32px;
-  height: 32px;
-  padding: 0 !important;
-  align-items: center;
-  justify-content: center;
-  border-radius: 8px !important;
-  transition:
-    color 150ms ease,
-    background 150ms ease;
-}
-
-.call-settings-close:hover {
-  color: var(--text-primary) !important;
-  background: var(--surface-hover) !important;
-}
-
-.call-settings-section {
-  position: relative;
-  margin: 0 0 10px !important;
-  padding: 13px 14px;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--border-color) 85%, transparent);
-  border-radius: 11px;
-  background: var(--surface, var(--surface-color));
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
-  transition:
-    border-color 150ms ease,
-    box-shadow 150ms ease;
-}
-
-.call-settings-section:hover {
-  border-color: color-mix(
-    in srgb,
-    var(--primary-color, var(--accent-color)) 28%,
-    var(--border-color)
-  );
-  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.06);
-}
-
-.call-settings-section-title {
-  display: flex !important;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 9px !important;
-  color: var(--text-primary) !important;
-  font-size: 0.72rem !important;
-  font-weight: 700 !important;
-  letter-spacing: 0.045em !important;
-  padding-inline: 2px;
-}
-
-.call-settings-section-title::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  flex: 0 0 7px;
-  border-radius: 2px;
-  background: var(--primary-color, var(--accent-color));
-  box-shadow: 0 0 0 4px
-    color-mix(
-      in srgb,
-      var(--primary-color, var(--accent-color)) 10%,
-      transparent
-    );
-}
-
-.call-settings-section > label {
-  display: grid !important;
-  grid-template-columns: 34px minmax(0, 1fr);
-  align-items: center !important;
-  min-height: 28px;
-  column-gap: 10px !important;
-  margin-bottom: 0 !important;
-  font-size: 0.84rem !important;
-  line-height: 1.4;
-}
-
-.call-settings-section > label > input[type="checkbox"] {
-  position: relative;
-  width: 34px;
-  height: 19px;
-  flex: 0 0 34px;
-  margin: 0 !important;
-  appearance: none;
-  border: 0;
-  border-radius: 999px;
-  outline: none;
-  cursor: pointer;
-  align-self: start;
-  margin-top: 1px !important;
-  background: color-mix(
-    in srgb,
-    var(--text-secondary) 32%,
-    var(--surface, var(--surface-color, #fff))
-  );
-  transition:
-    background 160ms ease,
-    box-shadow 160ms ease;
-}
-
-.call-settings-section > label > input[type="checkbox"]::before {
-  content: "";
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.28);
-  transition: transform 160ms ease;
-}
-
-.call-settings-section > label > input[type="checkbox"]:checked {
-  background: var(--primary-color, var(--accent-color));
-}
-
-.call-settings-section > label > input[type="checkbox"]:checked::before {
-  transform: translateX(15px);
-}
-
-.call-settings-section > label > input[type="checkbox"]:focus-visible {
-  box-shadow: 0 0 0 3px
-    color-mix(
-      in srgb,
-      var(--primary-color, var(--accent-color)) 22%,
-      transparent
-    );
-}
-
-.call-settings-section > label > input[type="checkbox"]:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.call-settings-section-expandable > div:last-child {
-  margin-top: 12px;
-  margin-left: 44px;
-  padding-top: 12px;
-  border-top: 1px solid color-mix(in srgb, var(--border-color) 76%, transparent);
-}
-
-.call-settings-dialog > .call-settings-section + div[style*="height"] {
-  display: none !important;
-}
-
-.call-settings-schedule {
-  padding: 10px !important;
-  border-color: color-mix(
-    in srgb,
-    var(--border-color) 82%,
-    transparent
-  ) !important;
-  border-radius: 10px !important;
-  background: color-mix(
-    in srgb,
-    var(--bg-color) 70%,
-    var(--surface)
-  ) !important;
-}
-
-.call-settings-segmented {
-  gap: 2px !important;
-  padding: 3px !important;
-  background: color-mix(
-    in srgb,
-    var(--border-color) 42%,
-    transparent
-  ) !important;
-}
-
-.call-settings-segmented button {
-  min-height: 34px;
-  border: 0 !important;
-}
-
-.call-settings-segmented button[aria-pressed="true"] {
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.12);
-}
-
-.call-settings-dialog input[type="number"],
-.call-settings-dialog input[type="time"],
-.call-settings-dialog select {
-  min-height: 36px;
-  border-color: var(--border-color) !important;
-  border-radius: 8px !important;
-  background: var(--surface, var(--surface-color)) !important;
-  transition:
-    border-color 150ms ease,
-    box-shadow 150ms ease;
-}
-
-.call-settings-dialog input[type="number"]:focus,
-.call-settings-dialog input[type="time"]:focus,
-.call-settings-dialog select:focus {
-  border-color: var(--primary-color, var(--accent-color)) !important;
-  outline: none;
-  box-shadow: 0 0 0 3px
-    color-mix(
-      in srgb,
-      var(--primary-color, var(--accent-color)) 14%,
-      transparent
-    );
-}
-
-.call-settings-admin-note,
-.call-settings-save-note {
-  margin: 12px 2px 2px !important;
-  color: var(--text-secondary);
-  font-size: 0.72rem;
-  text-align: center;
-}
-
-.call-settings-save-note span {
-  margin-right: 4px;
-  color: #16a34a;
-  font-weight: 700;
-}
-
-@media (max-width: 520px) {
-  .call-settings-dialog {
-    width: calc(100vw - 24px) !important;
-    max-height: calc(100vh - 28px) !important;
-    padding-inline: 12px !important;
-  }
-
-  .call-settings-header {
-    margin-inline: -12px !important;
-    padding-inline: 14px;
-  }
-
-  .call-settings-section {
-    padding: 12px;
-  }
-
-  .call-settings-section-expandable > div:last-child {
-    margin-left: 0;
-  }
-}
-
-[data-theme="dark"] .call-settings-dialog {
-  background: color-mix(in srgb, var(--bg-color) 95%, #111827) !important;
-  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.5) !important;
-}
-
 .pickup-plot-resizable-table th:not(:last-child),
 .pickup-plot-resizable-table td:not(:last-child) {
   border-right: 1px solid var(--border-color);
@@ -12566,9 +12690,10 @@ body[data-vertical="generic"] .developer-api-data-scroll {
 .travel-lead-lifecycle-terminals {
   display: flex;
   align-items: stretch;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   width: 100%;
+  overflow: hidden;
 }
 .travel-lead-lifecycle-terminals button {
   display: block;
@@ -12576,14 +12701,17 @@ body[data-vertical="generic"] .developer-api-data-scroll {
   flex: 1;
   height: auto;
   min-height: 40px;
-  padding: 0 8px;
+  padding: 0 4px;
+  overflow: hidden;
   border: 1px dashed var(--border-color);
   border-radius: 9px;
   background: var(--surface-color);
   color: var(--danger-color);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   line-height: 14px;
+  text-overflow: clip;
+  white-space: nowrap;
   cursor: pointer;
 }
 .travel-lead-content {
@@ -12708,15 +12836,15 @@ body[data-vertical="generic"] .developer-api-data-scroll {
   position: relative;
   margin-top: 19px;
   padding: 21px 16px 18px;
-  border-color: #c9c9ff;
-  background: #f7f7ff;
+  border-color: color-mix(in srgb, var(--accent-color) 35%, var(--border-color));
+  background: color-mix(in srgb, var(--accent-color) 8%, var(--surface-color));
 }
 .travel-lead-itinerary-button {
   float: right;
   margin: -4px 0 10px 16px;
 }
 .travel-lead-trip-label {
-  color: #5b21e6;
+  color: var(--accent-color);
   font-size: 11px;
   font-weight: 800;
 }
@@ -12734,10 +12862,10 @@ body[data-vertical="generic"] .developer-api-data-scroll {
   height: 5px;
   margin-bottom: 10px;
   border-radius: 5px;
-  background: #d9ddea;
+  background: var(--subtle-bg-3);
 }
 .travel-lead-trip-progress div > div.is-complete {
-  background: #5b21e6;
+  background: var(--accent-color);
 }
 .travel-lead-trip-progress small {
   color: var(--text-secondary);

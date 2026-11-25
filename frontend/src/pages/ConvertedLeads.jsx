@@ -2,7 +2,7 @@ import { fetchApi } from '../utils/api';
 import { useState, useEffect, useContext } from 'react';
 import { UserPlus, Search, Users, Filter, MoreVertical } from 'lucide-react';
 import { useNotify } from '../utils/notify';
-import { formatDateMedium as formatDate } from '../utils/date';
+import { formatDateMedium as formatDate, workspaceDayKey } from '../utils/date';
 import { AuthContext } from '../App';
 import FilterPanel from '../components/FilterPanel';
 import TopScrollSync from '../components/TopScrollSync';
@@ -116,7 +116,7 @@ function matchesAdvancedFilter(lead, filter, customFieldDefs) {
   if (filter.operator === 'between') {
     const leadDate = new Date(rawValue);
     if (Number.isNaN(leadDate.getTime())) return false;
-    const leadDay = leadDate.toISOString().slice(0, 10);
+    const leadDay = workspaceDayKey(rawValue);
     const from = normalizeFilterText(values[0]).slice(0, 10);
     const to = normalizeFilterText(values[1]).slice(0, 10);
     if (from && leadDay < from) return false;

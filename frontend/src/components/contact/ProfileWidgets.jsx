@@ -30,7 +30,7 @@ export function Modal({ title, onClose, children, wide }) {
   );
 }
 
-export function InlineField({ value, display, type = 'text', options = [], onSave, placeholder }) {
+export function InlineField({ value, display, type = 'text', options = [], onSave, placeholder, editOnDisplayClick = false, editLabel = 'field', saveOnChange = false }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? '');
   const [saving, setSaving] = useState(false);
@@ -40,14 +40,18 @@ export function InlineField({ value, display, type = 'text', options = [], onSav
     setEditing(true);
   };
 
-  const commit = async () => {
-    const next = typeof draft === 'string' ? draft.trim() : draft;
+  const commit = async (nextDraft = draft) => {
+    const next = typeof nextDraft === 'string' ? nextDraft.trim() : nextDraft;
     const current = typeof value === 'string' ? value.trim() : value;
     setEditing(false);
     if (next === current || saving) return;
     setSaving(true);
     try {
       await onSave(next === '' ? null : next);
+    } catch {
+      // Inline saves are triggered by DOM event handlers, so a rejected save
+      // must not escape as an unhandled promise. The owning page is responsible
+      // for restoring optimistic state and displaying its error notification.
     } finally {
       setSaving(false);
     }
@@ -56,7 +60,19 @@ export function InlineField({ value, display, type = 'text', options = [], onSav
   if (!editing) {
     return (
       <span className="cp-inline">
-        <span style={{ opacity: saving ? 0.5 : 1 }}>{display !== undefined ? display : (value ? String(value) : <span style={{ color: 'var(--text-secondary)' }}>Not available</span>)}</span>
+        <span
+          style={{ opacity: saving ? 0.5 : 1, cursor: editOnDisplayClick ? 'pointer' : undefined }}
+          onClick={editOnDisplayClick ? start : undefined}
+          onKeyDown={editOnDisplayClick ? (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              start();
+            }
+          } : undefined}
+          role={editOnDisplayClick ? 'button' : undefined}
+          tabIndex={editOnDisplayClick ? 0 : undefined}
+          aria-label={editOnDisplayClick ? `Edit ${editLabel}` : undefined}
+        >{display !== undefined ? display : (value ? String(value) : <span style={{ color: 'var(--text-secondary)' }}>Not available</span>)}</span>
         <button type="button" className="cp-edit-btn" onClick={start} title="Edit" aria-label="Edit field">
           <Pencil size={11} />
         </button>
@@ -69,9 +85,14 @@ export function InlineField({ value, display, type = 'text', options = [], onSav
       <select
         className="cp-input"
         autoFocus
+        aria-label={`Edit ${editLabel}`}
         value={draft ?? ''}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={commit}
+        onChange={(e) => {
+          const next = e.target.value;
+          setDraft(next);
+          if (saveOnChange) commit(next);
+        }}
+        onBlur={() => { if (!saveOnChange) commit(); }}
         onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setEditing(false); }}
       >
         <option value="">{placeholder || 'Select…'}</option>
@@ -90,7 +111,7 @@ export function InlineField({ value, display, type = 'text', options = [], onSav
       value={draft ?? ''}
       placeholder={placeholder}
       onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
+      onBlur={() => commit()}
       onKeyDown={(e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setEditing(false); }}
     />
   );

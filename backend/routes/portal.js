@@ -30,6 +30,7 @@ const {
   clearTmcRegistrationContext,
 } = require("../lib/tmcRegistrationContext");
 const { hardDeleteContact } = require("../lib/contactHardDelete");
+const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const emailSender = require("../lib/emailSender");
 const portalResetTokens = require("../lib/portalResetTokens");
 const { getTenantRazorpayClient } = require("../lib/tenantPaymentGateway");
@@ -308,6 +309,25 @@ router.post("/register", async (req, res) => {
       : tmcContext?.registrationType === "PARENT"
         ? "/tmc/parent-portal"
         : "/travel/portal";
+    try {
+      const frontendBase = getFrontendUrlFromRequest(req).replace(/\/+$/, "");
+      await require("../lib/eventBus").emitEvent(
+        "account.created",
+        {
+          contactId: contact.id,
+          recipientEmail: contact.email || em,
+          recipientName: contact.name || nm,
+          subBrand: contact.subBrand || (tmcContext ? "tmc" : "travelstall"),
+          signInLink: `${frontendBase}${portalRoute}`,
+        },
+        tenantId,
+        req.app.get("io"),
+      );
+    } catch (eventError) {
+      console.error(
+        `[Portal][register] account.created email failed (non-fatal): ${eventError.message}`,
+      );
+    }
     if (tmcContext) clearTmcRegistrationContext(res);
     return res.status(201).json({
       token,

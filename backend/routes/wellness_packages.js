@@ -30,6 +30,7 @@ const express = require("express");
 const prisma = require("../lib/prisma");
 const { parseDateTimeLocalInTZ } = require("../lib/datetime");
 const { writeAudit, diffFields } = require("../lib/audit");
+const { sanitizeJsonForStringColumn } = require("../lib/sanitizeJson");
 const { verifyWellnessRole } = require("../middleware/wellnessRole");
 const { verifyToken } = require("../middleware/auth");
 
@@ -715,6 +716,13 @@ router.get("/packages", verifyToken, async (req, res) => {
       if (req.query.isActive === "true") where.isActive = true;
       if (req.query.isActive === "false") where.isActive = false;
     }
+    if (req.query.sellableOnly === "true") {
+      where.isActive = true;
+      where.AND = [
+        ...(Array.isArray(where.AND) ? where.AND : []),
+        { OR: [{ sellByDate: null }, { sellByDate: { gte: new Date() } }] },
+      ];
+    }
 
     const rows = await prisma.servicePackage.findMany({
       where,
@@ -1090,18 +1098,31 @@ router.post("/packages/:id/buy", verifyToken, async (req, res) => {
  */
 async function raisePackageInvoice({ tenantId, payment, meta, plan }) {
   const paidAt = new Date();
+  const amount = Number(payment.amount) || 0;
+  const packageId = Number(meta.packageId);
+  const packageName = meta.packageName || plan.name || "Package";
   return prisma.invoice.create({
     data: {
       // Mirrors the WLV-<visitId>-<ts> shape the visit path uses, so the
       // ledger reads at a glance: WPK = wellness package.
       invoiceNum: `WPK-${meta.packageId ?? plan.id}-${Date.now()}`,
-      amount: Number(payment.amount) || 0,
+      amount,
       status: "PAID",
       paidAt,
       // Paid on issue; a due date is required by the model.
       dueDate: paidAt,
       contactId: payment.contactId,
       tenantId,
+      // Keep the sold package on the invoice itself so the ledger does not
+      // have to infer it from the patient's current package catalogue.
+      lineItemsJson: sanitizeJsonForStringColumn([{
+        type: "package",
+        itemId: Number.isInteger(packageId) && packageId > 0 ? packageId : null,
+        name: packageName,
+        quantity: 1,
+        unitPrice: amount,
+        amount,
+      }]),
     },
   });
 }

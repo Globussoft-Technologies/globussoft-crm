@@ -1,16 +1,12 @@
 /**
- * Callified calling on the lead lists — All Leads and Converted Leads.
+ * Callified calling on the Wellness All Leads page.
  *
- * Both pages render the same controls through this module, so the contract is
- * pinned once here rather than twice per page.
- *
- * The load-bearing property is the GATE. `/leads` and `/converted-leads` are
- * cross-vertical pages: the generic CRM already has its own Callified flow on
- * the very same page, and travel has none. If the wellness action leaked onto
- * a generic tenant a user would see two competing call buttons, and on travel
- * a button whose endpoints 403. So the hook must stay off everywhere except a
- * wellness tenant with Callified actually configured — and must not even ASK
- * about Callified status on the other verticals.
+ * The load-bearing property is the GATE. `/leads` is cross-vertical, while
+ * `/converted-leads` is no longer available in Wellness. If the wellness
+ * action leaked onto a generic tenant, the user would see competing Callified
+ * controls; travel has no calling at all. The hook must stay off everywhere
+ * except a Wellness tenant with Callified configured — and must not even ASK
+ * about Callified status on other verticals.
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -33,7 +29,7 @@ import { LeadCallButton, LeadCallDialog } from '../components/wellness/LeadCallA
 
 const LEAD = { id: 31, name: 'Ravi Kumar', phone: '+919812345670', email: 'r@t.in' };
 
-// A miniature version of what both lead pages do with the hook.
+// A miniature version of what the Wellness Leads page does with the hook.
 function Harness({ lead = LEAD }) {
   const call = useLeadCalling();
   return (

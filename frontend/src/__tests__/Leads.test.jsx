@@ -857,9 +857,9 @@ describe('Leads Freshsales-style list UI affordances', () => {
       if (url === '/api/staff' && !opts) {
         return Promise.resolve([{ id: 7, name: 'Maya Rao', email: 'maya@example.com', role: 'USER' }]);
       }
-      if (url === '/api/integrations/callified/config' && !opts) return Promise.resolve({ isActive: false });
-      if (url === '/api/callified/campaigns/with-lead-counts' && !opts) return Promise.resolve({ campaigns: [] });
-      if (typeof url === 'string' && url.startsWith('/api/callified/leads/call-summary') && !opts) {
+      if (url === '/api/integrations/callified/config' && !opts?.method) return Promise.resolve({ isActive: false });
+      if (url === '/api/callified/campaigns/with-lead-counts' && !opts?.method) return Promise.resolve({ campaigns: [] });
+      if (typeof url === 'string' && url.startsWith('/api/callified/leads/call-summary') && !opts?.method) {
         return Promise.resolve({ summaries: {} });
       }
       return Promise.resolve([]);
@@ -1258,10 +1258,10 @@ describe('Leads Freshsales-style list UI affordances', () => {
       'leads-split-table--compact-count',
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /Table density: comfortable/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
     fireEvent.click(
-      within(screen.getByRole('menu', { name: 'Table density' })).getByRole(
-        'menuitemradio',
+      within(screen.getByRole('dialog', { name: 'Customize table columns' })).getByRole(
+        'button',
         { name: 'Compact' },
       ),
     );
@@ -1270,23 +1270,17 @@ describe('Leads Freshsales-style list UI affordances', () => {
   });
 
   it('keeps secondary lead actions available in the mobile disclosure', async () => {
-    const { container } = renderLeads(authValue);
-    await screen.findByText('Alice Lead');
-
-    const toggle = screen.getByRole('button', { name: /More actions/i });
-    const actions = container.querySelector('#leads-secondary-actions');
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    expect(actions).toBeInTheDocument();
-    expect(actions).toContainElement(screen.getByRole('button', { name: /^Refresh$/i }));
-    expect(actions).toContainElement(screen.getByRole('button', { name: /Export Leads/i }));
-    expect(screen.getByRole('button', { name: /^Import Leads$/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Bulk actions/i })).toBeInTheDocument();
-
-    fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    expect(container.querySelector('.leads-generic-actions-host')).toHaveClass('leads-generic-actions-host--open');
-    fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    const { container } = renderLeads(authValue); await screen.findByText('Alice Lead');
+    const disclosure = screen.getByRole('button', {name: 'More actions'});
+    expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(disclosure);
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+    expect(container.querySelector('#leads-secondary-actions')).toHaveClass('is-open');
+    const header = container.querySelector('.leads-page-header__actions');
+    expect(header).toContainElement(screen.getByRole('button', {name:'Import & export'}));
+    expect(screen.getByRole('button',{name:'View'})).toBeInTheDocument();
+    expect(screen.getByRole('button',{name:'Automation'})).toBeInTheDocument();
+    expect(screen.queryByRole('button',{name:/Bulk actions/})).toBeNull();
   });
 
   it('switches and persists table density for Generic CRM leads', async () => {
@@ -1302,11 +1296,11 @@ describe('Leads Freshsales-style list UI affordances', () => {
       expect(Number.parseInt(comfortableHeights[0], 10)).toBeLessThanOrEqual(64);
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Table density: comfortable/i }));
-    const densityMenu = screen.getByRole('menu', { name: 'Table density' });
-    expect(within(densityMenu).getByRole('menuitemradio', { name: 'Comfortable' })).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+    const densityMenu = screen.getByRole('dialog', { name: 'Customize table columns' });
+    expect(within(densityMenu).getByRole('button', { name: 'Comfortable' })).toHaveAttribute('aria-pressed', 'true');
 
-    fireEvent.click(within(densityMenu).getByRole('menuitemradio', { name: 'Compact' }));
+    fireEvent.click(within(densityMenu).getByRole('button', { name: 'Compact' }));
     expect(document.querySelector('.leads-split-table')).toHaveClass('leads-split-table--density-compact');
     expect(document.querySelector('.leads-split-table')).not.toHaveClass('leads-split-table--sparse');
     expect(window.localStorage.getItem('globuscrm.leads.tableDensity.v1')).toBe('compact');
@@ -1322,7 +1316,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     firstRender.unmount();
     renderLeads(authValue);
     await screen.findByText('Alice Lead');
-    expect(screen.getByRole('button', { name: /Table density: compact/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View' })).toBeInTheDocument();
     expect(document.querySelector('.leads-split-table')).toHaveClass('leads-split-table--density-compact');
   });
 
@@ -1438,6 +1432,39 @@ describe('Leads Freshsales-style list UI affordances', () => {
     }));
     expect(navigateMock).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Edit Name for Alice Lead')).toHaveAttribute('type', 'button');
+  });
+
+  it('keeps wellness lead profiles on the Leads route', async () => {
+    renderLeads({
+      ...authValue,
+      tenant: { id: 2, vertical: 'wellness', name: 'Wellness CRM' },
+    }, ['/leads']);
+
+    const aliceLink = await screen.findByRole('link', { name: 'Alice Lead' });
+    expect(aliceLink).toHaveAttribute('href', '/leads/101');
+    navigateMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'View Alice Lead' }));
+    expect(screen.queryByRole('dialog', { name: 'Lead preview' })).not.toBeInTheDocument();
+    expect(navigateMock).toHaveBeenCalledWith('/leads/101', {
+      state: expect.objectContaining({
+        returnTo: '/leads?page=1&limit=10',
+        leadsListState: { pageIndex: 0, pageSize: 10 },
+        openFullPage: true,
+      }),
+    });
+
+    fireEvent.click(aliceLink);
+    expect(screen.getByTestId('router-location')).toHaveAttribute(
+      'data-pathname',
+      '/leads/101',
+    );
+    expect(JSON.parse(screen.getByTestId('router-location').getAttribute('data-state'))).toEqual(
+      expect.objectContaining({ openFullPage: true }),
+    );
+    expect(screen.getByTestId('router-location')).not.toHaveAttribute(
+      'data-pathname',
+      '/contacts/101',
+    );
   });
 
   it('keeps the Name column edit icon as the only way to inline-edit the name', async () => {
@@ -1622,31 +1649,32 @@ describe('Leads Freshsales-style list UI affordances', () => {
     }
   });
 
-  it('hides prospect conversion in the generic lead preview', async () => {
+  it('opens full lead detail from the Generic eye action without showing preview', async () => {
     renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
-    fireEvent.click(screen.getByRole('button', { name: 'Preview Alice Lead' }));
+    navigateMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'View Alice Lead' }));
 
-    const preview = screen.getByRole('dialog', { name: 'Lead preview' });
-    expect(preview).toBeInTheDocument();
-    expect(within(preview).getByText('Contact information')).toBeInTheDocument();
-    expect(within(preview).getByText('Open full detail')).toBeInTheDocument();
-    expect(within(preview).queryByRole('button', { name: 'Convert to Prospect' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Lead preview' })).not.toBeInTheDocument();
+    expect(navigateMock).toHaveBeenCalledWith('/leads/101?page=1&limit=10', {
+      state: expect.objectContaining({
+        returnTo: '/leads?page=1&limit=10',
+        leadsListState: { pageIndex: 0, pageSize: 10 },
+        openFullPage: true,
+      }),
+    });
   });
 
-  it('converts a lead from the Travel lead preview', async () => {
+  it('keeps the Travel Convert to Prospect row action unchanged', async () => {
     renderLeads({
       ...authValue,
       tenant: { id: 2, vertical: 'travel', name: 'Travel CRM' },
     });
 
     await screen.findByText('Alice Lead');
-    fireEvent.click(screen.getByRole('button', { name: 'Preview Alice Lead' }));
-
-    const preview = screen.getByRole('dialog', { name: 'Lead preview' });
     fetchApiMock.mockClear();
-    fireEvent.click(within(preview).getByRole('button', { name: 'Convert to Prospect' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Convert Alice Lead to Prospect' }));
 
     await waitFor(() => {
       expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/101', expect.objectContaining({
@@ -2098,7 +2126,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
         );
 
         const frozenPane = container.querySelector('.leads-table-frozen-pane');
-        if (label === 'travel') expect(frozenPane).toBeTruthy();
+        if (label === 'travel' || label === 'wellness') expect(frozenPane).toBeTruthy();
         else expect(frozenPane).toBeNull();
         expect(scrollHeader).toBeTruthy();
         expect(scrollHeader).toHaveClass('leads-table-header-row');
@@ -2650,6 +2678,9 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(sourceBadge.style.backgroundColor).toBe('var(--source-badge-bg, rgba(139, 92, 246, 0.16))');
     expect(sourceBadge.style.color).toBe('var(--source-badge-text, var(--text-primary))');
     expect(sourceBadge.style.border).toBe('1px solid var(--border-color)');
+    expect(screen.queryByRole('button', { name: /Edit Source for/i })).toBeNull();
+    fireEvent.click(sourceBadge);
+    expect(screen.queryByRole('combobox', { name: /Edit Source for/i })).toBeNull();
   });
 
   it('keeps source pills and assignment controls aligned inside their columns', async () => {
@@ -2671,6 +2702,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
 
     const assignment = screen.getByLabelText(/Assign Alice Smith to staff/i);
     expect(assignment.parentElement).toHaveClass('leads-assignee-control');
+    expect(assignment.previousElementSibling).toHaveTextContent(assignment.selectedOptions[0].textContent);
     expect(assignment).toHaveStyle({
       width: '100%',
       minWidth: '0px',
@@ -3012,6 +3044,32 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     );
   });
 
+  it('offers Lead ID in the Generic CRM filter field picker', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: ['name'],
+          // Simulate a rolling deploy where this catalogue is still old.
+          availableColumns: [{ key: 'name', label: 'Name' }],
+        });
+      }
+      if (url === '/api/contacts/filter-fields' && opts?.silent === true) {
+        return Promise.resolve({
+          fields: [{ field: 'callifiedLeadStatus', label: 'Call Status', kind: 'text' }],
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH);
+    await screen.findByText('Alice Smith');
+    fireEvent.click(screen.getByRole('button', { name: /^Filter by$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /^Filters$/i });
+    fireEvent.click(within(dialog).getByRole('button', { name: /Add filter/i }));
+    fireEvent.change(within(dialog).getByPlaceholderText('Add a field to filter'), { target: { value: 'lead' } });
+    expect(within(dialog).getByRole('button', { name: 'Lead ID' })).toBeInTheDocument();
+  });
+
   it('shows Generic CRM lifecycle stages under Status', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
       if (url === '/api/table-column-prefs/leads' && !opts) {
@@ -3084,7 +3142,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
           availableColumns: [
             { key: 'name', label: 'Name' },
             { key: 'companySize', label: 'No Of Employee' },
-            { key: 'description', label: 'Note' },
+            { key: 'note', label: 'Note' },
             { key: 'assignedTo', label: 'Assigned To' },
             {
               key: 'cf_customer_id',
@@ -3100,7 +3158,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
           fields: [
             { field: 'name', label: 'Name', kind: 'text' },
             { field: 'companySize', label: 'No Of Employee', kind: 'text' },
-            { field: 'description', label: 'Note', kind: 'text' },
+            { field: 'note', label: 'Note', kind: 'text' },
             { field: 'assignedToId', label: 'Sales Owner', kind: 'id' },
             { field: 'territoryId', label: 'Territory', kind: 'id' },
           ],
@@ -3227,71 +3285,42 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     });
   });
 
-  it('opens the new header Bulk actions menu, preserves manual deselection on reopen, and exposes the existing staff assignment action', async () => {
+  it('preserves manually deselected leads when the floating staff assignment menu reopens', async () => {
     renderLeads(ADMIN_AUTH);
-    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+    await screen.findByText('Alice Smith');
+    expect(screen.queryByRole('toolbar', { name: 'Selected lead actions' })).toBeNull();
 
-    const bulkActionsButton = screen.getByRole('button', { name: /Bulk actions/i });
-    fireEvent.click(bulkActionsButton);
-    const menu = await screen.findByRole('menu', { name: /Bulk actions/i });
-    expect(menu).toHaveStyle({
-      left: '0px',
-      right: 'auto',
-      boxSizing: 'border-box',
-    });
-    fireEvent.click(within(menu).getByRole('button', { name: 'Select current page' }));
-    await waitFor(() => {
-      expect(within(menu).getByText(/3 selected/i)).toBeInTheDocument();
-    });
-    const checkboxes = screen.getAllByRole('checkbox');
-    expect(checkboxes).toHaveLength(4);
-    checkboxes.forEach((checkbox) => {
-      expect(checkbox).toBeChecked();
-    });
-    const rubixCheckbox = screen.getAllByRole('checkbox')[2];
-    fireEvent.click(rubixCheckbox);
-    await waitFor(() => {
-      expect(within(menu).getByText(/2 selected/i)).toBeInTheDocument();
-    });
+    const [selectPage, ...rows] = screen.getAllByRole('checkbox');
+    fireEvent.click(selectPage);
+    const bar = within(screen.getByRole('toolbar', { name: 'Selected lead actions' }));
+    expect(bar.getByText('3 selected')).toBeInTheDocument();
+    rows.forEach(row => expect(row).toBeChecked());
+    fireEvent.click(rows[1]);
 
-    fireEvent.click(bulkActionsButton);
-    await waitFor(() => {
-      expect(screen.queryByRole('menu', { name: /Bulk actions/i })).toBeNull();
-    });
-    fireEvent.click(bulkActionsButton);
-    const reopenedMenu = await screen.findByRole('menu', { name: /Bulk actions/i });
-    expect(within(reopenedMenu).getByText(/2 selected/i)).toBeInTheDocument();
-    expect(screen.getAllByRole('checkbox').slice(1)[1]).not.toBeChecked();
-    expect(within(reopenedMenu).getByRole('button', { name: /Assign to staff/i })).toBeInTheDocument();
-    expect(within(reopenedMenu).getByLabelText(/Bulk assign staff/i)).toBeInTheDocument();
-    expect(within(reopenedMenu).getByRole('button', { name: /Delete selected leads/i })).toBeInTheDocument();
+    const picker = { name: 'Assign staff to selected leads' };
+    const assign = bar.getByRole('button', picker);
+    fireEvent.click(assign);
+    expect(await screen.findByRole('listbox', picker)).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('listbox', picker)).toBeNull();
+
+    fireEvent.click(assign);
+    expect(await screen.findByRole('listbox', picker)).toBeInTheDocument();
+    expect(bar.getByText('2 selected')).toBeInTheDocument();
+    expect(rows[1]).not.toBeChecked();
+    expect(bar.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
   });
 
   it('bulk delete action DELETEs the selected leads and clears the selection', async () => {
+    const original=fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url,opts)=>url==='/api/contacts/bulk-delete'?Promise.resolve({deleted:JSON.parse(opts.body).contactIds.length}):original(url,opts));
     renderLeads(ADMIN_AUTH);
-    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
-
-    fireEvent.click(screen.getByRole('button', { name: /^Bulk actions$/i }));
-    const menu = await screen.findByRole('menu', { name: /Bulk actions/i });
-    fireEvent.click(within(menu).getByRole('button', { name: 'Select current page' }));
-    const rubixCheckbox = screen.getAllByRole('checkbox').slice(1)[1];
-    fireEvent.click(rubixCheckbox);
-    await waitFor(() => {
-      expect(within(menu).getByText(/2 selected/i)).toBeInTheDocument();
-    });
-    fireEvent.click(within(menu).getByRole('button', { name: /Delete selected leads/i }));
-
-    await waitFor(() => {
-      const deleteCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) => url === '/api/contacts/bulk-delete' && opts?.method === 'DELETE',
-      );
-      expect(deleteCall).toBeDefined();
-      expect(JSON.parse(deleteCall[1].body)).toEqual({ contactIds: [11, 13] });
-    });
-    await waitFor(() => {
-      expect(screen.queryByText(/2 leads selected/i)).toBeNull();
-    });
-    expect(notifySuccess).toHaveBeenCalledWith('Deleted 2 leads');
+    await screen.findByText('Alice Smith');
+    const checks=screen.getAllByRole('checkbox'); fireEvent.click(checks[1]); fireEvent.click(checks[3]);
+    fireEvent.click(screen.getByRole('button',{name:'Delete',exact:true}));
+    await waitFor(()=>{const call=fetchApiMock.mock.calls.find(([url,opts])=>url==='/api/contacts/bulk-delete'&&opts?.method==='DELETE');expect(JSON.parse(call[1].body).contactIds).toEqual([11,13]);});
+    await waitFor(()=>expect(notifySuccess).toHaveBeenCalledWith('Deleted 2 leads'));
+    expect(screen.queryByRole('toolbar',{name:'Selected lead actions'})).toBeNull();
   });
 
   it('filters the row list by search term against name / email / company', async () => {
@@ -3457,14 +3486,14 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
 
   it('sends matching Callified campaign ids with the Generic server search', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
-      if (url === '/api/integrations/callified/config' && !opts) return Promise.resolve({ isActive: true });
-      if (url === '/api/callified/campaigns/with-lead-counts' && !opts) {
+      if (url === '/api/integrations/callified/config' && !opts?.method) return Promise.resolve({ isActive: true });
+      if (url === '/api/callified/campaigns/with-lead-counts' && !opts?.method) {
         return Promise.resolve({ campaigns: [{ id: 42, name: 'Growth Campaign' }] });
       }
       return leadsFetchMock(url, opts);
     });
     renderLeads(ADMIN_AUTH);
-    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/callified/campaigns/with-lead-counts'));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/callified/campaigns/with-lead-counts', { silent: true }));
 
     fireEvent.change(screen.getByPlaceholderText('Search leads...'), { target: { value: 'growth' } });
     await waitFor(() => {
@@ -3646,7 +3675,7 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     )).toBe(true));
   });
 
-  it('hides prospect conversion for Generic CRM but keeps it for Travel CRM', async () => {
+  it('hides prospect conversion for Generic and Wellness but keeps it for Travel', async () => {
     const genericRender = renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
@@ -3654,6 +3683,22 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(screen.queryByRole('button', { name: 'Convert Alice Smith to Prospect' })).not.toBeInTheDocument();
 
     genericRender.unmount();
+    const wellnessRender = renderLeads({
+      ...ADMIN_AUTH,
+      tenant: { id: 3, vertical: 'wellness', name: 'Enhanced Wellness' },
+    });
+    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
+
+    expect(screen.queryAllByTitle('Convert to Prospect')).toHaveLength(0);
+    expect(screen.queryByRole('button', { name: 'Convert Alice Smith to Prospect' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Lead preview' })).not.toBeInTheDocument();
+    navigateMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'View Alice Smith' }));
+    expect(navigateMock).toHaveBeenCalledWith('/leads/11', expect.objectContaining({
+      state: expect.objectContaining({ openFullPage: true }),
+    }));
+
+    wellnessRender.unmount();
     renderLeads({
       ...ADMIN_AUTH,
       tenant: { id: 2, vertical: 'travel', name: 'Travel CRM' },
@@ -3746,59 +3791,23 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
   });
   it('keeps generic lead selection actions inside the Bulk actions menu (#334)', async () => {
     renderLeads(ADMIN_AUTH);
-    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
-
-    // Tick the first row's checkbox (the first checkbox is the header
-    // select-all; pick a body row checkbox).
-    const checkboxes = screen.getAllByRole('checkbox');
-    expect(checkboxes.length).toBe(4); // 1 header + 3 rows
-    fireEvent.click(checkboxes[1]); // Alice
-
-    expect(screen.queryByRole('button', { name: /^Assign$/i })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: /Bulk actions/i }));
-    const menu = await screen.findByRole('menu', { name: /Bulk actions/i });
-    expect(within(menu).getByText(/1 selected/i)).toBeInTheDocument();
-
-    fireEvent.click(within(menu).getByRole('button', { name: /Clear selection/i }));
-    await waitFor(() => {
-      expect(screen.queryByRole('menu', { name: /Bulk actions/i })).toBeNull();
-    });
+    await screen.findByText('Alice Smith');
+    fireEvent.click(screen.getAllByRole('checkbox')[1]);
+    const bar=screen.getByRole('toolbar',{name:'Selected lead actions'});
+    expect(within(bar).getByText('1 selected')).toBeInTheDocument();
+    fireEvent.click(within(bar).getByRole('button',{name:'Clear lead selection'}));
+    expect(screen.queryByRole('toolbar',{name:'Selected lead actions'})).toBeNull();
   });
 
   it('bulk-assign Assign button PUTs /api/contacts/bulk-assign with selected contactIds', async () => {
     renderLeads(ADMIN_AUTH);
-    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
-    fetchApiMock.mockClear();
-
-    // Select two body rows
-    const checkboxes = screen.getAllByRole('checkbox');
-    fireEvent.click(checkboxes[1]); // Alice (id=11)
-    fireEvent.click(checkboxes[2]); // Bob (id=12)
-
-    fireEvent.click(screen.getByRole('button', { name: /Bulk actions/i }));
-    const menu = await screen.findByRole('menu', { name: /Bulk actions/i });
-    expect(within(menu).getByText(/2 selected/i)).toBeInTheDocument();
-
-    const bulkSelect = within(menu).getByLabelText(/Bulk assign staff/i);
-    fireEvent.change(bulkSelect, { target: { value: '8' } });
-
-    const assignBtn = within(menu).getByRole('button', { name: /Assign to staff/i });
-    fireEvent.click(assignBtn);
-
-    await waitFor(() => {
-      const putCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) => url === '/api/contacts/bulk-assign' && opts?.method === 'PUT',
-      );
-      expect(putCall).toBeDefined();
-      const body = JSON.parse(putCall[1].body);
-      expect(body.contactIds).toEqual([11, 12]);
-      expect(body.assignedToId).toBe('8');
-    });
-
-    // After bulk-assign, selection is cleared and the menu closes.
-    await waitFor(() => {
-      expect(screen.queryByRole('menu', { name: /Bulk actions/i })).toBeNull();
-    });
+    await screen.findByText('Alice Smith');
+    const checks=screen.getAllByRole('checkbox');fireEvent.click(checks[1]);fireEvent.click(checks[2]);
+    fireEvent.click(screen.getByRole('button',{name:'Assign staff to selected leads'}));
+    const list=await screen.findByRole('listbox',{name:'Assign staff to selected leads'});
+    const options=within(list).getAllByRole('option'); fireEvent.click(options[options.length-1]);
+    await waitFor(()=>{const call=fetchApiMock.mock.calls.find(([url,opts])=>url==='/api/contacts/bulk-assign'&&opts?.method==='PUT');expect(call).toBeDefined();expect(JSON.parse(call[1].body)).toEqual({contactIds:[11,12],assignedToId:'8'});});
+    await waitFor(()=>expect(screen.queryByRole('toolbar',{name:'Selected lead actions'})).toBeNull());
   });
 
   it('header select-all toggles every visible row; clicking again deselects', async () => {
@@ -3813,14 +3822,14 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
 
     fireEvent.click(headerCheckbox);
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Bulk actions/i })).toHaveTextContent('3');
+      expect(screen.getByRole('toolbar', { name: 'Selected lead actions' })).toHaveTextContent('3 selected');
     });
 
     // Click again ?? ? deselect all
     const refreshed = screen.getAllByRole('checkbox');
     fireEvent.click(refreshed[0]);
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /Bulk actions/i })).not.toHaveTextContent('3');
+      expect(screen.queryByRole('toolbar', { name: 'Selected lead actions' })).toBeNull();
     });
   });
 
@@ -3857,7 +3866,49 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     fireEvent.click(pageTwoHeaderCheckbox);
     expect(pageTwoHeaderCheckbox).toBeChecked();
     expect(pageTwoRowCheckbox).toBeChecked();
-    expect(screen.getByRole('button', { name: /Bulk actions/i })).toHaveTextContent('2');
+    expect(screen.getByRole('toolbar', { name: 'Selected lead actions' })).toHaveTextContent('2 selected');
+  });
+
+  it('selects every search result across API pages and clears the selection when the search changes', async () => {
+    const ids = Array.from({ length: 1597 }, (_, index) => index + 1);
+    const selectionQueries = [];
+    fetchApiMock.mockImplementation(async (url, opts) => {
+      if (url.startsWith('/api/contacts?status=Lead')) {
+        const params = new URL(url, 'http://crm.test').searchParams;
+        const query = params.get('q');
+        if (params.get('fields') === 'ids') {
+          selectionQueries.push(params);
+          const remaining = ids.slice(Number(params.get('afterId')));
+          const batch = remaining.slice(0, 500);
+          return { ids: batch, nextAfterId: remaining.length > 500 ? batch.at(-1) : null };
+        }
+        const page = Number(params.get('page'));
+        const id = (page - 1) * 25 + 1;
+        return {
+          data: [{ ...SAMPLE_LEADS[0], id, name: `${query || 'All'} page ${page}` }],
+          total: query === 'matched' ? 1597 : 2000,
+          page,
+          totalPages: 64,
+        };
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH);
+    const search = await screen.findByPlaceholderText('Search leads...');
+    fireEvent.change(search, { target: { value: 'matched' } });
+    await screen.findByText('matched page 1');
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select all leads' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select all 1597 results' }));
+    expect(await screen.findByText('1597 selected')).toBeInTheDocument();
+    expect(selectionQueries.map((params) => [params.get('q'), params.get('afterId')])).toEqual([
+      ['matched', '0'], ['matched', '500'], ['matched', '1000'], ['matched', '1500'],
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+    expect(await screen.findByRole('checkbox', { name: 'Select matched page 2' })).toBeChecked();
+    fireEvent.change(search, { target: { value: 'another' } });
+    expect(screen.queryByRole('toolbar', { name: 'Selected lead actions' })).toBeNull();
   });
 
   it('Escape key closes the Create Lead drawer (#892)', async () => {
@@ -4000,6 +4051,7 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(travelFetchMock);
     notifyError.mockReset();
+    navigateMock.mockReset();
   });
 
   it('keeps Travel actions beside search and shows Sub-brand as a default filter section', async () => {
@@ -4026,6 +4078,42 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
     expect(await within(dialog).findByText('Sub-brand')).toBeInTheDocument();
   });
 
+  it('right-aligns the Travel Bulk actions menu so the table card does not clip it', async () => {
+    renderLeads(TRAVEL_AUTH);
+    await screen.findByRole('link', { name: 'Lily' });
+
+    fireEvent.click(screen.getByRole('button', { name: /Bulk actions/i }));
+    const menu = screen.getByRole('menu', { name: /Bulk actions/i });
+
+    expect(menu).toHaveStyle({ left: 'auto', right: '0px' });
+  });
+
+  it('portals Travel Bulk actions into a viewport dialog on phones', async () => {
+    const matchMediaSpy = vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+      matches: query === '(max-width: 768px)',
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+
+    try {
+      const { container } = renderLeads(TRAVEL_AUTH);
+      await screen.findByRole('link', { name: 'Lily' });
+
+      fireEvent.click(screen.getByRole('button', { name: /Bulk actions/i }));
+      const menu = screen.getByRole('menu', { name: /Bulk actions/i });
+
+      expect(menu).toHaveClass('lead-bulk-actions-menu--mobile-dialog');
+      expect(container).not.toContainElement(menu);
+      expect(document.body.querySelector('.lead-bulk-actions-backdrop')).toBeInTheDocument();
+
+      fireEvent.mouseDown(document.body.querySelector('.lead-bulk-actions-backdrop'));
+      expect(screen.queryByRole('menu', { name: /Bulk actions/i })).not.toBeInTheDocument();
+    } finally {
+      matchMediaSpy.mockRestore();
+    }
+  });
+
   it('disables row and card hover hooks for the Travel Leads table', async () => {
     const { container } = renderLeads(TRAVEL_AUTH);
     await screen.findByRole('link', { name: 'Lily' });
@@ -4036,21 +4124,31 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
     lilyRows.forEach((row) => expect(row).not.toHaveClass('table-row-hover'));
   });
 
-  it('navigates to the travel lead profile when clicking a name in the Name column', async () => {
+  it('opens the full Travel Lead Details page when clicking the lead name', async () => {
     renderLeads(TRAVEL_AUTH);
     const lilyLink = await screen.findByRole('link', { name: 'Lily' });
     expect(lilyLink).toHaveAttribute('href', '/travel/leads/50?page=1&limit=10');
 
     fireEvent.click(lilyLink);
     expect(screen.queryByRole('dialog', { name: 'Lead preview' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('router-location')).toHaveAttribute('data-pathname', '/travel/leads/50');
+    expect(JSON.parse(screen.getByTestId('router-location').getAttribute('data-state'))).toEqual(
+      expect.objectContaining({
+        openFullPage: true,
+        returnTo: '/leads?page=1&limit=10',
+      }),
+    );
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 
-  it('preserves Travel pagination, rows, search, and sorting through lead details', async () => {
+  it('uses the Travel eye action to open full detail and restore the complete table state', async () => {
     const manyLeads = Array.from({ length: 25 }, (_, index) => ({
       id: 100 + index,
       name: `Traveler ${String(index + 1).padStart(2, '0')}`,
       email: `traveler${index + 1}@example.com`,
       subBrand: 'TMC',
+      source: 'Organic',
+      status: 'Lead',
       createdAt: '2026-07-17T10:00:00Z',
     }));
     fetchApiMock.mockImplementation((url, opts) => {
@@ -4062,21 +4160,36 @@ describe('Leads  travel tenant Amount column reflects actual payments', () => {
 
     const firstRender = renderLeads(
       TRAVEL_AUTH,
-      ['/leads?page=2&limit=10&q=Traveler&sortBy=name&sortDirection=asc'],
+      ['/leads?page=2&limit=10&q=Traveler&source=Organic&subBrand=TMC&sortBy=name&sortDirection=asc'],
     );
-    const leadLink = await screen.findByRole('link', { name: 'Traveler 11' });
-    fireEvent.click(leadLink);
+    await screen.findByRole('link', { name: 'Traveler 11' });
+    navigateMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'View Traveler 11' }));
 
-    const location = screen.getByTestId('router-location');
-    expect(location).toHaveAttribute('data-pathname', '/travel/leads/110');
-    const detailParams = new URLSearchParams(location.getAttribute('data-search'));
+    expect(screen.queryByRole('dialog', { name: 'Lead preview' })).not.toBeInTheDocument();
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    const [detailDestination, navigationOptions] = navigateMock.mock.calls[0];
+    const [detailPath, detailSearch = ''] = detailDestination.split('?');
+    expect(detailPath).toBe('/travel/leads/110');
+    const detailParams = new URLSearchParams(detailSearch);
     expect(detailParams.get('page')).toBe('2');
     expect(detailParams.get('limit')).toBe('10');
     expect(detailParams.get('q')).toBe('Traveler');
+    expect(detailParams.get('source')).toBe('Organic');
+    expect(detailParams.get('subBrand')).toBe('TMC');
     expect(detailParams.get('sortBy')).toBe('name');
     expect(detailParams.get('sortDirection')).toBe('asc');
-    const detailState = JSON.parse(location.getAttribute('data-state'));
+    const detailState = navigationOptions.state;
+    expect(detailState.openFullPage).toBe(true);
     expect(detailState.leadsListState).toEqual({ pageIndex: 1, pageSize: 10 });
+    expect(detailState.leadsTableState).toEqual(expect.objectContaining({
+      searchTerm: 'Traveler',
+      sourceFilter: 'Organic',
+      subBrandFilter: 'TMC',
+      sortConfig: { key: 'name', direction: 'asc' },
+      pageIndex: 1,
+      pageSize: 10,
+    }));
 
     firstRender.unmount();
     renderLeads(TRAVEL_AUTH, [detailState.returnTo]);
@@ -4257,13 +4370,13 @@ function callifiedFetchMock(url, opts) {
     return Promise.resolve(CALLIFIED_LEADS);
   }
   if (url === '/api/staff' && !opts) return Promise.resolve([]);
-  if (url === '/api/integrations/callified/config' && !opts) {
+  if (url === '/api/integrations/callified/config' && !opts?.method) {
     return Promise.resolve({ isActive: true, baseUrl: 'https://app.callified.ai' });
   }
-  if (url === '/api/callified/campaigns/with-lead-counts' && !opts) {
+  if (url === '/api/callified/campaigns/with-lead-counts' && !opts?.method) {
     return Promise.resolve({ campaigns: CALLIFIED_CAMPAIGNS });
   }
-  if (typeof url === 'string' && url.startsWith('/api/callified/leads/call-summary') && !opts) {
+  if (typeof url === 'string' && url.startsWith('/api/callified/leads/call-summary') && !opts?.method) {
     return Promise.resolve({ summaries: CALLIFIED_SUMMARIES });
   }
   if (typeof url === 'string' && url.startsWith('/api/tenant-settings/') && opts?.method === 'PUT') {
@@ -4293,6 +4406,31 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     if (!batchCall) return undefined;
     return JSON.parse(batchCall[1].body).settings.find((entry) => entry.key === key);
   };
+
+  it('autosaves automation changes without closing the drawer', async () => {
+    renderLeads(ADMIN_AUTH);
+    await screen.findByText('Alice Smith');
+    fireEvent.click(screen.getByRole('button', { name: 'Automation' }));
+    fireEvent.click(screen.getByLabelText(/Enable automatic dialing for new leads/i));
+    await waitFor(() => expect(findSavedCallSetting('feature.callified.auto_dial_new_leads.enabled')?.value).toBe('false'), { timeout: 2000 });
+    expect(screen.getByRole('dialog', { name: 'Automation' })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Enable automatic dialing for new leads/i)).not.toBeChecked();
+  });
+
+  it('shows a connection badge without probing provider calls when disconnected', async () => {
+    fetchApiMock.mockImplementation((url, opts) => url === '/api/callified/status'
+      ? Promise.resolve({ isActive: false }) : callifiedFetchMock(url, opts));
+    renderLeads(ADMIN_AUTH);
+    await screen.findByText('Alice Smith');
+    fireEvent.click(screen.getByRole('button',{name:'Automation'}));
+    await screen.findByText(/Callified.*Not connected/);
+    fireEvent.click(screen.getByRole('button', { name: /^Refresh$/i }));
+    await waitFor(() => expect(notifySuccess).toHaveBeenCalledWith('Refreshed'));
+    expect(fetchApiMock.mock.calls.some(([url]) => /sync-call-statuses|\/classify$|campaigns\/with-lead-counts/.test(url))).toBe(false);
+    expect(notifyError).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    expect(navigateMock).toHaveBeenCalledWith('/settings?section=integrations&integration=callified');
+  });
   beforeEach(() => {
     fetchApiMock.mockReset();
     fetchApiMock.mockImplementation(callifiedFetchMock);
@@ -4336,12 +4474,9 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
     expect(screen.getByLabelText(/Assign Callified campaign for Alice Smith/i)).toBeEnabled();
-    const aliceCallStatus = screen.getByLabelText(/Call status for Alice Smith/i);
-    expect(aliceCallStatus).toBeEnabled();
-    expect(within(aliceCallStatus).getByRole('option', { name: 'New' })).toBeInTheDocument();
-    expect(within(aliceCallStatus).queryByRole('option', { name: 'Yet to Call' })).toBeNull();
-    expect(screen.getByRole('button', { name: /Call settings/i })).toBeEnabled();
-    expect(screen.getByRole('button', { name: /Select campaigns to dial/i })).toBeEnabled();
+    expect(screen.getByLabelText(/Call status for Alice Smith/i)).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Automation/i })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^Bulk dial$/i })).toBeEnabled();
   });
 
   it('warns when auto-assign is enabled but every saved rule is inactive', async () => {
@@ -4364,11 +4499,9 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
+    fireEvent.click(screen.getByRole('button', { name: 'Automation' }));
     expect(screen.getByLabelText('Auto-assign enabled with no active rules')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Auto-assign Callified Campaigns rules/i }));
-    expect(await screen.findByRole('status')).toHaveTextContent(
-      'Auto-assign is on, but no rule is active',
-    );
+    expect(screen.getByText(/Auto-assign is on, but no rule is active/)).toBeInTheDocument();
   });
 
   it('offers only create-time fields in auto-campaign assignment rules', async () => {
@@ -4393,6 +4526,7 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
         });
       }
       if (url === '/api/callified/auto-campaign-rules') {
+        if (opts?.method === 'PUT') return Promise.resolve(JSON.parse(opts.body));
         return Promise.resolve({
           enabled: true,
           rules: [{ id: 'rule-1', enabled: true, column: 'source', value: 'website-form', campaignId: 101 }],
@@ -4403,14 +4537,14 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
 
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /Auto-assign Callified Campaigns rules/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Automation' }));
 
-    const panelHeading = await screen.findByText('Auto-assign Callified Campaigns rules');
-    const panel = panelHeading.closest('.card');
-    expect(panel).toBeTruthy();
-    expect(within(panel).getAllByRole('checkbox')[1]).toHaveClass('auto-campaign-rule-checkbox');
-    const columnSelect = within(panel).getAllByRole('combobox')[0];
-    const optionLabels = Array.from(columnSelect.options).map((option) => option.textContent);
+    fireEvent.click(screen.getByRole('button', { name: /^Auto-assign campaigns/ }));
+    const card = screen.getByRole('combobox', { name: 'Value to match' }).closest('.campaign-rule-card');
+    expect(within(card).getByRole('checkbox', { name: 'Active' })).toBeChecked();
+    fireEvent.click(within(card).getByRole('button', { name: 'Select column' }));
+    const options = await screen.findByRole('listbox', { name: 'Select column' });
+    const optionLabels = within(options).getAllByRole('option').map((option) => option.textContent.trim());
 
     expect(optionLabels).toEqual(expect.arrayContaining([
       'Name',
@@ -4428,6 +4562,18 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
       'Callified Score',
       'Actions',
     ]));
+    fireEvent.click(within(options).getByRole('option', { name: 'Source' }));
+    expect(within(card).queryByRole('button', { name: 'Save', exact: true })).toBeNull();
+    fireEvent.change(within(card).getByRole('combobox', { name: 'Value to match' }), { target: { value: 'referral' } });
+    await waitFor(() => {
+      const request = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/callified/auto-campaign-rules' && opts?.method === 'PUT');
+      expect(request).toBeDefined();
+      expect(JSON.parse(request[1].body)).toEqual({
+        enabled: true,
+        rules: [{ id: 'rule-1', enabled: true, column: 'source', value: 'referral', campaignId: 101 }],
+      });
+    });
+
   });
 
   it('changing a lead campaign fires PUT /api/contacts/:id and refreshes campaign counts', async () => {
@@ -4455,7 +4601,7 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     // Campaign counts are re-fetched after assignment.
     await waitFor(() => {
       const campaignFetch = fetchApiMock.mock.calls.find(
-        ([url, opts]) => url === '/api/callified/campaigns/with-lead-counts' && !opts,
+        ([url, opts]) => url === '/api/callified/campaigns/with-lead-counts' && !opts?.method,
       );
       expect(campaignFetch).toBeDefined();
     });
@@ -4463,109 +4609,47 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
 
   it('renders bulk Dial Campaign Leads multi-select dropdown with lead counts', async () => {
     renderLeads(ADMIN_AUTH);
-    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
-
-    const bulkTrigger = screen.getByRole('button', { name: /Select campaigns to dial/i });
-    expect(bulkTrigger).toBeInTheDocument();
-
-    // Open the dropdown to reveal campaign checkboxes + counts.
-    fireEvent.click(bulkTrigger);
-
-    // The dropdown is rendered inside the trigger's parent; scope to it so
-    // the auto-assign select option with the same campaign name is ignored.
-    const dropdownContainer = bulkTrigger.parentElement;
-    await waitFor(() => {
-      expect(within(dropdownContainer).getByText('Globussoft outbound')).toBeInTheDocument();
-      expect(within(dropdownContainer).getByText('RFU Umrah follow-up')).toBeInTheDocument();
-    });
+    await screen.findByText('Alice Smith');
+    fireEvent.click(screen.getByRole('button',{name:'Bulk dial',exact:true}));
+    const picker=await screen.findByRole('dialog',{name:'Bulk dial options'});
+    expect(within(picker).getByLabelText(/Globussoft outbound/)).toBeInTheDocument();
+    expect(within(picker).getByLabelText(/RFU Umrah follow-up/)).toBeInTheDocument();
   });
 
   it('assigns a selected campaign from the Generic CRM Bulk actions menu', async () => {
     renderLeads(ADMIN_AUTH);
-    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
-
-    fireEvent.click(screen.getAllByRole('checkbox', { name: 'Select Alice Smith' })[0]);
-    expect(screen.queryByRole('button', { name: /Assign Campaign \(1\)/i })).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: /Bulk actions/i }));
-    const menu = await screen.findByRole('menu', { name: /Bulk actions/i });
-    const campaignSelect = within(menu).getByLabelText(/Bulk assign campaign/i);
-    expect(campaignSelect).toHaveTextContent('Globussoft outbound');
-    fireEvent.change(campaignSelect, { target: { value: '102' } });
-    fireEvent.click(within(menu).getByRole('button', { name: /Assign campaign/i }));
-
-    await waitFor(() => {
-      const assignCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) => url === '/api/contacts/bulk-assign-campaign' && opts?.method === 'PUT',
-      );
-      expect(assignCall).toBeDefined();
-      expect(JSON.parse(assignCall[1].body)).toEqual({
-        contactIds: [11],
-        callifiedCampaignId: 102,
-      });
-    });
+    await screen.findByText('Alice Smith');
+    const checks=screen.getAllByRole('checkbox');fireEvent.click(checks[1]);fireEvent.click(checks[2]);
+    fireEvent.click(screen.getByRole('button',{name:'Assign campaign to selected leads'}));
+    const list=await screen.findByRole('listbox',{name:'Assign campaign to selected leads'});
+    fireEvent.click(within(list).getByRole('option',{name:/RFU Umrah follow-up/}));
+    await waitFor(()=>{const call=fetchApiMock.mock.calls.find(([url,opts])=>url==='/api/contacts/bulk-assign-campaign'&&opts?.method==='PUT');expect(JSON.parse(call[1].body)).toEqual({contactIds:[11,12],callifiedCampaignId:102});});
   });
 
   it('persists selected dial campaigns until the final campaign is removed', async () => {
-    const storageKey = 'globuscrm.leads.selectedDialCampaigns.v1.1.1';
-    const firstRender = renderLeads(ADMIN_AUTH);
-    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
-
-    fireEvent.click(screen.getByRole('button', { name: /Select campaigns to dial/i }));
-    fireEvent.click(screen.getByLabelText(/Globussoft outbound/i));
-    fireEvent.click(screen.getByLabelText(/RFU Umrah follow-up/i));
-
-    await waitFor(() => expect(JSON.parse(window.localStorage.getItem(storageKey))).toEqual(['101', '102']));
-    expect(screen.getByRole('button', { name: /2 campaigns selected/i })).toBeInTheDocument();
-    firstRender.unmount();
-
-    const secondRender = renderLeads(ADMIN_AUTH);
-    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
-    const restoredTrigger = screen.getByRole('button', { name: /2 campaigns selected/i });
-    fireEvent.click(restoredTrigger);
-    expect(screen.getByLabelText(/Globussoft outbound/i)).toBeChecked();
-    expect(screen.getByLabelText(/RFU Umrah follow-up/i)).toBeChecked();
-
-    fireEvent.click(screen.getByLabelText(/Globussoft outbound/i));
-    await waitFor(() => expect(JSON.parse(window.localStorage.getItem(storageKey))).toEqual(['102']));
-    expect(screen.getByRole('button', { name: /1 campaign selected/i })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByLabelText(/RFU Umrah follow-up/i));
-    await waitFor(() => expect(window.localStorage.getItem(storageKey)).toBeNull());
-    expect(screen.getByRole('button', { name: /Select campaigns to dial/i })).toBeInTheDocument();
-    secondRender.unmount();
-
     renderLeads(ADMIN_AUTH);
-    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: /Select campaigns to dial/i })).toBeInTheDocument();
+    await screen.findByText('Alice Smith');
+    fireEvent.click(screen.getByRole('button',{name:'Bulk dial',exact:true}));
+    fireEvent.click(await screen.findByLabelText(/Globussoft outbound/));
+    fireEvent.click(screen.getByLabelText(/RFU Umrah follow-up/));
+    expect(screen.getByRole('button',{name:/Choose lead statuses/})).toHaveTextContent('2');
+    fireEvent.click(screen.getByLabelText(/Globussoft outbound/));
+    expect(screen.getByRole('button',{name:/Choose lead statuses/})).toHaveTextContent('1');
+    fireEvent.click(screen.getByLabelText(/RFU Umrah follow-up/));
+    expect(screen.getByRole('button',{name:/Choose lead statuses/})).toBeDisabled();
   });
 
   it('selecting campaigns and clicking Dial Campaigns queues calls one by one', async () => {
     renderLeads(ADMIN_AUTH);
-    await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
-
-    const bulkTrigger = screen.getByRole('button', { name: /Select campaigns to dial/i });
-    fireEvent.click(bulkTrigger);
-
-    // Check the Globussoft outbound campaign (the one with dialable leads).
-    const dropdownContainer = bulkTrigger.parentElement;
-    const globusCheckbox = within(dropdownContainer).getByLabelText(/Globussoft outbound/i);
-    fireEvent.click(globusCheckbox);
-
-    const dialBtn = screen.getByRole('button', { name: /Dial Campaigns/i });
-    expect(dialBtn).not.toBeDisabled();
-
-    fetchApiMock.mockClear();
-    fireEvent.click(dialBtn);
-
-    // Sequential queue dials the matching lead via /api/callified/leads/:id/call.
+    await screen.findByText('Alice Smith');
+    fireEvent.click(screen.getByRole('button',{name:'Bulk dial',exact:true}));
+    fireEvent.click(await screen.findByLabelText(/Globussoft outbound/));
+    fireEvent.click(screen.getByRole('button',{name:/Choose lead statuses/}));
+    fireEvent.click(await screen.findByRole('checkbox', { name: /^Pending/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Start campaign calls' }));
     await waitFor(() => {
-      const postCall = fetchApiMock.mock.calls.find(
-        ([url, opts]) => url === '/api/callified/leads/11/call' && opts?.method === 'POST',
-      );
-      expect(postCall).toBeDefined();
-      const body = JSON.parse(postCall[1].body);
-      expect(body.campaignId).toBe(101);
+      const call = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/callified/dial-jobs' && opts?.method === 'POST');
+      expect(JSON.parse(call[1].body)).toEqual({ campaignIds: [101], statuses: ['pending'] });
     });
   });
 
@@ -4613,22 +4697,29 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Automation/i }));
     expect(screen.getByText(/Auto Dial New Leads/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Enable automatic dialing for new leads/i)).toBeInTheDocument();
     expect(screen.getByText(/Automatic Refresh/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Enable automatic lead refresh/i)).toBeInTheDocument();
-    expect(screen.getByText(/DNP Settings/i)).toBeInTheDocument();
+    expect(screen.getByText(/Retry unanswered calls/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Enable automatic DNP retries/i)).toBeInTheDocument();
-    expect(screen.getByText(/Pending Settings/i)).toBeInTheDocument();
+    expect(screen.getByText(/Retry pending leads/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Enable automatic pending retries/i)).toBeInTheDocument();
-    expect(screen.getByText(/Assigning Staff/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Auto-assign qualified leads to staff/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Assign logic/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Leads per user before moving to next/i)).toBeInTheDocument();
-    expect(screen.getByText(/^Classification$/i)).toBeInTheDocument();
+    const navigation = screen.getByRole('navigation', { name: 'Automation sections' });
+    for (const name of ['Dialing & refresh', 'Auto-assign campaigns', 'Retries', 'Staff assignment', 'Classification', 'Dial runs']) {
+      expect(within(navigation).getByRole('button', { name: new RegExp(`^${name}`) })).toBeVisible();
+    }
+    expect(screen.getByText(/^(CRM|Device) time$/)).toBeVisible();
+    fireEvent.click(within(navigation).getByRole('button', { name: /^Staff assignment/ }));
+    expect(screen.getByRole('group', { name: 'Assign logic' })).toBeVisible();
+    fireEvent.click(within(navigation).getByRole('button', { name: /^Dial runs/ }));
+    expect(screen.getByRole('region', { name: 'Dial runs' })).toBeVisible();
+    fireEvent.click(within(navigation).getByRole('button', { name: /^Classification/ }));
     expect(screen.getByText(/transcript outcomes are used first/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Save changes/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Done$/i })).toBeInTheDocument();
   });
 
   it('classification is automatic and does not expose the obsolete AI toggle', async () => {
@@ -4636,7 +4727,7 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
     fetchApiMock.mockClear();
 
-    fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Automation/i }));
     expect(screen.queryByLabelText(/Use Callified transcript conclusions/i)).toBeNull();
     expect(screen.getByText(/quality score is used automatically as the fallback/i)).toBeInTheDocument();
     expect(fetchApiMock.mock.calls.some(([url, opts]) =>
@@ -4648,7 +4739,7 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
     fetchApiMock.mockClear();
 
-    fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Automation/i }));
     const toggle = screen.getByLabelText(/Enable automatic dialing for new leads/i);
     expect(toggle.checked).toBe(true);
 
@@ -4656,7 +4747,7 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
 
     expect(fetchApiMock.mock.calls.some(([url, opts]) =>
       String(url).includes('feature.callified.auto_dial_new_leads.enabled') && opts?.method === 'PUT')).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Done$/i }));
 
     await waitFor(() => {
       expect(findSavedCallSetting('feature.callified.auto_dial_new_leads.enabled')).toEqual({
@@ -4671,8 +4762,8 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
     fetchApiMock.mockClear();
 
-    fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
-    expect(screen.getByText(/DNP Settings/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Automation/i }));
+    expect(screen.getByText(/Retry unanswered calls/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Enable automatic DNP retries/i)).toBeInTheDocument();
 
     const maxRetriesInput = document.getElementById('dnp-max-retries');
@@ -4683,7 +4774,7 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
 
     expect(fetchApiMock.mock.calls.some(([url, opts]) =>
       String(url).includes('feature.callified.dnp_retry.max_retries') && opts?.method === 'PUT')).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Done$/i }));
 
     await waitFor(() => {
       expect(findSavedCallSetting('feature.callified.dnp_retry.max_retries')?.value).toBe('5');
@@ -4695,7 +4786,7 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
     fetchApiMock.mockClear();
 
-    fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Automation/i }));
     const toggle = screen.getByLabelText(/Enable automatic lead refresh/i);
     expect(toggle.checked).toBe(true);
 
@@ -4703,13 +4794,39 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
 
     expect(fetchApiMock.mock.calls.some(([url, opts]) =>
       url === '/api/tenant-settings/feature.callified.auto_refresh.enabled' && opts?.method === 'PUT')).toBe(false);
-    expect(screen.getByText(/Auto-refresh on/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: /^Done$/i }));
 
     await waitFor(() => {
       expect(findSavedCallSetting('feature.callified.auto_refresh.enabled')?.value).toBe('false');
     });
-    await waitFor(() => expect(screen.getByText(/Auto-refresh off/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Automation' })).toBeNull());
+  });
+
+  it('reports a failed manual refresh and keeps the previously loaded leads', async () => {
+    renderLeads(ADMIN_AUTH);
+    await screen.findByText('Alice Smith');
+    const previous = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, options) => url.startsWith('/api/contacts?status=Lead')
+      ? Promise.reject(new Error('Offline')) : previous(url, options));
+    fireEvent.click(screen.getByRole('button', { name: /^Refresh$/i }));
+    await waitFor(() => expect(notifyError).toHaveBeenCalledWith('Failed to refresh leads'));
+    expect(notifySuccess).not.toHaveBeenCalledWith('Refreshed');
+    expect(screen.getByText('Alice Smith')).toBeInTheDocument();
+  });
+
+  it('runs automatic refresh when its timer expires without a click or visibility change', async () => {
+    vi.useFakeTimers();
+    try {
+      renderLeads(ADMIN_AUTH);
+      await act(() => vi.advanceTimersByTimeAsync(1000));
+      expect(screen.getByText('Alice Smith')).toBeInTheDocument();
+      fetchApiMock.mockClear();
+      await act(() => vi.advanceTimersByTimeAsync(30000));
+      const urls = fetchApiMock.mock.calls.map(([url]) => url);
+      expect(urls).toContain('/api/callified/leads/sync-call-statuses');
+      expect(urls.some(url => url.startsWith('/api/contacts?status=Lead'))).toBe(true);
+    } finally { vi.useRealTimers(); }
   });
 
   it('manual refresh syncs Callified state and classifies called leads', async () => {
@@ -4759,12 +4876,101 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     });
   });
 
+  it('automatically refreshes the same data and called leads as manual refresh', async () => {
+    renderLeads(ADMIN_AUTH);
+    await screen.findByText('Alice Smith');
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    try {
+      fetchApiMock.mockClear();
+      notifySuccess.mockClear();
+      fireEvent(document, new Event('visibilitychange'));
+      await waitFor(() => {
+        const urls = fetchApiMock.mock.calls.map(([url]) => url);
+        expect(urls).toEqual(expect.arrayContaining([
+          '/api/callified/leads/sync-call-statuses',
+          '/api/staff',
+          '/api/lead-custom-fields',
+          '/api/callified/auto-campaign-rules',
+          '/api/callified/leads/11/classify',
+        ]));
+        expect(urls.some((url) => url.startsWith('/api/contacts?status=Lead'))).toBe(true);
+        expect(urls.some((url) => url.startsWith('/api/callified/leads/call-summary?'))).toBe(true);
+      });
+      expect(notifySuccess).not.toHaveBeenCalledWith('Refreshed');
+    } finally {
+      visibility.mockRestore();
+    }
+  });
+
+  it('keeps a manual Junk status during automatic and manual refresh', async () => {
+    let lead = { ...CALLIFIED_LEADS[0], callifiedLeadStatus: 'pending' };
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url.startsWith('/api/contacts?status=Lead')) return Promise.resolve([lead]);
+      if (url === '/api/callified/leads/11/lead-status') {
+        lead = {
+          ...lead, callifiedLeadStatus: JSON.parse(options.body).status,
+          callifiedLeadStatusSource: 'manual', callifiedLeadStatusUpdatedAt: new Date().toISOString(),
+        };
+        return Promise.resolve(lead);
+      }
+      return callifiedFetchMock(url, options);
+    });
+    renderLeads(ADMIN_AUTH);
+    const status = () => screen.getByLabelText('Call status for Alice Smith');
+    await waitFor(() => expect(status()).toBeEnabled());
+    fireEvent.click(status());
+    fireEvent.click(await screen.findByRole('option', { name: 'Junk' }));
+    await waitFor(() => expect(status()).toHaveTextContent('Junk'));
+    fetchApiMock.mockClear();
+
+    const visible = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    try {
+      fireEvent.click(screen.getByRole('button', { name: /^Refresh$/i }));
+      await waitFor(() => expect(notifySuccess).toHaveBeenCalledWith('Refreshed'));
+      fireEvent(document, new Event('visibilitychange'));
+      await waitFor(() => expect(fetchApiMock.mock.calls.filter(([url]) => url === '/api/callified/leads/sync-call-statuses')).toHaveLength(2));
+      await waitFor(() => expect(fetchApiMock.mock.calls.filter(([url]) => url.startsWith('/api/callified/leads/call-summary?'))).toHaveLength(2));
+      expect(status()).toHaveTextContent('Junk');
+      expect(fetchApiMock.mock.calls.some(([url]) => url === '/api/callified/leads/11/classify')).toBe(false);
+    } finally {
+      visible.mockRestore();
+    }
+  });
+
+  it('keeps the scheduled retry time visible while classification refreshes', async () => {
+    const lead = {
+      ...CALLIFIED_LEADS[0], callifiedLeadStatus: 'pending',
+      callifiedLeadStatusSource: 'transcripts_api',
+      callifiedDnpRetryCount: 0, callifiedDnpNextRetryAt: '2026-11-20T13:10:00Z',
+    };
+    let finishClassification;
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url.startsWith('/api/contacts?status=Lead')) return Promise.resolve([lead]);
+      if (url === '/api/callified/leads/11/classify') return new Promise((resolve) => { finishClassification = resolve; });
+      return callifiedFetchMock(url, options);
+    });
+    renderLeads(ADMIN_AUTH);
+    const readTooltip = async () => {
+      fireEvent.mouseEnter(await screen.findByRole('button', { name: 'Call status for Alice Smith help' }));
+      return screen.findByRole('tooltip');
+    };
+    const hint = await readTooltip();
+    expect(hint).toHaveTextContent('Basis: callified_Transcripts');
+    expect(hint).toHaveTextContent(/Next retry:.*:00/);
+    const savedText = hint.textContent;
+    fireEvent.click(screen.getByRole('button', { name: /^Refresh$/i }));
+    await waitFor(() => expect(finishClassification).toBeTypeOf('function'));
+    expect(await readTooltip()).toHaveProperty('textContent', savedText);
+    await act(async () => finishClassification(lead));
+    expect(await readTooltip()).toHaveProperty('textContent', savedText);
+  });
+
   it('pending retry settings save independently through tenant settings', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
     fetchApiMock.mockClear();
 
-    fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Automation/i }));
     expect(screen.getByLabelText(/Enable automatic pending retries/i)).toBeInTheDocument();
     const maxRetriesInput = screen.getByLabelText(/Pending max retries/i);
     fireEvent.change(maxRetriesInput, { target: { value: '4' } });
@@ -4772,7 +4978,7 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
 
     expect(fetchApiMock.mock.calls.some(([url, opts]) =>
       url === '/api/tenant-settings/feature.callified.pending_retry.max_retries' && opts?.method === 'PUT')).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Done$/i }));
 
     await waitFor(() => {
       expect(findSavedCallSetting('feature.callified.pending_retry.max_retries')?.value).toBe('4');
@@ -4782,8 +4988,9 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
   it('supports day-based scheduled retries with a time and timezone', async () => {
     renderLeads(ADMIN_AUTH);
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
-    const dialog = screen.getByRole('dialog', { name: /Call settings/i });
+    fireEvent.click(screen.getByRole('button', { name: /Automation/i }));
+    const dialog = screen.getByRole('dialog', { name: /Automation/i });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Retries/ }));
     const scheduledButtons = within(dialog).getAllByRole('button', { name: /Scheduled time/i });
 
     fetchApiMock.mockClear();
@@ -4795,7 +5002,7 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     fireEvent.change(time, { target: { value: '14:30' } });
 
     expect(fetchApiMock.mock.calls.some(([, opts]) => opts?.method === 'PUT')).toBe(false);
-    fireEvent.click(within(dialog).getByRole('button', { name: /Save changes/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Done$/i }));
 
     await waitFor(() => {
       expect(findSavedCallSetting('feature.callified.dnp_retry.mode')?.value).toBe('scheduled');
@@ -4809,16 +5016,17 @@ describe('Leads — Callified campaign column + bulk dial + call summary', () =>
     await waitFor(() => expect(screen.getByText('Alice Smith')).toBeInTheDocument());
     fetchApiMock.mockClear();
 
-    fireEvent.click(screen.getByRole('button', { name: /Call settings/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Automation/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Staff assignment/i }));
 
     // Default logic is round-robin, so the leads-per-user input is visible.
     const leadsInput = screen.getByLabelText(/Leads per user before moving to next/i);
     fireEvent.change(leadsInput, { target: { value: '3' } });
-    const logicSelect = screen.getByLabelText(/Assign logic/i);
-    fireEvent.change(logicSelect, { target: { value: 'random' } });
+    const logicChoices = screen.getByRole('group', { name: 'Assign logic' });
+    fireEvent.click(within(logicChoices).getByRole('button', { name: /^Random/i }));
 
     expect(fetchApiMock.mock.calls.some(([, opts]) => opts?.method === 'PUT')).toBe(false);
-    fireEvent.click(screen.getByRole('button', { name: /Save changes/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Done$/i }));
 
     await waitFor(() => {
       expect(findSavedCallSetting('feature.callified.assign_staff.leads_per_user')?.value).toBe('3');
@@ -5103,7 +5311,8 @@ describe('Leads Web Form column (generic CRM only)', () => {
     renderLeads(genericAuth);
     await screen.findByText('Form Lead');
 
-    const btn = screen.getByRole('button', { name: /Lead Fields/i });
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+    const btn = screen.getByRole('button', { name: 'Manage lead fields' });
     expect(btn).toBeInTheDocument();
     fireEvent.click(btn);
 
@@ -5112,6 +5321,36 @@ describe('Leads Web Form column (generic CRM only)', () => {
     expect(dialog).toHaveStyle({ overflowX: 'hidden', minWidth: '0px' });
     expect(screen.getByPlaceholderText('e.g. Referral Source')).toBeInTheDocument();
     expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it('shows duplicate Lead Field errors below the Label input', async () => {
+    const baseFetch = fetchApiMock.getMockImplementation();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/lead-custom-fields' && opts?.method === 'POST') {
+        const error = new Error('A built-in field with this name already exists');
+        error.code = 'RESERVED_FIELD_KEY';
+        return Promise.reject(error);
+      }
+      return baseFetch(url, opts);
+    });
+    renderLeads(genericAuth);
+    await screen.findByText('Form Lead');
+
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage lead fields' }));
+    const dialog = await screen.findByRole('dialog', { name: /Add Lead Field/i });
+    const labelInput = within(dialog).getByPlaceholderText('e.g. Referral Source');
+    fireEvent.change(labelInput, { target: { value: 'Phone' } });
+    fireEvent.blur(labelInput);
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('A field with this name already exists.');
+    expect(labelInput).toHaveAttribute('aria-invalid', 'true');
+    fireEvent.click(within(dialog).getByRole('button', { name: /Save Field/i }));
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      '/api/lead-custom-fields',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(notifyError).not.toHaveBeenCalledWith('A built-in field with this name already exists');
   });
 
   it('opens the tenant-scoped field manager from Travel CRM Lead Fields', async () => {
@@ -5151,7 +5390,7 @@ describe('Leads extended Freshsales-parity columns', () => {
     linkedin: 'linkedin.com/in/aarav',
     industry: 'Logistics',
     companySize: '-688',
-    description: 'Met at expo',
+    note: 'Met at expo',
     stateCode: 'IN-KA',
     firstTouchSource: 'Web',
     lastTouchSource: 'Referral',
@@ -5165,7 +5404,7 @@ describe('Leads extended Freshsales-parity columns', () => {
 
   const EXTENDED_KEYS = [
     'name', 'email', 'lifecycleStage', 'status', 'title', 'firstName', 'lastName', 'website',
-    'linkedin', 'industry', 'companySize', 'description', 'stateCode',
+    'linkedin', 'industry', 'companySize', 'note', 'stateCode',
     'firstTouchSource', 'lastTouchSource',
   ];
 
@@ -5174,7 +5413,7 @@ describe('Leads extended Freshsales-parity columns', () => {
       ...EXTENDED_LEAD,
       id: 202,
       name: 'Note Lead',
-      description: '',
+      note: '',
       activities: [{
         id: 1,
         type: 'Note',
@@ -5188,10 +5427,10 @@ describe('Leads extended Freshsales-parity columns', () => {
       }
       if (url === '/api/table-column-prefs/leads' && !opts) {
         return Promise.resolve({
-          visible: ['name', 'description', 'actions'],
+          visible: ['name', 'note', 'actions'],
           availableColumns: [
             { key: 'name', label: 'Name', lockedVisible: true },
-            { key: 'description', label: 'Note' },
+            { key: 'note', label: 'Note' },
             { key: 'actions', label: 'Actions', lockedVisible: true },
           ],
         });
@@ -5226,7 +5465,7 @@ describe('Leads extended Freshsales-parity columns', () => {
             { key: 'linkedin', label: 'LinkedIn' },
             { key: 'industry', label: 'Service Type' },
             { key: 'companySize', label: 'No Of Employee' },
-            { key: 'description', label: 'Note' },
+            { key: 'note', label: 'Note' },
             { key: 'stateCode', label: 'State' },
             { key: 'firstTouchSource', label: 'First Touch Source' },
             { key: 'lastTouchSource', label: 'Last Touch Source' },
@@ -5256,7 +5495,7 @@ describe('Leads extended Freshsales-parity columns', () => {
     expect(screen.getByText('Aarav')).toBeInTheDocument();
     expect(screen.getByText('Sharma')).toBeInTheDocument();
     expect(screen.getByText('Chief Executive')).toBeInTheDocument();
-    expect(await screen.findByText('New')).toBeInTheDocument();
+    expect(await screen.findAllByText('New')).toHaveLength(2);
     expect(screen.getByText('Logistics')).toBeInTheDocument();
     expect(screen.getByText('Invalid employee count', { exact: true })).toBeInTheDocument();
     expect(screen.getByText('Met at expo')).toBeInTheDocument();
@@ -5308,9 +5547,20 @@ describe('Leads extended Freshsales-parity columns', () => {
     });
 
     renderLeads(genericAuth);
-    await screen.findByText('New');
-    fireEvent.click(screen.getByRole('button', { name: 'Edit Status for Aarav Sharma' }));
-    fireEvent.change(screen.getByRole('combobox', { name: 'Edit Status for Aarav Sharma' }), {
+    const statusSelect = await screen.findByRole('combobox', { name: 'Edit Status for Aarav Sharma' });
+    expect(within(statusSelect).getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'Select',
+      'New',
+      'Contacted',
+      'Interested',
+      'Unqualified',
+      'Qualified',
+      'Lost',
+      'Won',
+      'Churned',
+    ]);
+    expect(statusSelect).toHaveValue('Lead');
+    fireEvent.change(statusSelect, {
       target: { value: 'Won' },
     });
 
@@ -5343,17 +5593,10 @@ describe('Leads effective-permission visibility', () => {
   });
 
   it('shows bulk controls when the user has leads.update', async () => {
-    renderLeads({
-      tenant: { id: 1, vertical: 'generic' },
-      user: {
-        id: 7,
-        role: 'USER',
-        permissions: ['leads.read', 'leads.update'],
-      },
-    });
-
-    await screen.findByText('Leads');
-    expect(screen.getByRole('button', { name: /Bulk actions/i })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Create a new lead/i })).not.toBeInTheDocument();
+    fetchApiMock.mockImplementation((url,opts) => String(url).startsWith('/api/contacts?status=Lead') ? Promise.resolve([{id:99,name:'Editable Lead',status:'Lead'}]) : defaultFetchMock(url,opts));
+    renderLeads({tenant:{id:1,vertical:'generic'},user:{id:7,role:'USER',permissions:['leads.read','leads.update']}});
+    await screen.findByText('Editable Lead'); fireEvent.click(screen.getAllByRole('checkbox')[0]);
+    expect(screen.getByRole('toolbar',{name:'Selected lead actions'})).toBeInTheDocument();
+    expect(screen.queryByRole('button',{name:/Create a new lead/})).toBeNull();
   });
 });

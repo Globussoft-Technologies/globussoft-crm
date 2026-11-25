@@ -459,6 +459,7 @@ function normalizeLifecycleValue(value) {
 
 function normalizeGenericImportTarget(target) {
   const normalized = normalizeLifecycleValue(target);
+  if (normalized === "description") return "note";
   if (normalized === "lifecyclestage" || normalized === "lifecyclestagekey") {
     return "lifecycleStageKey";
   }
@@ -511,7 +512,7 @@ const GENERIC_IMPORT_NATIVE_FIELDS = new Set([
   "billingStateCode",
   "interestedPlotArea",
   "externalId",
-  "description",
+  "note",
   "createdAt",
   "updatedAt",
 ]);
@@ -617,9 +618,13 @@ function buildGenericNativeImportData(row) {
   // Freshsales exports call the lead's primary note "Recent note". Keep it
   // in the native Note field as well as the timeline activity so both lead
   // detail surfaces show the same imported value.
-  if (!data.description) {
+  if (!data.note) {
+    const legacyNote = String(getSpreadsheetValue(row, ["note", "Note", "description", "Description"])).trim();
+    if (legacyNote) data.note = sanitizeCellForExport(legacyNote);
+  }
+  if (!data.note) {
     const recentNote = String(getSpreadsheetValue(row, ["recent note", "recentNote"])).trim();
-    if (recentNote) data.description = sanitizeCellForExport(recentNote);
+    if (recentNote) data.note = sanitizeCellForExport(recentNote);
   }
   return data;
 }
@@ -922,7 +927,7 @@ router.post("/contacts/import.csv", CONTACT_WRITE, contactImportUpload, async (r
         const email = String(getSpreadsheetValue(row, ["email", "Email"])).trim();
         const rawStatus = String(getSpreadsheetValue(row, ["status", "Status"]) || "Lead").trim();
         const status = isGeneric
-          ? rawStatus
+          ? (rawStatus.toLowerCase() === "new" ? "Lead" : rawStatus)
           : [...ALLOWED_CONTACT_STATUSES].find(
             (allowedStatus) => allowedStatus.toLowerCase() === rawStatus.toLowerCase(),
           );

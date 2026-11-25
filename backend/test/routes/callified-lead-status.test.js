@@ -129,6 +129,9 @@ describe('Callified terminal outcome mapping', () => {
 function makeApp() {
   const app = express();
   app.use(express.json());
+  // These fixtures cover the legacy per-contact assignment path. Generic
+  // batch assignment has its own suite; pin the verified non-generic vertical.
+  app.use((req, _res, next) => { req.permissionTenant = { id: 1, vertical: 'wellness' }; next(); });
   app.use('/api/callified', callifiedRouter);
   return app;
 }
@@ -241,6 +244,9 @@ describe('PUT /api/callified/leads/:leadId/lead-status', () => {
     expect(res.status).toBe(200);
     expect(res.body.assignedToId).toBeNull();
     expect(prisma.user.findMany).not.toHaveBeenCalled();
+    expect(prisma.contact.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ callifiedLeadStatus: 'junk', callifiedLeadStatusSource: 'manual', callifiedDnpNextRetryAt: null }),
+    }));
   });
 
   test('no active staff → qualified override succeeds but remains unassigned', async () => {
@@ -373,6 +379,63 @@ describe('PUT /api/callified/leads/:leadId/lead-status', () => {
 });
 
 describe('POST /api/callified/leads/:leadId/classify', () => {
+  test('keeps an operator’s saved Junk status when refresh asks for classification', async () => {
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 11, callifiedLeadStatus: 'junk', callifiedLeadStatusSource: 'manual',
+      callifiedLeadStatusReason: 'Status changed manually by user.',
+    });
+    const res = await request(makeApp()).post('/api/callified/leads/11/classify')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.body).toMatchObject({ callifiedLeadStatus: 'junk', callifiedLeadStatusSource: 'manual' });
+    expect(prisma.callLog.findMany).not.toHaveBeenCalled();
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+  });
+
+  test.each(['pending', 'dnp'])('keeps the saved %s deadline when the provider briefly reports Connecting', async (status) => {
+    const updatedAt = new Date();
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 11, callifiedLeadStatus: status, callifiedLeadStatusUpdatedAt: updatedAt,
+      callifiedDnpRetryCount: 1, callifiedDnpNextRetryAt: new Date(Date.now() + 300_000),
+    });
+    prisma.callLog.findMany.mockResolvedValue([{ id: 1, contactId: 11, providerCallId: '3001', status: 'CONNECTED', createdAt: new Date() }]);
+    const res = await request(makeApp()).post('/api/callified/leads/11/classify')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.body).toMatchObject({ callifiedLeadStatus: status, callifiedLeadStatusUpdatedAt: updatedAt.toISOString() });
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+  });
+
+  test('repeated refreshes do not write a new timestamp or retry deadline for the same outcome', async () => {
+    const updatedAt = new Date();
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 11, callifiedLeadStatus: 'dnp', callifiedLeadStatusSource: 'score',
+      callifiedLeadStatusReason: 'Call was not answered / did not connect.',
+      callifiedLeadStatusUpdatedAt: updatedAt, callifiedDnpNextRetryAt: new Date(Date.now() + 300_000),
+    });
+    prisma.callLog.findMany.mockResolvedValue([{ id: 1, contactId: 11, status: 'MISSED', createdAt: new Date() }]);
+    for (let refresh = 0; refresh < 2; refresh += 1) {
+      const res = await request(makeApp()).post('/api/callified/leads/11/classify')
+        .set('Authorization', `Bearer ${tokenFor()}`);
+      expect(res.body).toMatchObject({ callifiedLeadStatus: 'dnp', callifiedLeadStatusUpdatedAt: updatedAt.toISOString() });
+    }
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+  });
+
+  test('returns a manual edit that wins the race against an in-flight refresh', async () => {
+    const updatedAt = new Date();
+    prisma.contact.findFirst
+      .mockResolvedValueOnce({ id: 11, callifiedLeadStatus: 'pending', callifiedLeadStatusSource: 'score', callifiedLeadStatusUpdatedAt: updatedAt })
+      .mockResolvedValueOnce({ id: 11, callifiedLeadStatus: 'junk', callifiedLeadStatusSource: 'manual' });
+    prisma.callLog.findMany.mockResolvedValue([{ id: 1, contactId: 11, status: 'MISSED', createdAt: new Date() }]);
+    prisma.contact.update.mockRejectedValueOnce(Object.assign(new Error('Status changed'), { code: 'P2025' }));
+    const res = await request(makeApp()).post('/api/callified/leads/11/classify')
+      .set('Authorization', `Bearer ${tokenFor()}`);
+    expect(res.status).toBe(200);
+    expect(prisma.contact.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 11, tenantId: 1, callifiedLeadStatus: 'pending', callifiedLeadStatusSource: 'score', callifiedLeadStatusUpdatedAt: updatedAt },
+    }));
+    expect(res.body).toMatchObject({ callifiedLeadStatus: 'junk', callifiedLeadStatusSource: 'manual' });
+  });
+
   test('refreshes a connected Callified attempt before choosing its final status', async () => {
     prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'true' });
     prisma.contact.findFirst.mockResolvedValue({

@@ -241,6 +241,9 @@ prisma.patient = prisma.patient || {};
 prisma.patient.findFirst = vi.fn().mockResolvedValue(null);
 prisma.wallet = prisma.wallet || {};
 prisma.wallet.findFirst = vi.fn().mockResolvedValue(null);
+prisma.activity = prisma.activity || {};
+prisma.activity.create = vi.fn();
+prisma.$transaction = vi.fn(async (callback) => callback(prisma));
 // T31: webhook.findMany is invoked by lib/webhookDelivery.js when the route
 // emits contact.created / contact.updated via eventBus. Empty array → the
 // helper short-circuits (no subscribers) so happy create / update / delete
@@ -326,6 +329,8 @@ beforeEach(() => {
   prisma.user.findUnique.mockReset().mockResolvedValue({ role: 'ADMIN', subBrandAccess: null });
   prisma.patient.findFirst.mockReset().mockResolvedValue(null);
   prisma.wallet.findFirst.mockReset().mockResolvedValue(null);
+  prisma.activity.create.mockReset().mockResolvedValue({ id: 99 });
+  prisma.$transaction.mockReset().mockImplementation(async (callback) => callback(prisma));
   prisma.webhook.findMany.mockReset().mockResolvedValue([]);
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
   prisma.tenantSetting.findUnique.mockReset();
@@ -394,6 +399,23 @@ describe('GET /api/contacts — list', () => {
     expect(args.skip).toBe(4);
   });
 
+  test('IDs-only selection keeps list filters and returns a bounded cursor page', async () => {
+    const matching = Array.from({ length: 501 }, (_, index) => ({ id: index + 11 }));
+    prisma.contact.findMany.mockResolvedValueOnce(matching);
+    const res = await request(makeApp()).get('/api/contacts?status=Lead&fields=ids&afterId=10&q=Match');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ids: matching.slice(0, 500).map(({ id }) => id), nextAfterId: 510 });
+    expect(prisma.contact.findMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        tenantId: TENANT_ID, deletedAt: null, status: 'Lead',
+        OR: expect.arrayContaining([{ name: { contains: 'Match' } }]),
+        AND: expect.arrayContaining([{ id: { gt: 10 } }]),
+      }),
+      select: { id: true }, orderBy: { id: 'asc' }, take: 501,
+    });
+  });
+
   test('?page=2&limit=10 returns { data, total, page, limit, offset, totalPages } envelope', async () => {
     prisma.contact.count.mockResolvedValueOnce(25);
     const res = await request(makeApp()).get('/api/contacts?page=2&limit=10');
@@ -451,6 +473,17 @@ describe('GET /api/contacts — list', () => {
       expect(res.body.code).toBe('INVALID_DATE_RANGE');
     }
     expect(prisma.contact.count).not.toHaveBeenCalled();
+  });
+
+  test('uses Generic workspace midnight for date-only lead filters', async () => {
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'Asia/Kolkata' });
+    prisma.contact.count.mockResolvedValue(1);
+    const result = await request(makeApp()).get('/api/contacts?status=Lead&count=1&from=2026-11-19&to=2026-11-19');
+    expect(result.status).toBe(200);
+    expect(prisma.contact.count).toHaveBeenCalledWith(expect.objectContaining({ where: expect.objectContaining({
+      tenantId: TENANT_ID,
+      createdAt: { gte: new Date('2026-11-18T18:30:00Z'), lt: new Date('2026-11-19T18:30:00Z') },
+    }) }));
   });
 
   test('?q searches every Generic Leads row field and composes with Customer count scope', async () => {
@@ -1154,6 +1187,39 @@ describe('POST /api/contacts — create', () => {
     }));
   });
 
+  test('Generic CRM persists the frontend New label as Lead for auto-dial compatibility', async () => {
+    const created = {
+      id: 12344,
+      name: 'New UI Lead',
+      email: 'new-ui-lead@example.com',
+      phone: '+919876955400',
+      tenantId: TENANT_ID,
+      assignedToId: null,
+      status: 'Lead',
+      callifiedCampaignId: 42,
+    };
+    prisma.tenantSetting.findUnique.mockResolvedValue({ value: 'true' });
+    findDuplicateMock.mockResolvedValueOnce(null);
+    prisma.contact.create.mockResolvedValueOnce(created);
+
+    const res = await request(makeApp({ vertical: 'generic' }))
+      .post('/api/contacts')
+      .send({
+        name: 'New UI Lead',
+        email: 'new-ui-lead@example.com',
+        phone: '+919876955400',
+        status: 'New',
+        callifiedCampaignId: 42,
+      });
+
+    expect(res.status).toBe(201);
+    expect(prisma.contact.create.mock.calls[0][0].data.status).toBe('Lead');
+    expect(autoDialEnqueueMock).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: 12344,
+      campaignId: 42,
+    }));
+  });
+
   test('Generic CRM contact workflow payload adds +91 to a local phone number', async () => {
     const created = {
       id: 12346,
@@ -1717,12 +1783,87 @@ describe('PUT /api/contacts/:id — update', () => {
     );
   });
 
-  test('does not write Generic CRM lifecycle stages for another vertical', async () => {
-    prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
+  test('persists Wellness patient journey stages and records their activity', async () => {
+    const existing = { ...SAMPLE_CONTACT, lifecycleStageKey: 'contacted' };
+    const updated = { ...existing, lifecycleStageKey: 'new' };
+    prisma.contact.findFirst.mockResolvedValueOnce(existing);
     prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
-    prisma.contact.update.mockResolvedValueOnce(SAMPLE_CONTACT);
+    prisma.contact.update.mockResolvedValueOnce(updated);
+    prisma.activity.create.mockResolvedValueOnce({
+      id: 99,
+      type: 'Patient journey stage updated',
+      description: 'Updated from Contacted to New. Reason: Duplicate intake correction',
+      createdAt: new Date('2026-11-23T11:30:00.000Z'),
+      user: { id: USER_ID, name: 'Wellness Operator', email: 'operator@example.com' },
+    });
 
     const res = await request(makeApp({ vertical: 'wellness' }))
+      .patch('/api/contacts/9001')
+      .send({ lifecycleStageKey: 'new', lifecycleTransitionReason: 'Duplicate intake correction' });
+
+    expect(res.status).toBe(200);
+    expect(prisma.$transaction).toHaveBeenCalledOnce();
+    expect(prisma.contact.update.mock.calls[0][0].data).toMatchObject({
+      lifecycleStageKey: 'new',
+      status: 'Lead',
+    });
+    expect(prisma.activity.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        type: 'Patient journey stage updated',
+        description: 'Updated from Contacted to New. Reason: Duplicate intake correction',
+      }),
+    }));
+    expect(res.body.lifecycleActivity).toMatchObject({
+      id: 99,
+      type: 'Patient journey stage updated',
+      description: 'Updated from Contacted to New. Reason: Duplicate intake correction',
+      createdAt: '2026-11-23T11:30:00.000Z',
+      user: { id: USER_ID, name: 'Wellness Operator', email: 'operator@example.com' },
+    });
+  });
+
+  test('requires a reason before moving backward in the Wellness patient journey', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce({
+      ...SAMPLE_CONTACT,
+      status: 'Prospect',
+      lifecycleStageKey: 'contacted',
+    });
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+
+    const res = await request(makeApp({ vertical: 'wellness' }))
+      .patch('/api/contacts/9001')
+      .send({ lifecycleStageKey: 'new' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'BACKWARD_STAGE_REASON_REQUIRED' });
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(prisma.activity.create).not.toHaveBeenCalled();
+  });
+
+  test('requires a reason for a Wellness alternative patient journey stage', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce({
+      ...SAMPLE_CONTACT,
+      status: 'Prospect',
+      lifecycleStageKey: 'interested',
+    });
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+
+    const res = await request(makeApp({ vertical: 'wellness' }))
+      .patch('/api/contacts/9001')
+      .send({ lifecycleStageKey: 'not_interested' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'NEGATIVE_STAGE_REASON_REQUIRED' });
+    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(prisma.activity.create).not.toHaveBeenCalled();
+  });
+
+  test('does not write lifecycle stages for a vertical without stage support', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+    prisma.contact.update.mockResolvedValueOnce(SAMPLE_CONTACT);
+
+    const res = await request(makeApp({ vertical: 'travel' }))
       .patch('/api/contacts/9001')
       .send({ lifecycleStageKey: 'new' });
 
@@ -1975,6 +2116,28 @@ describe('Lead custom fields — read/write integration', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
+describe('PUT /api/contacts/bulk-assign', () => {
+  test('uses one update and one notification for a Generic CRM batch of 100 leads', async () => {
+    const contactIds = Array.from({ length: 100 }, (_, index) => 9000 + index);
+    prisma.contact.findMany.mockResolvedValueOnce(contactIds.map((id) => ({ id, assignedToId: null })));
+    prisma.contact.updateMany.mockResolvedValueOnce({ count: 100 });
+
+    const response = await request(makeApp())
+      .put('/api/contacts/bulk-assign')
+      .send({ contactIds, assignedToId: 42 });
+
+    expect(response.status).toBe(200);
+    expect(response.body.updated).toBe(100);
+    expect(prisma.contact.updateMany).toHaveBeenCalledExactlyOnceWith({
+      where: { id: { in: contactIds }, tenantId: TENANT_ID },
+      data: { assignedToId: 42 },
+    });
+    expect(notifyMock).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      userId: 42, title: '100 leads assigned', link: '/leads',
+    }));
+  });
+});
+
 describe('PUT /api/contacts/bulk-assign-campaign', () => {
   test('updates campaign for provided contact ids and returns updated count', async () => {
     prisma.contact.updateMany.mockResolvedValueOnce({ count: 2 });

@@ -69,6 +69,7 @@ import { createRequire } from 'node:module';
 const requireCJS = createRequire(import.meta.url);
 const JWT_SECRET = process.env.JWT_SECRET || 'enterprise_super_secret_key_2026';
 const supportChatRouter = requireCJS('../../routes/support_chat');
+const { PAGE_INFO, findPageInfo } = requireCJS('../../services/supportChatbot/prompts');
 
 const BYOK_KEY = 'sk-byok-test-key-000111222';
 // Shape matches lib/aiProviderManagement.js's readByokConfig() contract
@@ -159,6 +160,13 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
+});
+
+describe('Wellness support-chat page suggestions', () => {
+  test('does not suggest the removed Converted Leads page but keeps All Leads', () => {
+    expect(PAGE_INFO.some((page) => page.path === '/converted-leads')).toBe(false);
+    expect(findPageInfo('All Leads').map((page) => page.path)).toContain('/leads');
+  });
 });
 
 describe('POST /api/support-chat/message', () => {

@@ -22,7 +22,7 @@ import { useNotify } from "../../utils/notify";
 import { SEARCH_DEBOUNCE_MS } from "../../utils/timing";
 import { formatDate } from "../../utils/date";
 import CsvImportExportToolbar from "../../components/wellness/CsvImportExportToolbar";
-import PageHeader from "../../components/PageHeader";
+import PageHeader, { DashboardBackLink } from "../../components/PageHeader";
 import CallifiedCallDialog from "../../components/CallifiedCallDialog";
 import TopScrollSync from "../../components/TopScrollSync";
 
@@ -464,6 +464,7 @@ export default function Patients() {
 
   return (
     <div style={{ padding: "2rem", animation: "fadeIn 0.5s ease-out" }}>
+      <DashboardBackLink />
       <PageHeader
         icon={Users}
         title="Patients"

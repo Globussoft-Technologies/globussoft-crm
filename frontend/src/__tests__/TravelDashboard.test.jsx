@@ -430,6 +430,10 @@ describe('<TravelDashboard /> — KPI tiles', () => {
 
     // Cost master → /travel/cost-master
     expect(screen.getByText('Cost master (active rates)').closest('[role="link"]')).toBeTruthy();
+    expect(screen.getByTitle('TMC: 50').closest('a')).toHaveAttribute(
+      'href',
+      '/travel/cost-master?subBrand=tmc',
+    );
 
     // Pricing rules → /travel/pricing-rules
 

@@ -109,6 +109,7 @@ beforeEach(() => {
       return Promise.resolve({
         availableColumns: [
           { key: "name", label: "Name", lockedVisible: true },
+          { key: "id", label: "Lead ID", filterField: "id", filterKind: "number", webhookField: "contactId" },
           { key: "email", label: "Email" },
           { key: "phone", label: "Phone" },
           { key: "company", label: "Company" },
@@ -262,6 +263,7 @@ describe("<LeadFields />", () => {
     expect(screen.getByRole("button", { name: "Lead Details" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "UTM Tracker" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Email" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Lead ID" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Company" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Account" })).not.toBeInTheDocument();
     await user.type(screen.getByRole("searchbox", { name: "Search fields" }), "phone");
@@ -282,6 +284,7 @@ describe("<LeadFields />", () => {
 
     await screen.findByText("Alpha");
     const nameRow = screen.getByRole("button", { name: "Name" }).closest(".field-config-row");
+    const leadIdRow = screen.getByRole("button", { name: "Lead ID" }).closest(".field-config-row");
     const emailRow = screen.getByRole("button", { name: "Email" }).closest(".field-config-row");
     const unsupportedRow = screen.getByRole("button", { name: "UTM Source" }).closest(".field-config-row");
     const companyRow = screen.getByRole("button", { name: "Company" }).closest(".field-config-row");
@@ -294,6 +297,7 @@ describe("<LeadFields />", () => {
     const unsupportedQuickAdd = within(unsupportedRow).getAllByRole("checkbox")[1];
     expect(unsupportedQuickAdd).not.toBeChecked();
     expect(unsupportedQuickAdd).toBeDisabled();
+    expect(within(leadIdRow).getAllByRole("checkbox").every((checkbox) => checkbox.disabled)).toBe(true);
 
     await user.click(within(companyRow).getAllByRole("checkbox")[1]);
     await waitFor(() => expect(serverFieldConfig).not.toBeNull());
@@ -493,7 +497,7 @@ describe("<LeadFields />", () => {
       const saveCall = fetchApiMock.mock.calls.find(([url, options]) => {
         if (url !== "/api/tenant-settings/generic.fieldConfig" || options?.method !== "PUT") return false;
         const saved = JSON.parse(JSON.parse(options.body).value);
-        return saved.fieldOrder?.["Basic Information"]?.join(",") === "email,company,name,title";
+        return saved.fieldOrder?.["Basic Information"]?.join(",") === "id,email,company,name,title";
       });
       expect(saveCall).toBeTruthy();
     });
@@ -552,6 +556,31 @@ describe("<LeadFields />", () => {
     });
     const created = serverFields.find((field) => field.label === "Hello Custom Field");
     expect(serverFieldConfig.customFieldGroups[created.id]).toBe("group-hello");
+  });
+
+  it.each(["ALPHA", "Phone"])('blocks duplicate Generic CRM field name "%s" with an inline error', async (label) => {
+    authContextValue.tenant = { vertical: "generic" };
+    const user = userEvent.setup();
+
+    render(
+      <MemoryRouter>
+        <FieldConfig />
+      </MemoryRouter>,
+    );
+
+    await screen.findByText("Alpha");
+    await user.click(screen.getAllByRole("button", { name: /Add field/i })[0]);
+    await user.type(screen.getByLabelText("Label"), label);
+    await user.tab();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("A field with this name already exists.");
+    await user.click(screen.getByRole("button", { name: "Save field" }));
+
+    expect(screen.getByLabelText("Label")).toHaveAttribute("aria-invalid", "true");
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      "/api/lead-custom-fields",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("keeps Travel CRM lead fields available", async () => {

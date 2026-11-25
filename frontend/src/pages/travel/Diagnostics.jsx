@@ -19,6 +19,7 @@ import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 import CalendarRangePicker from "../../components/CalendarRangePicker";
 import CountBadge from "../../components/CountBadge";
+import { DashboardBackLink } from "../../components/PageHeader";
 import TopScrollSync from "../../components/TopScrollSync";
 import { useActiveSubBrand } from "../../utils/subBrand";
 import TmcCatalogueResponses from "./TmcCatalogueResponses";
@@ -175,7 +176,7 @@ export default function Diagnostics() {
     const value = searchParams.get("sortOrder");
     return value === "asc" || value === "desc" ? value : null;
   });
-  const [diagnosticsTab, setDiagnosticsTab] = useState("submissions");
+  const diagnosticsTab = isAdmin && searchParams.get("tab") === "catalogues" ? "catalogues" : "submissions";
 
   const reqIdRef = useRef(0);
   const seenDiagnosticIdsRef = useRef(new Set());
@@ -480,6 +481,7 @@ export default function Diagnostics() {
         boxSizing: "border-box",
       }}
     >
+      <DashboardBackLink />
       <div
         className="diagnostics-filter-bar"
         style={{
@@ -540,8 +542,8 @@ export default function Diagnostics() {
       </p>
 
       {isAdmin && <div role="tablist" aria-label="Diagnostics sections" style={{ display: "flex", alignItems: "stretch", flexWrap: "wrap", gap: 18, borderBottom: "1px solid var(--border-color)", marginTop: 14, marginBottom: 14 }}>
-        <button className="diagnostics-section-tab" type="button" role="tab" aria-selected={diagnosticsTab === "submissions"} onClick={() => setDiagnosticsTab("submissions")} style={diagnosticsSectionTabStyle(diagnosticsTab === "submissions")}>Diagnostics</button>
-        <button className="diagnostics-section-tab" type="button" role="tab" aria-selected={diagnosticsTab === "catalogues"} onClick={() => setDiagnosticsTab("catalogues")} style={diagnosticsSectionTabStyle(diagnosticsTab === "catalogues")}>TMC Catalogue Responses</button>
+        <button className="diagnostics-section-tab" type="button" role="tab" aria-selected={diagnosticsTab === "submissions"} onClick={() => updateParams({ tab: null, teacherId: null })} style={diagnosticsSectionTabStyle(diagnosticsTab === "submissions")}>Diagnostics</button>
+        <button className="diagnostics-section-tab" type="button" role="tab" aria-selected={diagnosticsTab === "catalogues"} onClick={() => updateParams({ tab: "catalogues", teacherId: null })} style={diagnosticsSectionTabStyle(diagnosticsTab === "catalogues")}>TMC Catalogue Responses</button>
       </div>}
 
       {isAdmin && diagnosticsTab === "catalogues" ? <TmcCatalogueResponses /> : <>

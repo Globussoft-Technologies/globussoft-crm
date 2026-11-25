@@ -246,12 +246,6 @@ const PAGE_INFO = [
     description: "Full lead database across all sources and dispositions.",
   },
   {
-    path: "/converted-leads",
-    title: "Converted Leads",
-    keywords: ["converted leads", "converted", "won leads", "converted lead list", "leads"],
-    description: "Leads that have been converted to customers or deals.",
-  },
-  {
     path: "/wellness/telecaller",
     title: "Telecaller Queue",
     keywords: ["telecaller queue", "telecaller", "lead queue", "disposition", "follow up", "call back"],

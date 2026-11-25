@@ -186,6 +186,7 @@ beforeAll(() => {
   prisma.whatsAppTemplate = { findFirst: vi.fn() };
   prisma.whatsAppThread = { upsert: vi.fn(), findMany: vi.fn() };
   prisma.campaign = { updateMany: vi.fn() };
+  prisma.contact = { update: vi.fn() };
   prisma.sequenceEnrollment = {
     findMany: vi.fn(),
     findUnique: vi.fn(),
@@ -218,6 +219,7 @@ beforeAll(() => {
 
 let originalSendgridKey;
 beforeEach(() => {
+  prisma.contact.update.mockReset().mockResolvedValue({});
   prisma.plotBooking.findFirst.mockReset().mockResolvedValue(null);
   prisma.plotSite.findFirst.mockReset().mockResolvedValue(null);
   prisma.activity.create.mockReset().mockResolvedValue({});
@@ -724,9 +726,29 @@ describe('cron/sequenceEngine — Generic Email/SMS branch steps', () => {
       noAction: { type: 'stop_sequence' },
     });
 
-    await expect(processStep(stepWith({ kind: 'condition', position: 2, conditionJson }), enrollmentWith()))
+    await expect(processStep(stepWith({ kind: 'condition', position: 2, conditionJson }), enrollmentWith({ contactId: 7 })))
       .resolves.toEqual({ advance: false, jumpTo: 3, nextRun: null });
     expect(prisma.emailMessage.create).toHaveBeenCalledTimes(1);
+  });
+
+  test('Generic condition action persists the frontend New status as backend Lead', async () => {
+    const conditionJson = JSON.stringify({
+      version: 2,
+      logic: 'ALL',
+      conditions: [{ type: 'crm_field', field: 'contact.status', op: 'eq', value: 'Lead' }],
+      yesAction: { type: 'change_contact_status', value: 'New' },
+      noAction: { type: 'stop_sequence' },
+    });
+
+    await expect(processStep(
+      stepWith({ kind: 'condition', position: 2, conditionJson }),
+      enrollmentWith({ contactId: 7 }),
+    ))
+      .resolves.toEqual({ advance: false, jumpTo: 3, nextRun: null });
+    expect(prisma.contact.update).toHaveBeenCalledWith({
+      where: { id: 7 },
+      data: { status: 'Lead' },
+    });
   });
 });
 

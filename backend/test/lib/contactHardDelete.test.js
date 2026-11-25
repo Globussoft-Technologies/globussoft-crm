@@ -14,6 +14,10 @@ function buildTransactionMock() {
     transportPerson: { findMany: vi.fn().mockResolvedValue([]), update: vi.fn() },
     plotBroker: { findMany: vi.fn().mockResolvedValue([]), update: vi.fn() },
     billingPerson: { findMany: vi.fn().mockResolvedValue([]), update: vi.fn() },
+    webFormSubmission: {
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+    },
   };
   for (const [model] of CONTACT_ID_CHILDREN) {
     tx[model] = { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) };
@@ -28,25 +32,36 @@ describe("contactHardDelete", () => {
       $transaction: vi.fn(async (callback) => callback(tx)),
     };
 
-    const deleted = await hardDeleteContacts(db, [42, "42", 0, "invalid", 43]);
+    const ids = [42, ...Array.from({ length: 99 }, (_, index) => 43 + index)];
+    tx.contact.deleteMany.mockResolvedValue({ count: ids.length });
+    const deleted = await hardDeleteContacts(db, [...ids, "42", 0, "invalid"]);
 
-    expect(deleted).toBe(2);
+    expect(deleted).toBe(100);
     expect(db.$transaction).toHaveBeenCalledOnce();
     expect(db.$transaction).toHaveBeenCalledWith(expect.any(Function), {
       maxWait: 15_000,
       timeout: 120_000,
     });
-    expect(tx.tmcParentTrip.deleteMany).toHaveBeenCalledWith({
-      where: { OR: [{ parentContactId: 42 }, { teacherContactId: 42 }] },
+    const inBatch = { in: ids };
+    expect(tx.tmcParentTrip.deleteMany).toHaveBeenCalledExactlyOnceWith({
+      where: { OR: [{ parentContactId: inBatch }, { teacherContactId: inBatch }] },
     });
-    expect(tx.tmcTrip.updateMany).toHaveBeenCalledWith({
-      where: { teacherContactId: 42 },
+    expect(tx.tmcTrip.updateMany).toHaveBeenCalledExactlyOnceWith({
+      where: { teacherContactId: inBatch },
       data: { teacherContactId: null },
     });
-    expect(tx.activity.deleteMany).toHaveBeenCalledWith({ where: { contactId: 42 } });
-    expect(tx.tmcParentDocument.deleteMany).toHaveBeenCalledWith({ where: { parentContactId: 42 } });
-    expect(tx.contact.deleteMany).toHaveBeenNthCalledWith(1, { where: { id: 42 } });
-    expect(tx.contact.deleteMany).toHaveBeenNthCalledWith(2, { where: { id: 43 } });
+    expect(tx.webFormSubmission.updateMany).toHaveBeenCalledExactlyOnceWith({
+      where: { contactId: inBatch, scope: "generic" },
+      data: { contactId: null },
+    });
+    expect(tx.webFormSubmission.deleteMany).toHaveBeenCalledExactlyOnceWith({
+      where: { contactId: inBatch, scope: { not: "generic" } },
+    });
+    for (const [model, field] of CONTACT_ID_CHILDREN) {
+      expect(tx[model].deleteMany).toHaveBeenCalledExactlyOnceWith({ where: { [field]: inBatch } });
+    }
+    expect(tx.transportPerson.findMany).toHaveBeenCalledOnce();
+    expect(tx.contact.deleteMany).toHaveBeenCalledExactlyOnceWith({ where: { id: inBatch } });
   });
 
   test("returns zero without opening a transaction for an empty ID list", async () => {
@@ -61,6 +76,10 @@ describe("contactHardDelete", () => {
     const db = { $transaction: vi.fn(async (callback) => callback(tx)) };
 
     await expect(hardDeleteContact(db, 91)).resolves.toBe(1);
+    expect(tx.webFormSubmission.updateMany).toHaveBeenCalledWith({
+      where: { contactId: 91, scope: "generic" },
+      data: { contactId: null },
+    });
     expect(tx.contact.deleteMany).toHaveBeenCalledWith({ where: { id: 91 } });
   });
 

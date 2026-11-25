@@ -31,9 +31,10 @@ const router = express.Router();
 const prisma = require("../lib/prisma");
 const { requirePermission } = require("../middleware/requirePermission");
 const M = require("../lib/leadReportMetrics");
-const { getSetting, KEYS } = require("../lib/tenantSettings");
+const { getSetting, KEYS, getGenericCrmTimezone } = require("../lib/tenantSettings");
 
 router.use(requirePermission("reports", "read"));
+const { formatInTenantTZ, parseDateTimeLocalInTZ } = require("../lib/datetime");
 
 const STAGES_SETTING_KEY = "leads.funnel.stages";
 
@@ -52,15 +53,30 @@ const MAX_LIST_ROWS = 500;
  * Returns `{ error }` on an inverted or unparseable range — mirrors the
  * #117 contract already used by /api/reports.
  */
-function resolveRange(req, defaultDays = 30) {
+function reportDay(value, timezone) {
+  if (timezone === "UTC") return M.startOfUtcDay(value);
+  return new Date(`${formatInTenantTZ(value, timezone, "yyyy-MM-dd")}T00:00:00Z`);
+}
+
+function reportDayStart(day, timezone, offset = 0) {
+  if (Number.isNaN(day.getTime())) return day;
+  const shifted = new Date(day);
+  shifted.setUTCDate(shifted.getUTCDate() + offset);
+  return parseDateTimeLocalInTZ(`${shifted.toISOString().slice(0, 10)}T00:00`, timezone);
+}
+
+async function resolveRange(req, defaultDays = 30, zone) {
+  const timezone = zone || await getGenericCrmTimezone(req.user.tenantId);
   const now = new Date();
   const rawFrom = req.query.from || req.query.startDate;
   const rawTo = req.query.to || req.query.endDate;
-
-  let to = rawTo ? new Date(`${rawTo}T23:59:59.999Z`) : now;
-  let from = rawFrom
-    ? new Date(`${rawFrom}T00:00:00.000Z`)
-    : new Date(M.startOfUtcDay(now).getTime() - (defaultDays - 1) * 86400000);
+  const today = reportDay(now, timezone);
+  const to = rawTo
+    ? new Date(reportDayStart(new Date(`${rawTo}T00:00:00Z`), timezone, 1).getTime() - 1)
+    : now;
+  const from = rawFrom
+    ? reportDayStart(new Date(`${rawFrom}T00:00:00Z`), timezone)
+    : reportDayStart(today, timezone, -(defaultDays - 1));
 
   if (rawTo && Number.isNaN(to.getTime())) {
     return { error: { status: 400, error: "endDate is not a valid date", code: "INVALID_DATE" } };
@@ -71,7 +87,7 @@ function resolveRange(req, defaultDays = 30) {
   if (from > to) {
     return { error: { status: 400, error: "startDate must be on or before endDate", code: "INVERTED_RANGE" } };
   }
-  return { from, to };
+  return { from, to, timezone };
 }
 
 function parseOwnerId(req) {
@@ -109,18 +125,21 @@ const OVERVIEW_RANGES = new Set([
   "custom",
 ]);
 
-function resolveOverviewRange(req) {
+async function resolveOverviewRange(req) {
+  const timezone = await getGenericCrmTimezone(req.user.tenantId);
   const preset = OVERVIEW_RANGES.has(req.query.range) ? req.query.range : "last_30_days";
-  if (preset === "custom") return { ...resolveRange(req, 30), preset };
+  if (preset === "custom") return { ...await resolveRange(req, 30, timezone), preset };
 
   const to = new Date();
+  const today = reportDay(to, timezone);
   let from = null;
-  if (preset === "last_7_days") from = new Date(M.startOfUtcDay(to).getTime() - 6 * 86400000);
-  if (preset === "last_30_days") from = new Date(M.startOfUtcDay(to).getTime() - 29 * 86400000);
-  if (preset === "last_90_days") from = new Date(M.startOfUtcDay(to).getTime() - 89 * 86400000);
-  if (preset === "this_month") from = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), 1));
-  if (preset === "this_year") from = new Date(Date.UTC(to.getUTCFullYear(), 0, 1));
-  return { from, to, preset };
+  const days = { last_7_days: 7, last_30_days: 30, last_90_days: 90 }[preset];
+  if (days) from = reportDayStart(today, timezone, 1 - days);
+  if (preset === "this_month" || preset === "this_year") {
+    const month = preset === "this_month" ? today.getUTCMonth() : 0;
+    from = reportDayStart(new Date(Date.UTC(today.getUTCFullYear(), month, 1)), timezone);
+  }
+  return { from, to, preset, timezone };
 }
 
 async function loadLifecycleStageConfig(tenantId) {
@@ -165,7 +184,7 @@ async function loadLifecycleStageConfig(tenantId) {
 router.get("/overview", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const range = resolveOverviewRange(req);
+    const range = await resolveOverviewRange(req);
     if (range.error) return res.status(range.error.status).json(range.error);
     const { to, preset } = range;
     const ownerId = parseOwnerId(req);
@@ -255,19 +274,19 @@ router.get("/overview", async (req, res) => {
     );
     const effectiveFrom = range.from || (Number.isFinite(earliestTime)
       ? new Date(earliestTime)
-      : M.startOfUtcDay(to));
+      : reportDayStart(reportDay(to, range.timezone), range.timezone));
     const spanDays = Math.max(1, Math.ceil((to.getTime() - effectiveFrom.getTime()) / 86400000));
     const period = spanDays > 120 ? "monthly" : "daily";
     const blank = () => ({ leadsCreated: 0, meetings: 0, sms: 0, emails: 0, whatsapp: 0 });
     const buckets = new Map(
-      M.buildBuckets(effectiveFrom, to, period).map((bucket) => [bucket.key, {
+      M.buildBuckets(reportDay(effectiveFrom, range.timezone), reportDay(to, range.timezone), period).map((bucket) => [bucket.key, {
         key: bucket.key,
         label: M.bucketLabel(bucket.key, period),
         ...blank(),
       }]),
     );
     const bump = (date, field) => {
-      const bucket = buckets.get(M.bucketKey(date, period));
+      const bucket = buckets.get(M.bucketKey(reportDay(date, range.timezone), period));
       if (bucket) bucket[field] += 1;
     };
 
@@ -309,6 +328,7 @@ router.get("/overview", async (req, res) => {
     res.json({
       preset,
       period,
+      timezone: range.timezone,
       from: effectiveFrom.toISOString(),
       to: to.toISOString(),
       totals: {
@@ -403,7 +423,7 @@ router.get("/productivity", async (req, res) => {
     const tenantId = req.user.tenantId;
     const period = M.normalizePeriod(req.query.period);
     const defaultDays = period === "monthly" ? 365 : period === "weekly" ? 84 : 14;
-    const range = resolveRange(req, defaultDays);
+    const range = await resolveRange(req, defaultDays);
     if (range.error) return res.status(range.error.status).json(range.error);
     const { from, to } = range;
     const ownerId = parseOwnerId(req);
@@ -444,7 +464,7 @@ router.get("/productivity", async (req, res) => {
       }),
     ]);
 
-    const skeleton = M.buildBuckets(from, to, period);
+    const skeleton = M.buildBuckets(reportDay(from, range.timezone), reportDay(to, range.timezone), period);
     const blank = () => ({
       leadsCreated: 0,
       activities: 0,
@@ -479,7 +499,7 @@ router.get("/productivity", async (req, res) => {
 
     const bump = (date, uid, field, amount = 1) => {
       if (ownerId !== null && uid !== ownerId) return;
-      const key = M.bucketKey(date, period);
+      const key = M.bucketKey(reportDay(date, range.timezone), period);
       const bucket = key ? buckets.get(key) : null;
       if (bucket) bucket[field] += amount;
       userRow(uid)[field] += amount;
@@ -542,7 +562,7 @@ router.get("/productivity", async (req, res) => {
 router.get("/lead-quality", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const range = resolveRange(req, 90);
+    const range = await resolveRange(req, 90);
     if (range.error) return res.status(range.error.status).json(range.error);
     const { from, to } = range;
     const { byId } = await loadUsers(tenantId);
@@ -679,7 +699,7 @@ router.get("/lead-quality", async (req, res) => {
 router.get("/follow-up-tracking", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const range = resolveRange(req, 30);
+    const range = await resolveRange(req, 30);
     if (range.error) return res.status(range.error.status).json(range.error);
     const { from, to } = range;
     const now = new Date();
@@ -869,7 +889,7 @@ router.get("/follow-up-tracking", async (req, res) => {
 router.get("/source-analysis", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const range = resolveRange(req, 90);
+    const range = await resolveRange(req, 90);
     if (range.error) return res.status(range.error.status).json(range.error);
     const { from, to } = range;
 
@@ -943,7 +963,7 @@ router.get("/source-analysis", async (req, res) => {
       const lt = c.lastTouchSource || c.source || "Unknown";
       lastTouch.set(lt, (lastTouch.get(lt) || 0) + 1);
 
-      const mk = M.bucketKey(c.createdAt, "monthly");
+      const mk = M.bucketKey(reportDay(c.createdAt, range.timezone), "monthly");
       if (mk) {
         if (!monthly.has(mk)) monthly.set(mk, { month: mk, label: M.bucketLabel(mk, "monthly"), total: 0, bySource: {} });
         const bucket = monthly.get(mk);
@@ -1014,7 +1034,7 @@ router.get("/source-analysis", async (req, res) => {
 router.get("/stage-funnel", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const range = resolveRange(req, 90);
+    const range = await resolveRange(req, 90);
     if (range.error) return res.status(range.error.status).json(range.error);
     const { from, to } = range;
     const ownerId = parseOwnerId(req);
@@ -1088,13 +1108,14 @@ router.get("/stage-funnel", async (req, res) => {
 // ─── 6. Daily meetings & site visits follow-up ───────────────────────
 
 // Named windows the UI offers. `range` honours ?from/?to verbatim.
-function visitWindow(scope, now) {
-  const today = M.startOfUtcDay(now);
-  const day = 86400000;
-  if (scope === "tomorrow") return { from: new Date(today.getTime() + day), to: new Date(today.getTime() + 2 * day - 1) };
-  if (scope === "week") return { from: today, to: new Date(today.getTime() + 7 * day - 1) };
-  if (scope === "overdue") return { from: new Date(0), to: new Date(today.getTime() - 1) };
-  return { from: today, to: new Date(today.getTime() + day - 1) }; // today
+function visitWindow(scope, now, timezone) {
+  const today = reportDay(now, timezone);
+  const start = (offset) => reportDayStart(today, timezone, offset);
+  const end = (offset) => new Date(start(offset + 1).getTime() - 1);
+  if (scope === "tomorrow") return { from: start(1), to: end(1) };
+  if (scope === "week") return { from: start(0), to: end(6) };
+  if (scope === "overdue") return { from: new Date(0), to: end(-1) };
+  return { from: start(0), to: end(0) };
 }
 
 router.get("/visits", async (req, res) => {
@@ -1107,11 +1128,11 @@ router.get("/visits", async (req, res) => {
     let from;
     let to;
     if (scope === "range") {
-      const range = resolveRange(req, 7);
+      const range = await resolveRange(req, 7);
       if (range.error) return res.status(range.error.status).json(range.error);
       ({ from, to } = range);
     } else {
-      ({ from, to } = visitWindow(scope, now));
+      ({ from, to } = visitWindow(scope, now, await getGenericCrmTimezone(tenantId)));
     }
 
     const { byId } = await loadUsers(tenantId);
@@ -1231,7 +1252,7 @@ router.get("/visits", async (req, res) => {
 router.get("/visit-done-not-booked", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const range = resolveRange(req, 90);
+    const range = await resolveRange(req, 90);
     if (range.error) return res.status(range.error.status).json(range.error);
     const { from, to } = range;
     const now = new Date();

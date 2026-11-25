@@ -94,7 +94,9 @@ describe('callifiedDnpRetryEngine', () => {
     mockSettings();
 
     prisma.contact = prisma.contact || {};
+    prisma.tenantSetting.findMany = vi.fn().mockResolvedValue([]);
     prisma.contact.update = vi.fn().mockResolvedValue({ id: 1 });
+    prisma.contact.updateMany = vi.fn().mockResolvedValue({ count: 1 });
     prisma.contact.findMany = vi.fn().mockResolvedValue([]);
   });
 
@@ -107,6 +109,15 @@ describe('callifiedDnpRetryEngine', () => {
     mockSettings({ enabled: true, maxRetries: 5, intervalMinutes: 90 });
     const settings = await getDnpRetrySettings(1);
     expect(settings).toEqual({ enabled: true, maxRetries: 5, intervalMinutes: 90, mode: 'delay', dayInterval: 1, timeLocal: '10:00', timezone: 'UTC' });
+  });
+
+  test('initializes a Pending retry without pushing an existing due time forward', async () => {
+    mockSettings({ enabled: true, intervalMinutes: 5 });
+    const start = Date.now();
+    await engineModule.schedulePendingRetry(1, 11);
+    const [{ where, data }] = prisma.contact.updateMany.mock.calls[0];
+    expect(where).toEqual({ id: 11, tenantId: 1, callifiedLeadStatus: 'pending', callifiedDnpNextRetryAt: null, callifiedDnpRetryCount: { lt: 3 } });
+    expect(data.callifiedDnpNextRetryAt.getTime() - start).toBeGreaterThanOrEqual(300_000);
   });
 
   test('getDnpRetrySettings clamps out-of-range values', async () => {
@@ -133,18 +144,35 @@ describe('callifiedDnpRetryEngine', () => {
     expect(next.toISOString()).toBe('2026-09-30T04:30:00.000Z');
   });
 
+  test('skips a scheduled wall time that is missing during the DST transition', () => {
+    const settings = { mode: 'scheduled', dayInterval: 1, timeLocal: '02:30', timezone: 'America/New_York' };
+    const next = computeNextRetryAt(settings, new Date('2026-03-08T05:00:00Z'));
+    expect(next.toISOString()).toBe('2026-03-09T06:30:00.000Z');
+  });
+
+  test('loads saved schedule mode, time and timezone as strings', async () => {
+    const stored = {
+      'feature.callified.dnp_retry.mode': 'scheduled',
+      'feature.callified.dnp_retry.time_local': '14:30',
+      'feature.callified.retry.timezone': 'Asia/Kolkata',
+    };
+    getSetting.mockImplementation(async (_tenant, key, { coerce = Number, fallback }) =>
+      stored[key] === undefined ? fallback : coerce(stored[key]));
+    expect(await getDnpRetrySettings(1)).toMatchObject({ mode: 'scheduled', timeLocal: '14:30', timezone: 'Asia/Kolkata' });
+  });
+
   test('scheduleDnpRetry sets next retry window without resetting count', async () => {
     mockSettings({ enabled: true, intervalMinutes: 60 });
     await scheduleDnpRetry(1, 11);
 
-    expect(prisma.contact.update).toHaveBeenCalledWith({
-      where: { id: 11, tenantId: 1 },
+    expect(prisma.contact.updateMany).toHaveBeenCalledWith({
+      where: { id: 11, tenantId: 1, callifiedLeadStatus: 'dnp', callifiedDnpNextRetryAt: null, callifiedDnpRetryCount: { lt: 3 } },
       data: {
         callifiedDnpNextRetryAt: expect.any(Date),
       },
     });
 
-    const nextRetryAt = prisma.contact.update.mock.calls[0][0].data.callifiedDnpNextRetryAt;
+    const nextRetryAt = prisma.contact.updateMany.mock.calls[0][0].data.callifiedDnpNextRetryAt;
     const expected = new Date(Date.now() + 60 * 60 * 1000);
     expect(Math.abs(nextRetryAt.getTime() - expected.getTime())).toBeLessThan(1000);
   });
@@ -153,7 +181,7 @@ describe('callifiedDnpRetryEngine', () => {
     mockSettings({ enabled: false });
     const result = await scheduleDnpRetry(1, 11);
     expect(result).toBeNull();
-    expect(prisma.contact.update).not.toHaveBeenCalled();
+    expect(prisma.contact.updateMany).not.toHaveBeenCalled();
   });
 
   test('clearDnpRetryState resets retry counters', async () => {
@@ -167,7 +195,7 @@ describe('callifiedDnpRetryEngine', () => {
     });
   });
 
-  test('processDnpRetries enqueues a due DNP lead and updates state', async () => {
+  test('processDnpRetries enqueues a due DNP lead and leaves it due until dispatch', async () => {
     prisma.contact.findMany.mockResolvedValue([
       {
         id: 11,
@@ -184,13 +212,11 @@ describe('callifiedDnpRetryEngine', () => {
       where: expect.objectContaining({ tenant: { vertical: 'generic' } }),
     }));
     expect(enqueueMock).toHaveBeenCalledTimes(1);
-    expect(enqueueMock).toHaveBeenCalledWith({ tenantId: 1, contactId: 11, campaignId: 42, userId: null, retryAttempt: true });
-    expect(prisma.contact.update).toHaveBeenCalledWith({
-      where: { id: 11, tenantId: 1 },
-      data: {
-        callifiedDnpNextRetryAt: expect.any(Date),
-      },
+    expect(enqueueMock).toHaveBeenCalledWith({
+      tenantId: 1, contactId: 11, campaignId: 42, userId: null, retryAttempt: true,
+      retrySchedule: { status: 'dnp', dueAt: expect.any(Date) },
     });
+    expect(prisma.contact.update).not.toHaveBeenCalled();
   });
 
   test('processPendingRetries schedules the configured delay for an existing unscheduled pending lead', async () => {
@@ -213,8 +239,8 @@ describe('callifiedDnpRetryEngine', () => {
       }),
     }));
     expect(enqueueMock).not.toHaveBeenCalled();
-    expect(prisma.contact.update).toHaveBeenCalledWith({
-      where: { id: 12, tenantId: 1 },
+    expect(prisma.contact.updateMany).toHaveBeenCalledWith({
+      where: { id: 12, tenantId: 1, callifiedLeadStatus: 'pending', callifiedDnpNextRetryAt: null },
       data: {
         callifiedDnpNextRetryAt: expect.any(Date),
       },
@@ -233,13 +259,11 @@ describe('callifiedDnpRetryEngine', () => {
 
     await processPendingRetries();
 
-    expect(enqueueMock).toHaveBeenCalledWith({ tenantId: 1, contactId: 12, campaignId: 43, userId: null, retryAttempt: true });
-    expect(prisma.contact.update).toHaveBeenCalledWith({
-      where: { id: 12, tenantId: 1 },
-      data: {
-        callifiedDnpNextRetryAt: expect.any(Date),
-      },
+    expect(enqueueMock).toHaveBeenCalledWith({
+      tenantId: 1, contactId: 12, campaignId: 43, userId: null, retryAttempt: true,
+      retrySchedule: { status: 'pending', dueAt: expect.any(Date) },
     });
+    expect(prisma.contact.update).not.toHaveBeenCalled();
   });
 
   test('a duplicate queue rejection does not consume or reschedule a retry', async () => {
@@ -271,8 +295,8 @@ describe('callifiedDnpRetryEngine', () => {
     await processDnpRetries();
 
     expect(enqueueMock).not.toHaveBeenCalled();
-    expect(prisma.contact.update).toHaveBeenCalledWith({
-      where: { id: 11, tenantId: 1 },
+    expect(prisma.contact.updateMany).toHaveBeenCalledWith({
+      where: { id: 11, tenantId: 1, callifiedLeadStatus: 'dnp', callifiedDnpNextRetryAt: null },
       data: { callifiedDnpNextRetryAt: expect.any(Date) },
     });
   });
@@ -326,7 +350,12 @@ describe('callifiedDnpRetryEngine', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(enqueueMock).toHaveBeenCalledTimes(1); // initial tick
 
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(enqueueMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
     expect(enqueueMock).toHaveBeenCalledTimes(2);
+    expect(prisma.contact.findMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ callifiedDnpNextRetryAt: { lte: expect.any(Date) } }),
+    }));
   });
 });

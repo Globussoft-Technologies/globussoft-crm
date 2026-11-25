@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { Building2, Download, FileText, Plus, Trash2, Upload } from 'lucide-react';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
-import { formatDate, formatDateTime } from '../../utils/date';
+import { formatDate, formatDateTime, workspaceDayKey } from '../../utils/date';
 import { generatedDealName } from '../../utils/dealDisplay';
 import { fetchApi } from '../../utils/api';
 import {
@@ -183,10 +183,7 @@ export function ConversationsTab({ contact, contactId, onOpenAction, hideSms = f
   const groups = useMemo(() => {
     const grouped = new Map();
     visible.forEach((item) => {
-      const parsed = new Date(item.createdAt);
-      const key = Number.isNaN(parsed.getTime())
-        ? 'unknown'
-        : `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
+      const key = workspaceDayKey(item.createdAt) || 'unknown';
       if (!grouped.has(key)) grouped.set(key, []);
       grouped.get(key).push(item);
     });

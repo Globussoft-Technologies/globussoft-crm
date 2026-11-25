@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Phone, X, Loader, AlertCircle } from "lucide-react";
+import { Phone, CalendarClock, X, Loader, AlertCircle } from "lucide-react";
 import { fetchApi } from "../utils/api";
 import { useNotify } from "../utils/notify";
+import { LeadDialComposer } from './LeadDialWorkspace';
 
 /**
  * Campaign picker + AI call trigger for a CRM lead.
@@ -20,12 +21,14 @@ export default function CallifiedLeadCallDialog({ lead, onClose, onCalled, defau
   const [selectedCampaignId, setSelectedCampaignId] = useState("");
   const [calling, setCalling] = useState(false);
   const [callResult, setCallResult] = useState(null);
+  const [scheduling, setScheduling] = useState(false);
+  const protectedLead = /qualified|hot/i.test(lead.callifiedLeadStatus || '');
 
   useEffect(() => {
     let cancelled = false;
     setLoadingCampaigns(true);
     setCampaignError("");
-    fetchApi("/api/callified/campaigns")
+    fetchApi("/api/callified/campaigns", { silent: true })
       .then((res) => {
         if (cancelled) return;
         const list = Array.isArray(res?.campaigns) ? res.campaigns : [];
@@ -49,6 +52,7 @@ export default function CallifiedLeadCallDialog({ lead, onClose, onCalled, defau
   }, [defaultCampaignId]);
 
   const handleCall = async () => {
+    if (calling || callResult?.ok || protectedLead) return;
     if (!selectedCampaignId) {
       notify.error("Please select a campaign");
       return;
@@ -59,6 +63,7 @@ export default function CallifiedLeadCallDialog({ lead, onClose, onCalled, defau
       const res = await fetchApi(`/api/callified/leads/${lead.id}/call`, {
         method: "POST",
         body: JSON.stringify({ campaignId: Number(selectedCampaignId) }),
+        silent: true,
       });
       setCallResult({ ok: true, ...res });
       notify.success(`AI call initiated for ${lead.name || "lead"}`);
@@ -71,6 +76,8 @@ export default function CallifiedLeadCallDialog({ lead, onClose, onCalled, defau
       setCalling(false);
     }
   };
+
+  if (scheduling) return <LeadDialComposer selection={{ contactIds: [lead.id], campaignOverrideId: Number(selectedCampaignId) }} onClose={() => setScheduling(false)} onCreated={() => { onCalled?.(); onClose(); }} />;
 
   return (
     <div
@@ -173,7 +180,10 @@ export default function CallifiedLeadCallDialog({ lead, onClose, onCalled, defau
           </div>
         )}
 
+        {callResult?.ok && <p className="lead-dial-muted">This call will finish normally. Stop dialing cancels remaining queued calls.</p>}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem" }}>
+          {protectedLead && <p role="status">Qualified lead · calling is disabled</p>}
+          {!callResult?.ok && <button type="button" className="btn-secondary" disabled={calling || protectedLead || !selectedCampaignId} onClick={() => setScheduling(true)}><CalendarClock size={16} /> Plan call</button>}
           <button
             type="button"
             onClick={onClose}
@@ -187,7 +197,7 @@ export default function CallifiedLeadCallDialog({ lead, onClose, onCalled, defau
             type="button"
             onClick={handleCall}
             className="btn-primary"
-            disabled={calling || !selectedCampaignId || campaigns.length === 0}
+            disabled={calling || callResult?.ok || protectedLead || !selectedCampaignId || campaigns.length === 0}
             style={{ padding: "0.625rem 1rem", display: "flex", alignItems: "center", gap: "0.5rem" }}
           >
             {calling ? (

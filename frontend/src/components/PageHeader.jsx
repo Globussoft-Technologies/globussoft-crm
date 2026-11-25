@@ -1,5 +1,42 @@
-import React from 'react';
+import { useEffect } from 'react';
+import { ArrowLeft } from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
 import CountBadge from './CountBadge';
+import { dashboardPathForState, readRefreshedDashboardNavigation, rememberDashboardNavigation } from '../utils/dashboardNavigation';
+
+export function DashboardBackLink() {
+  const location = useLocation();
+  const stateDashboardPath = dashboardPathForState(location.state);
+  const dashboardPath = stateDashboardPath || readRefreshedDashboardNavigation(location);
+
+  useEffect(() => {
+    rememberDashboardNavigation(location);
+  }, [location]);
+
+  if (!dashboardPath) return null;
+
+  return (
+    <Link
+      to={dashboardPath}
+      aria-label="Back to dashboard"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        width: 'fit-content',
+        marginBottom: 14,
+        color: 'var(--text-secondary)',
+        fontSize: 13,
+        fontWeight: 400,
+        lineHeight: 1.4,
+        textDecoration: 'none',
+      }}
+    >
+      <ArrowLeft size={16} aria-hidden="true" />
+      Back to dashboard
+    </Link>
+  );
+}
 
 /**
  * Shared page-header hero panel for wellness list/index pages.

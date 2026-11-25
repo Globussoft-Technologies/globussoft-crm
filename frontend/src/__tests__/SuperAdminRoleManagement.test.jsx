@@ -59,7 +59,7 @@ beforeEach(() => {
 });
 
 describe("SuperAdminRoleManagement", () => {
-  test("defines readable light and dark theme palettes for the page surface", () => {
+  test("defines readable theme palettes and responsive filter layouts", () => {
     expect(roleManagementStyles).toContain('[data-theme="light"] .super-admin-role-management');
     expect(roleManagementStyles).toContain('[data-theme="dark"] .super-admin-role-management');
     expect(roleManagementStyles).toContain("--role-limit-surface: #ffffff;");
@@ -68,6 +68,11 @@ describe("SuperAdminRoleManagement", () => {
     expect(roleManagementStyles).toContain("--role-limit-ink: #f1f5ff;");
     expect(roleManagementStyles).toContain("color-scheme: light;");
     expect(roleManagementStyles).toContain("color-scheme: dark;");
+    expect(roleManagementStyles).toContain("@media (max-width: 1120px)");
+    expect(roleManagementStyles).toContain("@media (max-width: 1280px)");
+    expect(roleManagementStyles).toContain("grid-template-columns: repeat(2, minmax(0, 1fr));");
+    expect(roleManagementStyles).toContain(".role-limit-search-control { flex: 1 1 100%; max-width: none; }");
+    expect(roleManagementStyles).toContain(".role-limit-summary-item:nth-child(odd)");
   });
 
   test("loads all verticals and shows custom-role usage and limits", async () => {
@@ -76,9 +81,12 @@ describe("SuperAdminRoleManagement", () => {
     expect(await screen.findByRole("row", { name: /Acme Generic/ })).toBeInTheDocument();
     expect(screen.getByRole("row", { name: /Wellness House/ })).toBeInTheDocument();
     expect(screen.getByRole("row", { name: /Travel Stall/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Wellness" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Filter by vertical" }));
     expect(screen.getByRole("button", { name: "Generic CRM" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Wellness" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Travel" })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Organization" })).not.toBeInTheDocument();
     expect(screen.getByRole("table")).toHaveClass("super-admin-role-limits-table");
     expect(screen.getByRole("table").parentElement).toHaveClass("role-limit-table-scroll");
     expect(screen.getByRole("table").parentElement.parentElement).toHaveClass("role-limit-table-card");
@@ -113,33 +121,45 @@ describe("SuperAdminRoleManagement", () => {
     expect(screen.getByRole("row", { name: /Travel Stall/ })).toBeInTheDocument();
   });
 
-  test("shows organization suggestions while typing", async () => {
+  test("limits organization suggestions to the selected vertical", async () => {
     render(<SuperAdminRoleManagement />);
     await screen.findByRole("row", { name: /Acme Generic/ });
+    fireEvent.click(screen.getByRole("button", { name: "Filter by vertical" }));
+    fireEvent.click(screen.getByRole("button", { name: "Wellness" }));
 
     const search = screen.getByRole("textbox", { name: "Search organizations" });
     fireEvent.focus(search);
-    fireEvent.change(search, { target: { value: "acme" } });
+    fireEvent.change(search, { target: { value: "owner@" } });
 
     const suggestions = await screen.findByRole("listbox", { name: "Organization suggestions" });
-    expect(within(suggestions).getByRole("option", { name: /Acme Generic/ })).toBeInTheDocument();
-    fireEvent.mouseDown(within(suggestions).getByRole("option", { name: /Acme Generic/ }));
+    expect(within(suggestions).getByRole("option", { name: /Wellness House/ })).toBeInTheDocument();
+    expect(within(suggestions).queryByRole("option", { name: /Acme Generic/ })).not.toBeInTheDocument();
+    expect(within(suggestions).queryByRole("option", { name: /Travel Stall/ })).not.toBeInTheDocument();
+    fireEvent.mouseDown(within(suggestions).getByRole("option", { name: /Wellness House/ }));
 
-    expect(screen.getByRole("row", { name: /Acme Generic/ })).toBeInTheDocument();
-    expect(screen.queryByRole("row", { name: /Wellness House/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("row", { name: /Wellness House/ })).toBeInTheDocument();
+    expect(screen.queryByRole("row", { name: /Acme Generic/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("row", { name: /Travel Stall/ })).not.toBeInTheDocument();
   });
 
-  test("focuses the table with organization and vertical filters", async () => {
+  test("combines the vertical filter with organization search and filtered totals", async () => {
     render(<SuperAdminRoleManagement />);
     await screen.findByRole("row", { name: /Acme Generic/ });
 
-    fireEvent.change(screen.getByLabelText("Organization"), { target: { value: "2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Filter by vertical" }));
+    fireEvent.click(screen.getByRole("button", { name: "Wellness" }));
     expect(screen.getByRole("row", { name: /Wellness House/ })).toBeInTheDocument();
     expect(screen.queryByRole("row", { name: /Acme Generic/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("row", { name: /Travel Stall/ })).not.toBeInTheDocument();
+    expect(document.querySelector(".role-limit-summary-item strong")).toHaveTextContent("1");
 
-    fireEvent.change(screen.getByLabelText("Organization"), { target: { value: "all" } });
-    fireEvent.click(screen.getByRole("button", { name: "Travel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Filter by vertical: Wellness" }));
+    fireEvent.click(screen.getByRole("button", { name: "All" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Search organizations" }), { target: { value: "travel" } });
+    fireEvent.click(screen.getByRole("button", { name: "Search organizations" }));
     expect(screen.getByRole("row", { name: /Travel Stall/ })).toBeInTheDocument();
+    expect(screen.queryByRole("row", { name: /Acme Generic/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("row", { name: /Wellness House/ })).not.toBeInTheDocument();
+    expect(document.querySelector(".role-limit-summary-item strong")).toHaveTextContent("1");
   });
 });

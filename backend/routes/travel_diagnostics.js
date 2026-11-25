@@ -1427,6 +1427,14 @@ router.get(
       const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 20));
       const offset = Math.max(0, Number.parseInt(req.query.offset, 10) || 0);
       const where = { tenantId };
+      if (req.query.teacherId !== undefined) {
+        const rawTeacherId = String(req.query.teacherId);
+        const teacherId = Number(rawTeacherId);
+        if (!/^\d+$/.test(rawTeacherId) || !Number.isSafeInteger(teacherId) || teacherId < 1) {
+          return res.status(400).json({ error: "teacherId must be a positive integer", code: "INVALID_TEACHER_ID" });
+        }
+        where.teacherContactId = teacherId;
+      }
       const [rows, total] = await Promise.all([
         prisma.tmcTeacherCatalogueResponse.findMany({
           where,

@@ -88,9 +88,9 @@ function installFetchMock({ list = { rates: RATES_DEFAULT }, create = null, patc
   });
 }
 
-function renderPage(user = ADMIN_USER) {
+function renderPage(user = ADMIN_USER, initialEntries = ['/travel/cost-master']) {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={initialEntries}>
       <AuthContext.Provider value={{ user, token: 'tk', tenant: { id: 1, defaultCurrency: 'INR' }, loading: false }}>
         <CostMaster />
       </AuthContext.Provider>
@@ -162,6 +162,19 @@ describe('<CostMaster /> — load + render lifecycle', () => {
     });
     expect(await screen.findByText('Makkah:Hilton:Deluxe')).toBeInTheDocument();
     expect(screen.getByText('DEL-BLR:Indigo:Econ')).toBeInTheDocument();
+  });
+
+  it('scopes seasons and suppliers lookups to the active sub-brand', async () => {
+    renderPage(ADMIN_USER, ['/travel/cost-master?subBrand=tmc']);
+
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) =>
+        url === '/api/travel/seasons?subBrand=tmc',
+      )).toBe(true);
+      expect(fetchApiMock.mock.calls.some(([url]) =>
+        url === '/api/travel/suppliers?limit=500&fields=summary&subBrand=tmc',
+      )).toBe(true);
+    });
   });
 
   it('renders empty state when API returns rates:[]', async () => {

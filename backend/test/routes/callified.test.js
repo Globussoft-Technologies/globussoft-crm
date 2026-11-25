@@ -591,6 +591,7 @@ describe('POST /api/callified/campaigns/:campaignId/dial-all', () => {
       campaignId: 101,
       userId: 7,
       interest: 'Bulk campaign dial',
+      requestedAt: expect.any(Number),
     });
     expect(prisma.auditLog.create).toHaveBeenCalledTimes(2);
     const auditArgs = prisma.auditLog.create.mock.calls.map((c) => c[0].data);

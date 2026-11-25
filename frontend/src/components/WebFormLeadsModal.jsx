@@ -52,9 +52,9 @@ export default function WebFormLeadsModal({ form, onClose, onOpenLead }) {
           onChange={(event) => { setSearch(event.target.value); setPage(1); }} style={{ flex: 1, minWidth: 0 }} />
         <a className="btn-secondary" href={`/leads?${new URLSearchParams({ webForm: form.name })}`} style={{ flexShrink: 0, whiteSpace: 'nowrap', textDecoration: 'none' }}>View in Leads</a>
       </div>
-      <div title="Red rows are Web Form submissions whose related record is not currently available as an active Lead." style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, color: '#b91c1c', fontSize: '0.82rem' }}>
-        <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#b91c1c', flexShrink: 0 }} />
-        <span>Red rows indicate submissions that are not active Leads.</span>
+      <div title="Blue rows have exactly matching submitted field and file values. Red rows have a deleted, missing, or inaccessible related record." style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10, fontSize: '0.82rem', flexWrap: 'wrap' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#1d4ed8' }}><span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#2563eb', flexShrink: 0 }} />Blue rows are exact duplicate submissions.</span>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#b91c1c' }}><span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#b91c1c', flexShrink: 0 }} />Red rows are deleted or unavailable in Leads.</span>
       </div>
       {error ? <p role="alert">{error}</p> : loading ? <p role="status">Loading leads…</p> : (
         <>
@@ -68,20 +68,25 @@ export default function WebFormLeadsModal({ form, onClose, onOpenLead }) {
               <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr style={{ backgroundColor: 'var(--table-header-bg)' }}>{fields.map((field, index) => <th style={cellStyle} key={`${field.id}-${index}`}>{field.label}</th>)}<th style={cellStyle}>Created</th><th style={cellStyle}>Last Updated</th></tr></thead>
               <tbody style={{ display: 'table-row-group' }}>{data?.leads.map((lead) => {
                 const isMissingFromLeads = lead.isLead === false || Boolean(lead.deletedAt);
+                const isExactDuplicate = !isMissingFromLeads && lead.isDuplicate === true;
                 const missingMessage = lead.deletedAt
                   ? 'This lead was deleted from Leads'
                   : lead.contactId
-                    ? 'This submission is no longer a Lead and is not present in Leads'
+                    ? 'This submission is not available to this user in Leads'
                     : 'This submission no longer has a lead record in Leads';
                 const canOpenLead = Boolean(onOpenLead && lead.contactId && !isMissingFromLeads);
-                const rowCellStyle = isMissingFromLeads ? { ...cellStyle, color: '#b91c1c', backgroundColor: 'rgba(239, 68, 68, 0.1)' } : cellStyle;
+                const rowCellStyle = isMissingFromLeads
+                  ? { ...cellStyle, color: '#b91c1c', backgroundColor: 'rgba(239, 68, 68, 0.1)' }
+                  : isExactDuplicate
+                    ? { ...cellStyle, color: '#1d4ed8', backgroundColor: 'rgba(59, 130, 246, 0.1)' }
+                    : cellStyle;
                 return (
                 <tr
                   key={lead.id}
                   className={canOpenLead ? 'table-row-hover' : undefined}
                   role={canOpenLead ? 'link' : undefined}
                   tabIndex={canOpenLead ? 0 : undefined}
-                  title={isMissingFromLeads ? `Marked red: not an active Lead. ${missingMessage}` : canOpenLead ? 'Open lead detail' : undefined}
+                  title={isMissingFromLeads ? `Marked red: unavailable in Leads. ${missingMessage}` : canOpenLead ? 'Open lead detail' : undefined}
                   aria-label={isMissingFromLeads ? 'Submission not present in Leads' : canOpenLead ? `Open submitted lead ${displayValue(lead.values.find((value) => value != null && value !== ''))}` : undefined}
                   onClick={() => { if (canOpenLead) openLead(lead); }}
                   onKeyDown={(event) => {
@@ -91,7 +96,9 @@ export default function WebFormLeadsModal({ form, onClose, onOpenLead }) {
                   }}
                   style={isMissingFromLeads
                     ? { display: 'table-row', color: '#b91c1c', backgroundColor: 'rgba(239, 68, 68, 0.1)' }
-                    : { display: 'table-row', cursor: canOpenLead ? 'pointer' : undefined }}
+                    : isExactDuplicate
+                      ? { display: 'table-row', color: '#1d4ed8', backgroundColor: 'rgba(59, 130, 246, 0.1)', cursor: canOpenLead ? 'pointer' : undefined }
+                      : { display: 'table-row', cursor: canOpenLead ? 'pointer' : undefined }}
                 >
                   {fields.map((field, index) => <td key={`${field.id}-${index}`} style={rowCellStyle}>{displayValue(lead.values[index])}</td>)}
                   <td style={rowCellStyle}>{formatDateTime(lead.createdAt)}</td><td style={rowCellStyle}>{formatDateTime(lead.updatedAt)}</td>

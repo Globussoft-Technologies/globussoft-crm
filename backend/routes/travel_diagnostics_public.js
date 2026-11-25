@@ -918,7 +918,71 @@ router.post("/diagnostics/public/report/:slug/interests", async (req, res) => {
       interests,
     });
 
-    res.json({ ok: true, ...saved });
+    // Regenerate the customer-facing PDF after the school confirms its
+    // interests. This keeps the emailed report identical to the PDF the
+    // customer downloads from this page (including the selected interests),
+    // instead of sharing the older pre-selection report or the TMC readiness
+    // report template.
+    let reportPdfUrl = diag.reportPdfUrl || null;
+    try {
+      let bank = null;
+      try {
+        const snapshot = JSON.parse(diag.questionsJson || "{}");
+        if (snapshot && snapshot.questionsJson) {
+          bank = {
+            id: snapshot.bankId,
+            version: snapshot.bankVersion,
+            questionsJson: snapshot.questionsJson,
+            scoringRulesJson: snapshot.scoringRulesJson,
+          };
+        }
+      } catch {
+        bank = null;
+      }
+      reportPdfUrl = await generateDiagnosticPdfBestEffort(diag, bank, {
+        recommendations: saved.interests,
+      });
+    } catch (pdfErr) {
+      console.warn("[diag-public-report] selected-interest PDF failed (non-fatal):", pdfErr.message);
+    }
+
+    // The completion email is sent only after interests are submitted, so its
+    // link always points at the same generic diagnostic PDF shown in the UI.
+    try {
+      const contacts = diag.contactId
+        ? await prisma.contact.findMany({
+            where: { id: diag.contactId, tenantId: diag.tenantId },
+            select: { email: true, name: true },
+            take: 1,
+          })
+        : [];
+      const recipient = contacts[0] || {};
+      if (recipient.email && reportPdfUrl) {
+        const baseUrl = String(
+          process.env.FRONTEND_URL || `${req.protocol}://${req.get("host")}`,
+        ).replace(/\/+$/, "");
+        const reportLink = /^https?:\/\//i.test(reportPdfUrl)
+          ? reportPdfUrl
+          : `${baseUrl}${reportPdfUrl.startsWith("/") ? "" : "/"}${reportPdfUrl}`;
+        await require("../lib/travelEmailAutomation").processTravelEmailEvent(
+          "diagnostic.completed",
+          {
+            diagnosticId: diag.id,
+            contactId: diag.contactId,
+            recipientEmail: recipient.email,
+            recipientName: recipient.name || "there",
+            student: { name: recipient.name || "there" },
+            reportUrl: reportLink,
+            diagnostic: { reportUrl: reportLink },
+          },
+          diag.tenantId,
+        );
+      }
+    } catch (emailErr) {
+      console.warn("[diag-public-report] completion email trigger failed (non-fatal):", emailErr.message);
+    }
+
+    res.json({ ok: true, ...saved, reportPdfUrl });
   } catch (e) {
     if (e.status)
       return res.status(e.status).json({ error: e.message, code: e.code });

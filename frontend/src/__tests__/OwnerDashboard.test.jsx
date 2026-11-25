@@ -1,7 +1,6 @@
-import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 
 // Mock fetchApi BEFORE importing the component
 vi.mock('../utils/api', () => ({
@@ -21,6 +20,17 @@ import { fetchApi } from '../utils/api';
 import OwnerDashboard from '../pages/wellness/OwnerDashboard';
 import { AuthContext } from '../App';
 
+function LocationProbe() {
+  const location = useLocation();
+  return (
+    <span
+      data-testid="dashboard-location"
+      data-pathname={location.pathname}
+      data-state={JSON.stringify(location.state || null)}
+    />
+  );
+}
+
 // The component reads tenant + user from AuthContext for the AdsGPT SSO
 // card. Wrap every render in a provider so useContext doesn't destructure
 // undefined. Returns a small wrapper component the tests use.
@@ -34,7 +44,10 @@ function renderDashboard() {
       tenant: { id: 2, name: 'Enhanced Wellness', slug: 'enhanced-wellness', vertical: 'wellness', defaultCurrency: 'INR' },
       setTenant: () => {},
     }}>
-      <MemoryRouter><OwnerDashboard /></MemoryRouter>
+      <MemoryRouter initialEntries={['/wellness']}>
+        <OwnerDashboard />
+        <LocationProbe />
+      </MemoryRouter>
     </AuthContext.Provider>
   );
 }
@@ -75,6 +88,20 @@ describe('<OwnerDashboard />', () => {
     expect(screen.getByText(/New leads today/i)).toBeInTheDocument();
     expect(screen.getByText(/Pending approvals/i)).toBeInTheDocument();
     expect(screen.getByText(/Active packages/i)).toBeInTheDocument();
+  });
+
+  it('marks KPI-card navigation as coming from the dashboard', async () => {
+    setupFetch([{ id: 1, name: 'Ranchi' }]);
+    renderDashboard();
+
+    const appointmentsLabel = await screen.findByText("Today's appointments");
+    fireEvent.click(appointmentsLabel.closest('.wellness-owner-kpi'));
+
+    const location = screen.getByTestId('dashboard-location');
+    expect(location).toHaveAttribute('data-pathname', '/wellness/calendar');
+    expect(JSON.parse(location.getAttribute('data-state'))).toEqual({
+      fromWellnessDashboard: true,
+    });
   });
 
   it('formatRupees output appears (₹84,500 today, ₹92,300 yesterday)', async () => {

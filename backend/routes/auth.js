@@ -19,6 +19,7 @@ const {
   otpVerifyLimiter,
 } = require("../middleware/apiRateLimiters");
 const { writeAudit } = require("../lib/audit");
+const { getGenericCrmTimezone } = require("../lib/tenantSettings");
 const { resolvePrimaryRole } = require("../lib/roleResolution");
 const { resolveTenantVertical } = require("../lib/tenantVertical");
 const { getSubBrandAccessSet } = require("../middleware/travelGuards");
@@ -31,6 +32,7 @@ const { toE164 } = require("../utils/deduplication");
 // without capturing a stale destructured reference.
 const selfBookingPatient = require("../lib/selfBookingPatient");
 const { ensurePatientContact } = require("../lib/patientContactLink");
+const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 // Module-object require so vi.mock-style replacement of the exports at
 // test time is observable here (the destructured form captures function
 // references at require-time and bypasses any later patching).
@@ -1666,6 +1668,7 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
     // ahmed.pilgrim@demo.test work). We reuse the SAME bcrypt hash so one
     // password works in both stores. Travel-only + best-effort: any failure
     // here must never break the User registration above.
+    let travelPortalContact = null;
     if ((user.tenant?.vertical || tenant.vertical) === "travel") {
       try {
         // A Contact may already be a TMC teacher/parent account. The User
@@ -1694,9 +1697,30 @@ router.post("/customer/register", registerLimiter, async (req, res) => {
             data: { portalPasswordHash: hashedPassword },
           });
         }
+        travelPortalContact = portalContact;
       } catch (e) {
         console.error(
           `[auth] customer/register portal-contact bridge failed (non-fatal): ${e.message}`,
+        );
+      }
+
+      try {
+        const frontendBase = getFrontendUrlFromRequest(req).replace(/\/+$/, "");
+        await require("../lib/eventBus").emitEvent(
+          "account.created",
+          {
+            contactId: travelPortalContact?.id || null,
+            recipientEmail: email,
+            recipientName: name || email.split("@")[0],
+            subBrand: travelPortalContact?.subBrand || "travelstall",
+            signInLink: `${frontendBase}/travel/portal`,
+          },
+          tenantId,
+          req.app.get("io"),
+        );
+      } catch (eventError) {
+        console.error(
+          `[auth] customer/register account.created email failed (non-fatal): ${eventError.message}`,
         );
       }
     }
@@ -1977,6 +2001,7 @@ router.post("/login", async (req, res) => {
             country: user.tenant.country || "US",
             defaultCurrency: user.tenant.defaultCurrency || "USD",
             locale: user.tenant.locale || "en-US",
+            timezone: user.tenant.vertical === "generic" ? await getGenericCrmTimezone(user.tenant.id).catch(() => "UTC") : undefined,
             logoUrl: user.tenant.logoUrl,
             brandColor: user.tenant.brandColor,
             themeColor: user.tenant.themeColor,
@@ -2397,7 +2422,11 @@ router.get("/me", verifyToken, async (req, res) => {
       primaryRole,
       landingPath: primaryRole?.landingPath || null,
       features: { smsConfigured },
-      tenant: user.tenant ? { ...user.tenant, themeColor } : null,
+      tenant: user.tenant ? {
+        ...user.tenant,
+        themeColor,
+        timezone: user.tenant.vertical === "generic" ? await getGenericCrmTimezone(user.tenant.id).catch(() => "UTC") : undefined,
+      } : null,
     });
   } catch (_error) {
     res.status(500).json({ error: "Failed to fetch profile" });

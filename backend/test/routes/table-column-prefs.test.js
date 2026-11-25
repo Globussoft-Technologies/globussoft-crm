@@ -75,6 +75,26 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(keys.at(-1)).toBe('actions');
   });
 
+  test('generic Leads exposes Lead ID for filtering and workflow payloads only', async () => {
+    const generic = await request(makeApp()).get('/api/table-column-prefs/leads');
+
+    expect(generic.status).toBe(200);
+    expect(generic.body.availableColumns.find((column) => column.key === 'id')).toMatchObject({
+      label: 'Lead ID',
+      webhookField: 'contactId',
+      filterField: 'id',
+      filterKind: 'number',
+    });
+    expect(generic.body.visible).not.toContain('id');
+
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: 'travel' });
+    const travel = await request(makeApp()).get('/api/table-column-prefs/leads');
+    expect(travel.body.availableColumns.map((column) => column.key)).not.toContain('id');
+
+    const contacts = await request(makeApp()).get('/api/table-column-prefs/contacts');
+    expect(contacts.body.availableColumns.map((column) => column.key)).not.toContain('id');
+  });
+
   test('first-ever generic Leads load uses the compact calling-focused default', async () => {
     const res = await request(makeApp()).get('/api/table-column-prefs/leads');
 
@@ -96,11 +116,8 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(res.body.availableColumns.find((c) => c.key === 'overallPickupStatus')).toMatchObject({
       label: 'Overall Status',
     });
-    expect(res.body.availableColumns.find((c) => c.key === 'lifecycleStage')).toMatchObject({
-      label: 'Lifecycle Stage',
-      filterField: 'lifecycleStageKey',
-      filterKind: 'enum',
-    });
+    const keys = res.body.availableColumns.map((c) => c.key);
+    expect(keys).not.toContain('lifecycleStage');
     expect(res.body.availableColumns.find((c) => c.key === 'pickupLocation')).not.toHaveProperty('lockedVisible');
     expect(res.body.availableColumns.find((c) => c.key === 'plotAssign')).not.toHaveProperty('lockedVisible');
     expect(res.body.availableColumns.find((c) => c.key === 'overallPickupStatus')).not.toHaveProperty('lockedVisible');
@@ -140,8 +157,7 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     });
     // Lifecycle Stage now sits between Web Form and Medium without
     // disturbing the Source → Web Form adjacency pinned above.
-    expect(keys.indexOf('lifecycleStage')).toBe(keys.indexOf('webForm') + 1);
-    expect(keys.indexOf('medium')).toBe(keys.indexOf('lifecycleStage') + 1);
+    expect(keys.indexOf('medium')).toBe(keys.indexOf('webForm') + 1);
     expect(keys.indexOf('medium')).not.toBe(keys.indexOf('source') + 1);
     // Medium stays available but is opt-in under the compact default.
     expect(res.body.visible).not.toContain('medium');
@@ -178,7 +194,7 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(res.status).toBe(200);
     const byKey = new Map(res.body.availableColumns.map((c) => [c.key, c.label]));
     expect(byKey.get('status')).toBe('Status');
-    expect(byKey.get('lifecycleStage')).toBe('Lifecycle Stage');
+    expect(byKey.has('lifecycleStage')).toBe(false);
     expect(byKey.get('title')).toBe('Job Title');
     expect(byKey.get('firstName')).toBe('First Name');
     expect(byKey.get('lastName')).toBe('Last Name');
@@ -188,7 +204,7 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
     expect(byKey.get('companySize')).toBe('No Of Employee');
     expect(byKey.get('medium')).toBe('Medium');
     expect(byKey.get('subBrand')).toBe('Sub-brand');
-    expect(byKey.get('description')).toBe('Note');
+    expect(byKey.get('note')).toBe('Note');
     expect(byKey.get('stateCode')).toBe('State');
     expect(byKey.get('firstTouchSource')).toBe('First Touch Source');
     expect(byKey.get('lastTouchSource')).toBe('Last Touch Source');
@@ -208,7 +224,7 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
 
     expect(res.status).toBe(200);
     const keys = res.body.availableColumns.map((c) => c.key);
-    for (const k of ['status', 'title', 'firstName', 'lastName', 'website', 'linkedin', 'industry', 'companySize', 'description', 'stateCode', 'firstTouchSource', 'lastTouchSource', 'treatmentOfInterest', 'birthDate', 'anniversary', 'gst', 'billingStateCode', 'actions']) {
+    for (const k of ['status', 'title', 'firstName', 'lastName', 'website', 'linkedin', 'industry', 'companySize', 'note', 'stateCode', 'firstTouchSource', 'lastTouchSource', 'treatmentOfInterest', 'birthDate', 'anniversary', 'gst', 'billingStateCode', 'actions']) {
       // NOTE: contacts already ships `status` — everything else must stay out.
       if (k === 'status') {
         expect(keys).toContain(k);
@@ -270,7 +286,7 @@ describe('GET /api/table-column-prefs/:tableKey — leads catalog', () => {
       'linkedin',
       'industry',
       'companySize',
-      'description',
+      'note',
       'stateCode',
       'lastUpdated',
       'firstTouchSource',

@@ -66,8 +66,8 @@ export function SettingsSection({ section, integration, className = "", children
 }
 
 export default function SettingsWorkspace({ enabled, vertical = "generic", integrationExtras = null, integrationStatuses = {}, children }) {
-  const [section, setSection] = useState("general");
-  const [integration, setIntegration] = useState(null);
+  const [section, setSection] = useState(() => new URLSearchParams(window.location.search).get('section') || 'general');
+  const [integration, setIntegration] = useState(() => new URLSearchParams(window.location.search).get('integration'));
   const [query, setQuery] = useState("");
   const contentRef = useRef(null);
   const scrollRef = useRef(null);

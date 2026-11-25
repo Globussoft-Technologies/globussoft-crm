@@ -300,7 +300,13 @@ export default function EmailCompose() {
       } else {
         payload = JSON.stringify({ to: to.join(", "), cc: cc.join(", "), bcc: bcc.join(", "), subject: subject.trim(), body });
       }
-      await fetchApi("/api/communications/send-email", { method: "POST", body: payload });
+      const result = await fetchApi("/api/communications/send-email", { method: "POST", body: payload });
+      if (result?.delivered !== true) {
+        if (result?.reason === "sendgrid_error_403") {
+          throw new Error("Email was not sent because the configured sender address is not verified in SendGrid.");
+        }
+        throw new Error(result?.error || "Email was not delivered.");
+      }
       notify.success("Email sent successfully.");
       try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
       navigate("/inbox");

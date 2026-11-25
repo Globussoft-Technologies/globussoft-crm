@@ -23,6 +23,13 @@ body[data-vertical="generic"] .app-main > main.generic-page-content {
   container: generic-main / inline-size;
 }
 
+/* Keep the frozen Leads checkboxes inset when fluid table padding applies. */
+body[data-vertical="generic"] .app-main > main.generic-page-content
+  .leads-page-root--generic .leads-table-frozen-pane
+  > table.leads-table--frozen > :is(thead, tbody) > tr > :is(th, td):first-child {
+  padding-inline-start: 30px !important;
+}
+
 /* Scale from the content pane, not the browser viewport. The sidebar, split
    panes, and embedded workspaces can make the usable pane much narrower than
    the viewport, which is where fixed vw-based sizing starts to crowd controls

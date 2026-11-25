@@ -152,7 +152,11 @@ describe('<BrokerCustomerWorkspace />', () => {
   });
 
   it('sends from the embedded composer and then opens Inbox', async () => {
-    fetchApi.mockResolvedValueOnce(response).mockResolvedValue([]);
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pickup-plot-inventory/brokers/me') return Promise.resolve(response);
+      if (url === '/api/communications/send-email') return Promise.resolve({ success: true, delivered: true });
+      return Promise.resolve([]);
+    });
     render(<MemoryRouter><BrokerCustomerWorkspace /></MemoryRouter>);
 
     fireEvent.click(await screen.findByRole('button', { name: 'Email Li Wei' }));

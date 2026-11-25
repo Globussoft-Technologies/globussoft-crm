@@ -71,7 +71,9 @@ function buildConfiguredBody(config, event, payload, tenantId) {
   }
   const selected = Array.isArray(config.selectedFields) ? config.selectedFields : [];
   if (selected.length) {
-    return Object.fromEntries(selected.filter((field) => Object.prototype.hasOwnProperty.call(payload, field)).map((field) => [field, payload[field]]));
+    return Object.fromEntries(selected
+      .filter((field) => Object.prototype.hasOwnProperty.call(payload, field) && payload[field] != null)
+      .map((field) => [field, payload[field]]));
   }
   return { event, timestamp: new Date().toISOString(), data: payload };
 }

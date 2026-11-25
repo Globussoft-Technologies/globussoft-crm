@@ -1,13 +1,13 @@
 // Lead "Sync Lead" AI conversation summary (2026-07-07).
 //
 // Turns the WhatsApp messages a lead's linked Contact hasn't seen summarized
-// yet into ONE structured, dated block and appends it to Contact.description.
+// yet into ONE structured, dated block and appends it to Contact.note.
 // Never overwrites prior blocks — this is an append-only conversation history
 // so an agent can open any lead and understand the whole relationship without
 // reading the raw chat. See PRD conversation 2026-07-07.
 //
 // Incremental sync: WhatsAppThread.lastLeadSyncedMessageId records the
-// highest WhatsAppMessage.id already folded into the description. Each call
+// highest WhatsAppMessage.id already folded into the note. Each call
 // to syncLeadDescription only fetches messages with id > that watermark,
 // summarizes them via the LLM ("lead-conversation-summary" task — Gemini
 // primary, OpenAI fallback per lib/llmRouter.js), appends the rendered block,
@@ -100,7 +100,7 @@ async function summarizeMessages({ tenantId, customerName, messages }) {
 }
 
 // Sync one WhatsAppThread's unsummarized messages into its linked Contact's
-// description. Returns { skipped: reason } or { appended: true, contactId,
+// note. Returns { skipped: reason } or { appended: true, contactId,
 // messageCount, leadStage }. Never throws — best-effort, caller decides how
 // to surface failures.
 async function syncLeadDescription({ tenantId, threadId }) {
@@ -129,7 +129,7 @@ async function syncLeadDescription({ tenantId, threadId }) {
 
   const contact = await prisma.contact.findFirst({
     where: { tenantId, id: thread.contactId },
-    select: { id: true, name: true, description: true },
+    select: { id: true, name: true, note: true },
   });
   if (!contact) return { skipped: "contact-not-found" };
 
@@ -147,13 +147,13 @@ async function syncLeadDescription({ tenantId, threadId }) {
     leadStage: summary.leadStage,
   });
 
-  const nextDescription = contact.description ? `${contact.description}\n\n${block}` : block;
+  const nextNote = contact.note ? `${contact.note}\n\n${block}` : block;
   const lastMessageId = newMessages[newMessages.length - 1].id;
 
   await prisma.$transaction([
     prisma.contact.update({
       where: { id: contact.id },
-      data: { description: nextDescription },
+      data: { note: nextNote },
     }),
     prisma.whatsAppThread.update({
       where: { id: thread.id },
@@ -210,7 +210,7 @@ async function narrativeSummarizeMessages({ tenantId, customerName, messages }) 
 }
 
 // On-demand "Summarize" (2026-07-07) — re-reads the Contact's ENTIRE linked
-// WhatsApp history (across all its threads) and REPLACES Contact.description
+// WhatsApp history (across all its threads) and REPLACES Contact.note
 // with one flowing narrative + a trailing "Current Lead Stage" line.
 // Independent of the incremental "Sync Lead" watermark — this does not read
 // or advance WhatsAppThread.lastLeadSyncedMessageId. Returns { skipped:
@@ -236,11 +236,11 @@ async function narrativeSummarizeContact({ tenantId, contactId }) {
     messages,
   });
 
-  const description = `${summary.narrative.trim()}\n\nCurrent Lead Stage: ${summary.leadStage || "New Enquiry"}.`;
+  const note = `${summary.narrative.trim()}\n\nCurrent Lead Stage: ${summary.leadStage || "New Enquiry"}.`;
 
   await prisma.contact.update({
     where: { id: contact.id },
-    data: { description },
+    data: { note },
   });
 
   return {
@@ -286,11 +286,11 @@ async function consolidateCaptureBlocks({ tenantId, customerName, blockText }) {
 // (gmail / whatsapp-extension, 2026-07-09). Unlike narrativeSummarizeContact
 // (which re-reads raw WhatsAppMessage rows from a live session), these
 // sources have NO raw message log — each capture already wrote a one-time
-// dated summary block straight into Contact.description
+// dated summary block straight into Contact.note
 // (routes/leads_extension_capture.js). This re-reads whatever's ALREADY in
-// description (however many dated blocks have piled up from repeat
+// note (however many dated blocks have piled up from repeat
 // captures) and asks the AI to consolidate them into one flowing narrative,
-// then REPLACES description with it — same replace-outright semantics as
+// then REPLACES note with it — same replace-outright semantics as
 // narrativeSummarizeContact, just a different input source. Returns
 // { skipped: reason } or { replaced: true, contactId, leadStage }.
 async function consolidateCaptureContact({ tenantId, contactId }) {
@@ -298,24 +298,24 @@ async function consolidateCaptureContact({ tenantId, contactId }) {
 
   const contact = await prisma.contact.findFirst({
     where: { tenantId, id: contactId },
-    select: { id: true, name: true, description: true },
+    select: { id: true, name: true, note: true },
   });
   if (!contact) return { skipped: "contact-not-found" };
-  if (!contact.description || !contact.description.trim()) {
+  if (!contact.note || !contact.note.trim()) {
     return { skipped: "no-description" };
   }
 
   const summary = await consolidateCaptureBlocks({
     tenantId,
     customerName: contact.name,
-    blockText: contact.description,
+    blockText: contact.note,
   });
 
-  const description = `${summary.narrative.trim()}\n\nCurrent Lead Stage: ${summary.leadStage || "New Enquiry"}.`;
+  const note = `${summary.narrative.trim()}\n\nCurrent Lead Stage: ${summary.leadStage || "New Enquiry"}.`;
 
   await prisma.contact.update({
     where: { id: contact.id },
-    data: { description },
+    data: { note },
   });
 
   return {

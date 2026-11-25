@@ -1,0 +1,123 @@
+.lead-calling-connection{display:inline-flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid var(--border-color);border-radius:999px;font-size:.75rem;background:var(--surface-color);white-space:nowrap;color:var(--text-secondary)}
+.lead-calling-dot{width:7px;height:7px;border-radius:50%;background:#94a3b8}.lead-calling-connection[data-state=connected] .lead-calling-dot{background:#10b981;box-shadow:0 0 0 3px #10b98118}
+.lead-calling-connection button,.lead-dial-runs-heading button{border:0;background:transparent;color:var(--primary-color,var(--accent-color));cursor:pointer;font-weight:600;display:inline-flex;align-items:center;gap:4px}
+.lead-dial-backdrop{position:fixed;inset:0;z-index:1200;background:#0f172a80;backdrop-filter:blur(5px);display:grid;place-items:center;padding:20px}
+.lead-dial-composer{width:min(100%,540px);max-height:90dvh;overflow:auto;background:var(--bg-color);color:var(--text-primary);border:1px solid var(--border-color);border-radius:20px;padding:26px;box-shadow:0 24px 80px #0003}
+.lead-dial-heading{display:flex;gap:12px;align-items:center}.lead-dial-heading h2{margin:0;font-size:1.3rem}.lead-dial-eyebrow{font-size:.62rem;letter-spacing:.15em;margin:0 0 5px;color:var(--text-secondary)}.lead-dial-icon{display:grid;place-items:center;width:44px;height:44px;border-radius:13px;background:color-mix(in srgb,var(--primary-color,var(--accent-color)) 12%,transparent);color:var(--primary-color,var(--accent-color))}.lead-dial-close{margin-left:auto;border:0;background:transparent;color:var(--text-secondary);cursor:pointer}
+.lead-dial-composer fieldset{border:0;padding:0;margin:22px 0}.lead-dial-composer legend{font-size:.84rem;font-weight:650;margin-bottom:12px}.lead-dial-status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,205px),1fr));gap:9px}.lead-dial-status-option{display:flex;gap:9px;align-items:flex-start;padding:12px;border:1px solid var(--border-color);border-radius:11px;cursor:pointer}.lead-dial-status-option[data-selected=true]{border-color:var(--primary-color,var(--accent-color));background:color-mix(in srgb,var(--primary-color,var(--accent-color)) 5%,transparent)}.lead-dial-status-option strong{display:block;font-size:.8rem}.lead-dial-status-option small{display:block;font-size:.71rem;color:var(--text-secondary);margin-top:4px;line-height:1.5}.lead-dial-composer input{accent-color:var(--primary-color,var(--accent-color))}
+.lead-dial-protection{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border-radius:10px;background:#10b9810c;color:var(--text-secondary);font-size:.75rem;line-height:1.5}.lead-dial-protection svg{flex-shrink:0;color:#10b981}.lead-dial-timing{display:flex;gap:18px;flex-wrap:wrap;font-size:.82rem}.lead-dial-date{display:grid;gap:8px;margin-top:16px;font-size:.8rem}.lead-dial-date input{padding:11px;border:1px solid var(--border-color);border-radius:9px;background:var(--surface-color);color:var(--text-primary);font:inherit;min-width:0}.lead-dial-date small,.lead-dial-muted{font-size:.75rem;color:var(--text-secondary);line-height:1.6}.lead-dial-error{color:var(--danger-color,#dc2626);font-size:.8rem;line-height:1.5}.lead-dial-composer footer{display:flex;justify-content:flex-end;gap:10px;border-top:1px solid var(--border-color);padding-top:18px;margin-top:18px}.lead-dial-composer footer button{display:flex;align-items:center;gap:8px;padding:10px 16px}
+.lead-dial-runs{border:1px solid var(--border-color);border-radius:14px;padding:14px;margin:0 0 16px;background:var(--surface-color)}.lead-dial-runs-heading{display:flex;align-items:center;justify-content:space-between;font-size:.85rem;gap:12px}.lead-dial-runs-heading strong{display:flex;align-items:center;gap:8px}.lead-dial-run{display:flex;align-items:center;gap:14px;padding:14px 0;border-bottom:1px solid var(--border-color)}.lead-dial-run:last-child{border-bottom:0}.lead-dial-run>div{min-width:0;flex:1}.lead-dial-run strong{font-size:.8rem}.lead-dial-run small{display:block;font-size:.72rem;color:var(--text-secondary);margin:6px 0;line-height:1.5}.lead-dial-run progress{width:100%;height:5px;accent-color:var(--primary-color,var(--accent-color))}.lead-dial-run-state{display:inline-block;margin-left:6px;font-size:.65rem;text-transform:capitalize;border-radius:999px;padding:3px 7px;background:var(--subtle-bg);color:var(--text-secondary)}.lead-dial-stop{display:inline-flex;align-items:center;gap:6px;padding:8px 10px;border:1px solid #ef444433;background:#ef444408;color:var(--danger-color,#dc2626);border-radius:8px;cursor:pointer;font-size:.75rem;white-space:nowrap}.lead-dial-stop:disabled{opacity:.5;cursor:wait}
+
+.lead-dial-run-filters, .lead-dial-run-counts { display: flex; flex-wrap: wrap; gap: 6px; }
+.lead-dial-run-filters { margin-top: 12px; }
+.lead-dial-run-filters button { padding: 6px 9px; font-size: .73rem; }
+.lead-dial-run-filters button[aria-pressed=true] { border-color: var(--primary-color, var(--accent-color)); }
+.lead-dial-run-counts { margin: 8px 0; }
+.lead-dial-run-counts span { background: var(--surface-muted); color: var(--text-primary); border-radius: 6px; padding: 3px 6px; font-size: .7rem; }
+.lead-dial-run-state[data-status=running] { background: var(--accent-bg); color: var(--text-primary); }
+.lead-dial-run-state[data-status=completed] { background: var(--status-success-bg); color: var(--status-success-text); }
+.lead-dial-run-state[data-status=paused] { background: var(--status-warning-bg); color: var(--status-warning-text); }
+.lead-dial-stop:hover:not(:disabled) { background: var(--toast-error-bg); color: var(--toast-error-text); }
+.lead-call-history-title { margin: 18px 0 10px; font-size: .85rem; }
+.lead-automation-header-actions { display: flex; align-items: center; gap: 10px; }
+.lead-dial-clock { display: grid; gap: 3px; text-align: end; white-space: nowrap; }
+.lead-dial-clock small { color: var(--text-secondary); font-size: .64rem; }
+.lead-dial-clock time { color: var(--text-primary); font-size: .81rem; font-weight: 650; font-variant-numeric: tabular-nums; }
+.lead-dial-queue-overview { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 0; font-size: .75rem; }
+.lead-dial-queue-overview .lead-dial-clock { text-align: start; }
+.lead-dial-queue-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 165px), 1fr)); gap: 8px; margin-bottom: 12px; }
+.lead-dial-queue-summary { min-width: 0; padding: 10px; border: 1px solid var(--border-color); border-radius: 9px; background: var(--bg-color); }
+.lead-dial-queue-summary > strong, .lead-dial-queue-summary > span { display: block; }
+.lead-dial-queue-summary > strong { margin-bottom: 4px; font-size: .8rem; }
+.lead-dial-queue-summary ul { list-style: none; padding: 0; margin: 0; }
+.lead-dial-queue-summary li { display: grid; gap: 3px; padding: 6px 0; font-size: .72rem; overflow-wrap: anywhere; border-top: 1px solid var(--border-color); }
+.lead-dial-queue-summary li small { color: var(--text-secondary); }
+.lead-dial-run-list-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; font-size: .78rem; }
+.lead-dial-run-list-heading select { width: auto; max-width: 100%; padding: 6px 8px; font-size: .75rem; }
+.lead-dial-run progress {
+  display: block;
+  appearance: none;
+  overflow: hidden;
+  margin-top: 10px;
+  border: 0;
+  border-radius: 99px;
+  background: var(--border-color);
+}
+.lead-dial-run progress::-webkit-progress-bar { background: var(--border-color); }
+.lead-dial-run progress::-webkit-progress-value { background: var(--primary-color, var(--accent-color)); }
+.lead-dial-run progress::-moz-progress-bar { background: var(--primary-color, var(--accent-color)); }
+.lead-dial-run details { margin-top: 6px; font-size: .76rem; }
+.lead-dial-run details summary { width: fit-content; cursor: pointer; color: var(--text-primary); padding: 4px 0; }
+.lead-dial-run details[open] summary { margin-bottom: 6px; }
+.lead-run-attempt { border-top: 1px solid var(--border-color); padding: 6px 0; }
+.dial-run-workspace.lead-dial-runs { background:var(--bg-color); padding:16px; border-radius:16px; }
+.dial-run-workspace .lead-dial-runs-heading strong svg,.dial-run-empty>svg { box-sizing:content-box; padding:8px; border-radius:10px; color:var(--primary-color,var(--accent-color)); background:color-mix(in srgb,var(--accent-color) 10%,var(--bg-color)); }
+.dial-run-workspace .lead-dial-run-filters { display:grid; grid-template-columns:1fr 1fr; gap:2px; background:var(--surface-color); border-radius:12px; padding:4px; margin:14px 0; }
+.dial-run-workspace .lead-dial-run-filters button { min-height:38px; background:transparent; border:1px solid transparent; border-radius:9px; }
+.dial-run-workspace .lead-dial-run-filters button[aria-pressed=true] { background:var(--bg-color); border-color:var(--border-color); box-shadow:0 1px 3px #17152715; }
+.dial-run-empty { display:grid; justify-items:center; text-align:center; gap:9px; padding:24px 14px; font-size:.86rem; }
+.dial-run-empty small { max-width:32ch; color:var(--text-secondary); }
+.dial-queue-disclosure>summary { cursor:pointer; color:var(--text-secondary); font-size:.75rem; padding:5px 0; }
+.dial-run-workspace article.lead-dial-run { border:1px solid var(--border-color); border-radius:13px; padding:11px 13px; margin-top:7px; }
+.dial-run-workspace .lead-dial-run>div>details>summary { position:relative; display:block; box-sizing:border-box; width:100%; padding:2px 22px 2px 0; cursor:pointer; }
+.dial-run-workspace .lead-dial-run>div>details>summary::after { content:''; position:absolute; right:4px; top:7px; width:6px; height:6px; border:solid var(--text-secondary); border-width:0 1.5px 1.5px 0; transform:rotate(45deg); }
+.dial-run-workspace .lead-dial-run>div>details[open]>summary::after { transform:rotate(225deg); }
+.dial-run-workspace .lead-dial-run>div>details[open]>summary { border-bottom:1px solid var(--border-color); padding-bottom:8px; }
+.dial-detail-title { display:block; margin:10px 0 6px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-secondary); }
+.dial-attempt-list { max-height:240px; overflow:auto; border:1px solid var(--border-color); border-radius:10px; }
+.dial-attempt-row { display:flex; align-items:center; gap:8px; padding:7px 10px; font-size:.76rem; }
+.dial-attempt-row+.dial-attempt-row { border-top:1px solid var(--border-color); }
+.dial-attempt-row>div { flex:1; min-width:0; overflow-wrap:anywhere; }
+.dial-attempt-row small { margin:0; }
+.dial-avatar,.dial-outcome { border-radius:99px; background:var(--subtle-bg); padding:3px 8px; font-size:.7rem; }
+.dial-avatar { display:grid; place-items:center; width:28px; height:28px; box-sizing:border-box; background:color-mix(in srgb,var(--accent-color) 13%,var(--bg-color)); color:var(--accent-color); }
+.dial-outcome[data-outcome=qualified],.dial-outcome[data-outcome=COMPLETED] { background:var(--status-success-bg); color:var(--status-success-text); }
+.dial-outcome[data-outcome=junk],.dial-outcome[data-outcome=FAILED] { background:var(--status-danger-bg); color:var(--status-danger-text); }
+.dial-outcome[data-outcome=pending] { background:color-mix(in srgb,#8654df 16%,var(--bg-color)); color:var(--text-primary); }
+.dial-show-more { width:100%; margin-top:12px; }
+.lead-dial-runs.dial-run-workspace article.lead-dial-run { padding:0; overflow:hidden; background:var(--bg-color); }
+.lead-dial-runs.dial-run-workspace article.lead-dial-run>div>details { margin:0; }
+.lead-dial-runs.dial-run-workspace article.lead-dial-run>div>details>summary { padding:12px 34px 12px 14px; margin:0; }
+.lead-dial-runs.dial-run-workspace article.lead-dial-run>div>details>summary::after { right:16px; top:18px; }
+.lead-dial-runs.dial-run-workspace article.lead-dial-run>div>details[open] { background:color-mix(in srgb,var(--surface-color) 42%,var(--bg-color)); }
+.lead-dial-runs.dial-run-workspace article.lead-dial-run>div>details[open]>summary { background:var(--surface-color); border-bottom:1px solid var(--border-color); }
+.dial-run-workspace .dial-detail-body { padding:12px 14px 14px; }
+.dial-run-workspace .dial-detail-title { margin:0 0 8px; font-size:.7rem; }
+.dial-run-workspace .dial-attempt-list { background:var(--bg-color); max-height:248px; overflow-y:auto; }
+.dial-run-workspace .dial-attempt-row { box-sizing:border-box; min-height:46px; gap:10px; padding:6px 12px; }
+.dial-run-workspace .dial-attempt-row small { margin:0; line-height:1.25; }
+.dial-run-workspace .lead-dial-run .lead-dial-run-counts span { padding:3px 9px; border-radius:99px; font-size:.7rem; }
+.dial-run-workspace .dial-outcome[data-outcome=dnp],.dial-run-workspace .dial-outcome[data-outcome=MISSED] { background:var(--subtle-bg); color:var(--text-secondary); }
+.dial-run-workspace .dial-run-notice { padding:10px 14px 0; }
+.dial-run-workspace .dial-run-notice small { margin:0; padding:8px 10px; border-radius:8px; background:var(--status-warning-bg); color:var(--status-warning-text); line-height:1.45; }
+.dial-toolbar-live,.dial-toolbar-live button,.dial-stop-action { display:inline-flex; align-items:center; justify-content:center; gap:8px; }
+.dial-toolbar-live button,.dial-live-card,.dial-scheduled-card { border-radius:12px; border:1px solid var(--border-color); }
+.dial-toolbar-live button,.dial-live-card { color:var(--text-primary); background:color-mix(in srgb,var(--accent-color) 6%,var(--bg-color)); border-color:color-mix(in srgb,var(--accent-color) 32%,var(--border-color)); }
+.dial-toolbar-live button,.dial-stop-action { padding:9px 13px; cursor:pointer; font:inherit; }
+.dial-toolbar-live i { width:7px;height:7px;border-radius:50%;background:var(--accent-color); }
+.dial-toolbar-live progress,.dial-live-card progress { accent-color:var(--primary-color,var(--accent-color)); height:7px; }
+.dial-toolbar-live progress { width:42px; }
+.dial-live-card,.dial-scheduled-card { padding:15px; margin:10px 0; font-size:.8rem; }
+.dial-live-card header,.dial-scheduled-card header,.dial-scheduled-card footer { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.dial-live-card p { margin:7px 0; }.dial-live-card b { font-size:1.65rem; }
+.dial-live-card progress,.dial-live-card button { width:100%; }.dial-live-card button { margin:10px 0; }
+.dial-live-card small,.dial-scheduled-card small { display:block; color:var(--text-secondary); }
+.dial-scheduled-card header>div { flex:1; min-width:0; }.dial-scheduled-card header>svg { box-sizing:content-box; padding:9px; border-radius:8px; background:var(--subtle-bg); color:var(--accent-color); }
+.dial-scheduled-card header>span { align-self:flex-start; padding:4px 9px; border-radius:20px; background:color-mix(in srgb,var(--accent-color) 12%,var(--bg-color)); }
+.dial-scheduled-card footer { margin-top:12px; }.dial-scheduled-card footer strong { font-size:.75rem; }
+.dial-stop-action,.dial-toolbar-live button.dial-stop-action { color:var(--danger-color,#c33); background:var(--bg-color); border:1px solid color-mix(in srgb,var(--danger-color,#c33) 45%,var(--border-color)); border-radius:9px; }
+.dial-stop-action:hover:not(:disabled),.dial-toolbar-live button:hover:not(:disabled) { box-shadow:inset 0 0 0 1px currentColor; }
+.lead-dial-runs.dial-run-workspace article.lead-dial-run:has(>.lead-dial-stop) { display:grid; grid-template-columns:minmax(0,1fr); gap:0; }
+.lead-dial-runs.dial-run-workspace article.lead-dial-run>.lead-dial-stop { justify-self:end; margin:0 14px 12px; }
+.dial-toolbar-upcoming {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--primary-color, var(--accent-color)) 14%, transparent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  white-space: nowrap;
+}

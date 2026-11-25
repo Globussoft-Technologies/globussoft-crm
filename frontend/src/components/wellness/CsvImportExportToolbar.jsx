@@ -1,4 +1,4 @@
-﻿
+import { formatDateTime } from '../../utils/date';
 // Issue #816 - Reusable CSV import / export toolbar for wellness list pages.
 
 // Renders two header-level buttons:
@@ -169,7 +169,8 @@ const canDeriveLeadFieldKey = (label) => {
 
 const normalizeMappingIdentity = (value) => String(value || "")
   .trim()
-  .toLowerCase()
+  .normalize("NFKC")
+  .toLocaleLowerCase("en-US")
   .replace(/^cf_/, "")
   .replace(/[^a-z0-9]+/g, "");
 
@@ -357,7 +358,7 @@ function SearchableMappingFieldSelect({ value, options, onChange, ariaLabel, tit
         <ChevronDown size={16} aria-hidden="true" />
       </button>
       {open && (
-        <div role="listbox" aria-label={`${ariaLabel} options`} style={{ position: "absolute", zIndex: 100, top: "calc(100% + 4px)", left: 0, right: 0, minWidth: 220, maxHeight: 280, overflowY: "auto", padding: 6, border: "1px solid var(--border-color)", borderRadius: 8, background: "#fff", opacity: 1, boxShadow: "0 12px 28px rgba(0,0,0,.18)" }}>
+        <div role="listbox" aria-label={`${ariaLabel} options`} style={{ position: "absolute", zIndex: 1, top: "calc(100% + 4px)", left: 0, right: 0, minWidth: 220, maxHeight: 280, overflowY: "auto", padding: 6, border: "1px solid var(--border-color)", borderRadius: 8, background: "#fff", opacity: 1, boxShadow: "0 12px 28px rgba(0,0,0,.18)" }}>
           <input
             type="search"
             autoFocus
@@ -411,6 +412,7 @@ export default function CsvImportExportToolbar({
   genericLeadWizard = false,
   genericCrm = false,
   mappingFields = [],
+  combinedMenu = false,
 }) {
   const notify = useNotify();
   const [exporting, setExporting] = useState(false);
@@ -557,14 +559,15 @@ export default function CsvImportExportToolbar({
   // Close the export dropdown on outside click.
   useEffect(() => {
     if (!exportMenuOpen) return undefined;
+    const anchor = combinedMenu ? importMenuRef : exportMenuRef;
     const recompute = () => {
-      setExportMenuPos(getViewportDropdownPosition(exportMenuRef, 180));
+      setExportMenuPos(getViewportDropdownPosition(anchor, 180));
     };
     recompute();
     const onDocClick = (e) => {
       if (
-        exportMenuRef.current &&
-        !exportMenuRef.current.contains(e.target) &&
+        anchor.current &&
+        !anchor.current.contains(e.target) &&
         !exportMenuContentRef.current?.contains(e.target)
       ) {
         setExportMenuOpen(false);
@@ -579,7 +582,7 @@ export default function CsvImportExportToolbar({
       window.removeEventListener("resize", recompute);
       window.removeEventListener("scroll", recompute, true);
     };
-  }, [exportMenuOpen]);
+  }, [exportMenuOpen, combinedMenu]);
 
   useEffect(() => {
     if (!importMenuOpen) return undefined;
@@ -649,7 +652,8 @@ export default function CsvImportExportToolbar({
           flexWrap: "wrap",
         }}
       >
-        {showExport && multiFormat ? (
+        {combinedMenu && (allowImport || showExport) && <div ref={importMenuRef}><button type="button" className="btn-secondary" style={toolbarButtonStyle} aria-label="Import & export" aria-haspopup="menu" aria-expanded={importMenuOpen} onClick={toggleImportMenu}><Upload size={14} /> Import & export <ChevronDown size={12} /></button></div>}
+        {!combinedMenu && (showExport && multiFormat ? (
           <div ref={exportMenuRef} style={{ position: "relative" }}>
             <button
               type="button"
@@ -674,8 +678,8 @@ export default function CsvImportExportToolbar({
           >
             <Upload size={14} /> {exporting ? "Exporting..." : "Export CSV"}
           </button>
-        ) : null}
-        {allowImport && genericLeadWizard ? (
+        ) : null)}
+        {!combinedMenu && (allowImport && genericLeadWizard ? (
           <div ref={importMenuRef} style={{ position: "relative", display: "inline-flex" }}>
             <button type="button" onClick={() => { setImportMenuOpen(false); setImportMenuPos(null); setShowImport(true); }} aria-label={`Import ${displayLabel}`} style={{ ...toolbarButtonStyle, borderTopRightRadius: 0, borderBottomRightRadius: 0 }}>
               <Download size={14} /> Import {displayLabel}
@@ -693,7 +697,7 @@ export default function CsvImportExportToolbar({
           >
             <Download size={14} /> {multiFormat ? "Import" : "Import CSV"}
           </button>
-        ) : null}
+        ) : null)}
       </div>
 
       {exportMenuOpen && exportMenuPos && createPortal(
@@ -722,11 +726,13 @@ export default function CsvImportExportToolbar({
         <div
           ref={importMenuContentRef}
           role="menu"
-          aria-label={`Import ${displayLabel} options`}
+          aria-label={combinedMenu ? 'Import & export actions' : `Import ${displayLabel} options`}
           style={{ ...dropdownMenuStyle, ...importMenuPos, zIndex: 1200 }}
         >
-          <button type="button" role="menuitem" onClick={() => { setImportMenuOpen(false); setImportMenuPos(null); setShowRecentImport(true); }} style={dropdownItemStyle}>View recent import status</button>
-          <button type="button" role="menuitem" onClick={() => { setImportMenuOpen(false); setImportMenuPos(null); setShowImportHistory(true); }} style={dropdownItemStyle}>View import history</button>
+          {combinedMenu && allowImport && <button type="button" role="menuitem" onClick={() => { setImportMenuOpen(false); setShowImport(true); }} style={dropdownItemStyle}><Download size={14} /> Import contacts</button>}
+          {combinedMenu && showExport && <button type="button" role="menuitem" disabled={exporting} onClick={() => { setImportMenuOpen(false); setExportMenuPos(getViewportDropdownPosition(importMenuRef, 180)); setExportMenuOpen(true); }} style={dropdownItemStyle}><Upload size={14} /> Export leads</button>}
+          <button type="button" role="menuitem" onClick={() => { setImportMenuOpen(false); setImportMenuPos(null); setShowRecentImport(true); }} style={dropdownItemStyle}><Eye size={14} aria-hidden="true" /> View recent import status</button>
+          <button type="button" role="menuitem" onClick={() => { setImportMenuOpen(false); setImportMenuPos(null); setShowImportHistory(true); }} style={dropdownItemStyle}><Eye size={14} aria-hidden="true" /> View import history</button>
         </div>,
         document.body,
       )}
@@ -738,7 +744,7 @@ export default function CsvImportExportToolbar({
             {recentImport ? (
               <div style={{ border: "1px solid var(--border-color)", borderRadius: 8, padding: 14 }}>
                 <strong style={{ display: "block", marginBottom: 10, overflowWrap: "anywhere" }}>{recentImport.fileName}</strong>
-                <div style={{ fontSize: "0.82rem", color: "var(--text-secondary)", marginBottom: 12 }}>{new Date(recentImport.completedAt).toLocaleString()}</div>
+                <div style={{ fontSize: "0.82rem", color: "var(--text-secondary)", marginBottom: 12 }}>{formatDateTime(recentImport.completedAt)}</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, textAlign: "center" }}>{[["Created", recentImport.inserted], ["Updated", recentImport.updated], ["Skipped", recentImport.skipped], ["Errors", recentImport.errors]].map(([labelText, value]) => <div key={labelText}><div style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>{labelText}</div><strong>{value}</strong></div>)}</div>
               </div>
             ) : <p style={{ margin: 0, color: "var(--text-secondary)" }}>No imports completed yet.</p>}
@@ -761,7 +767,7 @@ export default function CsvImportExportToolbar({
                     <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", whiteSpace: "nowrap" }}>{item.skipped} {actionEye(item, "skipped", "skipped")}</td>
                     <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", color: item.errors ? "var(--danger-color, #dc2626)" : "inherit", whiteSpace: "nowrap" }}>{item.errors} {actionEye(item, "errors", "error")}</td>
                     <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", minWidth: 150 }}><span style={{ color: item.errors ? "#d97706" : "#059669", fontWeight: 600 }}>{item.errors ? "Completed, with errors" : "Completed"}</span></td>
-                    <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", whiteSpace: "nowrap", minWidth: 190 }}>{new Date(item.completedAt).toLocaleString()}</td>
+                    <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", whiteSpace: "nowrap", minWidth: 190 }}>{formatDateTime(item.completedAt)}</td>
                     <td style={{ padding: "0.75rem", borderBottom: "1px solid var(--border-color)", minWidth: 140, whiteSpace: "nowrap", position: "sticky", right: 0, zIndex: 1, background: "var(--modal-bg, #fff)", boxShadow: "-8px 0 12px -12px rgba(15, 23, 42, 0.45)" }}><button type="button" className="btn-secondary" disabled={!item.contacts?.length} onClick={() => setContactsImport(item)}>{item.contacts?.length ? "View contacts" : "No contacts"}</button></td>
                   </tr>)}</tbody>
                 </table>
@@ -923,15 +929,30 @@ function ImportModal({
     const selections = {};
     const types = {};
     const unmatched = [];
-    headers.forEach((header) => {
+    const usedTargets = new Set();
+    const orderedHeaders = genericLeadWizard
+      ? [...headers].sort((left, right) => {
+          const leftField = findExactMappingField(availableMappingFields, left);
+          const rightField = findExactMappingField(availableMappingFields, right);
+          const leftIsKey = leftField && normalizeMappingIdentity(leftField.fieldKey || leftField.key || leftField.id) === normalizeMappingIdentity(left);
+          const rightIsKey = rightField && normalizeMappingIdentity(rightField.fieldKey || rightField.key || rightField.id) === normalizeMappingIdentity(right);
+          return Number(rightIsKey) - Number(leftIsKey);
+        })
+      : headers;
+    orderedHeaders.forEach((header) => {
       const field = genericLeadWizard ? findExactMappingField(availableMappingFields, header) : findMappingField(header);
       if (!field) {
         if (genericLeadWizard) unmatched.push(header);
         return;
       }
       const key = field.fieldKey || field.key || field.id;
+      if (genericLeadWizard && usedTargets.has(key)) {
+        unmatched.push(header);
+        return;
+      }
       selections[header] = key;
       types[header] = normalizeFieldType(field.fieldType);
+      usedTargets.add(key);
     });
     setMappingSelections(selections);
     setMappingFieldTypes(types);
@@ -1153,12 +1174,16 @@ function ImportModal({
     const fields = buildAvailableMappingFields(mappingFields, dynamicLeadFields, genericLeadWizard);
     setMappingSelections((current) => {
       const next = { ...current };
+      const usedTargets = new Set(Object.values(next));
       let changed = false;
       for (const header of previewHeaders) {
         if (next[header]) continue;
         const field = findExactMappingField(fields, header);
         if (!field) continue;
-        next[header] = field.fieldKey || field.key || field.id;
+        const key = field.fieldKey || field.key || field.id;
+        if (usedTargets.has(key)) continue;
+        next[header] = key;
+        usedTargets.add(key);
         changed = true;
       }
       return changed ? next : current;

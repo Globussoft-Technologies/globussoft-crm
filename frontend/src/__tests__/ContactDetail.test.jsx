@@ -354,6 +354,150 @@ describe('ContactDetail — current profile contract', () => {
     expect(screen.queryByRole('separator', { name: 'Resize status bar' })).not.toBeInTheDocument();
   });
 
+  it('shows only the five-stage status bar for Generic CRM leads', async () => {
+    const baseFetch = makeFetchImpl();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/tenant-settings/generic.contactLifecycleStages') {
+        return Promise.resolve({
+          value: JSON.stringify([
+            { id: 's1', title: 's1', options: [{ id: 's1', label: 's1', status: 'Lead' }] },
+            { id: 'new-stage', title: 'New stage', options: [{ id: 'new-stage', label: 'New stage', status: 'Lead' }] },
+          ]),
+        });
+      }
+      return baseFetch(url, opts);
+    });
+    renderPage({ listType: 'leads', vertical: 'generic', renderBackdrop: false });
+
+    const pipeline = await screen.findByRole('group', { name: 'Lead status stages' });
+    expect(within(pipeline).getByRole('button', { name: 'New' })).toHaveClass('cp-generic-status-new');
+    expect(within(pipeline).getByRole('button', { name: 'Contacted' })).toHaveClass('cp-generic-status-contacted');
+    expect(within(pipeline).getByRole('button', { name: /Interested \/ Unqualified/ })).toHaveClass('cp-generic-status-interested-unqualified');
+    expect(within(pipeline).getByRole('button', { name: /Qualified \/ Lost/ })).toHaveClass('cp-generic-status-qualified-lost');
+    expect(within(pipeline).getByRole('button', { name: 'Won' })).toHaveClass('cp-generic-status-won-churned');
+    expect(within(pipeline).queryByRole('button', { name: /Junk \/ Unqualified/ })).toBeNull();
+    expect(within(pipeline).queryByRole('button', { name: 's1' })).toBeNull();
+    expect(within(pipeline).queryByRole('button', { name: 'New stage' })).toBeNull();
+  });
+
+  it('automatically records every positive Generic stage when jumping from New to Won', async () => {
+    let savedContact = { ...BASE_CONTACT, status: 'Lead', lifecycleStageKey: 'new' };
+    const patchBodies = [];
+    const baseFetch = makeFetchImpl({ contact: { kind: 'ok', data: savedContact } });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/42' && opts?.method === 'PATCH') {
+        const body = JSON.parse(opts.body);
+        patchBodies.push(body);
+        savedContact = { ...savedContact, ...body };
+        return Promise.resolve(savedContact);
+      }
+      return baseFetch(url, opts);
+    });
+    renderPage({ listType: 'leads', vertical: 'generic', renderBackdrop: false });
+
+    const pipeline = await screen.findByRole('group', { name: 'Lead status stages' });
+    fireEvent.click(within(pipeline).getByRole('button', { name: /Won \/ Churned/ }));
+    fireEvent.click(within(pipeline).getByRole('button', { name: 'Won' }));
+
+    await waitFor(() => expect(patchBodies).toHaveLength(4));
+    expect(patchBodies).toEqual([
+      { status: 'Contacted', lifecycleStageKey: 'contacted' },
+      { status: 'Interested', lifecycleStageKey: 'interested' },
+      { status: 'Qualified', lifecycleStageKey: 'qualified' },
+      { status: 'Won', lifecycleStageKey: 'won' },
+    ]);
+    expect(within(pipeline).getByRole('button', { name: 'Interested' })).toBeInTheDocument();
+    expect(within(pipeline).getByRole('button', { name: 'Qualified' })).toBeInTheDocument();
+    expect(within(pipeline).getByRole('button', { name: 'Won' })).toBeInTheDocument();
+  });
+
+  it('clears later labels but keeps both dropdown choices after moving a Generic lead backward', async () => {
+    let savedContact = { ...BASE_CONTACT, status: 'Won', lifecycleStageKey: 'won' };
+    const baseFetch = makeFetchImpl({ contact: { kind: 'ok', data: savedContact } });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/42/lifecycle-history') {
+        return Promise.resolve({
+          data: [
+            { id: 3, to: { stageKey: 'won', stage: 'Won', status: 'Won' } },
+            { id: 2, to: { stageKey: 'qualified', stage: 'Qualified', status: 'Qualified' } },
+            { id: 1, to: { stageKey: 'interested', stage: 'Interested', status: 'Interested' } },
+          ],
+        });
+      }
+      if (url === '/api/contacts/42' && opts?.method === 'PATCH') {
+        savedContact = { ...savedContact, ...JSON.parse(opts.body) };
+        return Promise.resolve(savedContact);
+      }
+      return baseFetch(url, opts);
+    });
+    renderPage({ listType: 'leads', vertical: 'generic', renderBackdrop: false });
+
+    const pipeline = await screen.findByRole('group', { name: 'Lead status stages' });
+    fireEvent.click(within(pipeline).getByRole('button', { name: 'Contacted' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Yes, go back' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/42', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ status: 'Contacted', lifecycleStageKey: 'contacted' }),
+    })));
+    const groupedButton = within(pipeline).getByRole('button', { name: /Interested \/ Unqualified/ });
+    fireEvent.click(groupedButton);
+    expect(within(pipeline).getByRole('button', { name: 'Interested' })).toBeInTheDocument();
+    expect(within(pipeline).getByRole('button', { name: 'Unqualified' })).toBeInTheDocument();
+  });
+
+  it('requires a reason before selecting a negative Generic CRM status', async () => {
+    const startingContact = { ...BASE_CONTACT, status: 'New' };
+    const baseFetch = makeFetchImpl({ contact: { kind: 'ok', data: startingContact } });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/42' && opts?.method === 'PATCH') {
+        return Promise.resolve({ ...startingContact, ...JSON.parse(opts.body) });
+      }
+      return baseFetch(url, opts);
+    });
+    renderPage({ listType: 'leads', vertical: 'generic', renderBackdrop: false });
+
+    const pipeline = await screen.findByRole('group', { name: 'Lead status stages' });
+    fireEvent.click(within(pipeline).getByRole('button', { name: /Interested \/ Unqualified/ }));
+    fireEvent.click(within(pipeline).getByRole('button', { name: 'Unqualified' }));
+
+    expect(await screen.findByRole('dialog', { name: 'Reason required' })).toBeInTheDocument();
+    expect(fetchApiMock).not.toHaveBeenCalledWith('/api/contacts/42', expect.objectContaining({ method: 'PATCH' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Negative stage reason' }), {
+      target: { value: 'Duplicate enquiry' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm stage' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/42', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ status: 'Unqualified', lifecycleStageKey: 'unqualified', lifecycleTransitionReason: 'Duplicate enquiry' }),
+    })));
+  });
+
+  it('asks for confirmation before moving a Generic CRM lead backward', async () => {
+    const baseFetch = makeFetchImpl();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/42' && opts?.method === 'PATCH') {
+        return Promise.resolve({ ...BASE_CONTACT, ...JSON.parse(opts.body) });
+      }
+      return baseFetch(url, opts);
+    });
+    renderPage({ listType: 'leads', vertical: 'generic', renderBackdrop: false });
+
+    const pipeline = await screen.findByRole('group', { name: 'Lead status stages' });
+    fireEvent.click(within(pipeline).getByRole('button', { name: 'Contacted' }));
+
+    expect(await screen.findByRole('dialog', { name: 'Go back to a previous stage?' })).toBeInTheDocument();
+    expect(screen.getByText('Are you sure you want to move back to Contacted?')).toBeInTheDocument();
+    expect(fetchApiMock).not.toHaveBeenCalledWith('/api/contacts/42', expect.objectContaining({ method: 'PATCH' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, go back' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/42', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ status: 'Contacted', lifecycleStageKey: 'contacted' }),
+    })));
+  });
+
   it('keeps the URL page in the embedded Generic Leads list when profile state is stale', async () => {
     const baseFetch = makeFetchImpl();
     fetchApiMock.mockImplementation((url, opts) => {
@@ -420,6 +564,30 @@ describe('ContactDetail — current profile contract', () => {
     expect(screen.queryByRole('heading', { name: 'Contacts' })).not.toBeInTheDocument();
   });
 
+  it('keeps wellness neighbor navigation in Leads', async () => {
+    const baseFetch = makeFetchImpl();
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts?status=Lead&limit=200') {
+        return Promise.resolve([{ id: 42 }, { id: 43 }]);
+      }
+      return baseFetch(url, opts);
+    });
+    renderPage({
+      listType: 'leads',
+      vertical: 'wellness',
+      renderBackdrop: false,
+      state: { returnTo: '/leads', leadsListState: { pageIndex: 0, pageSize: 10 } },
+    });
+
+    const profile = await getProfile();
+    fireEvent.click(profile.getByRole('button', { name: 'Next lead' }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts?status=Lead&limit=200', { silent: true });
+    });
+    expect(profile.queryByRole('button', { name: 'Next contact' })).not.toBeInTheDocument();
+  });
+
   it('sends the lead sequence action to Marketing Campaign sequences', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     renderPage({ listType: 'leads', vertical: 'generic' });
@@ -442,7 +610,7 @@ describe('ContactDetail — current profile contract', () => {
     const profile = await getProfile();
 
     expect(document.querySelector('.cp-email-value')).toHaveAttribute('title', BASE_CONTACT.email);
-    expect(profile.getByRole('button', { name: /Interested/ })).toHaveAttribute('title', 'Change status to Interested');
+    expect(profile.getByRole('button', { name: /Interested/ })).toHaveAttribute('title', 'Move to Interested / Unqualified');
   });
 
   it('opens Contact details from the Overview Show all control', async () => {
@@ -453,6 +621,44 @@ describe('ContactDetail — current profile contract', () => {
     fireEvent.click(profile.getByRole('button', { name: 'Show all' }));
 
     expect(profile.getByText('Page URL')).toBeInTheDocument();
+  });
+
+  it('shows the read-only Lead ID in Generic CRM overview and contact details', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ vertical: 'generic' });
+    const profile = await getProfile();
+
+    const overviewGrid = profile.getByText('Lead ID').closest('.cp-info-grid');
+    expect(within(overviewGrid).getByText('Lead ID')).toBeInTheDocument();
+    expect(within(overviewGrid).getByText(String(BASE_CONTACT.id))).toBeInTheDocument();
+
+    fireEvent.click(profile.getByRole('button', { name: 'Contact details' }));
+    const basicSection = profile.getByRole('button', { name: 'Collapse Basic information' }).closest('.cd-detail-section');
+    expect(within(basicSection).getByText('Lead ID')).toBeInTheDocument();
+    expect(within(basicSection).getByText(String(BASE_CONTACT.id))).toBeInTheDocument();
+  });
+
+  it('shows the canonical Won label for a legacy Generic Customer status', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ vertical: 'generic' });
+    const profile = await getProfile();
+
+    fireEvent.click(profile.getByRole('button', { name: 'Contact details' }));
+    const basicSection = profile.getByRole('button', { name: 'Collapse Basic information' }).closest('.cd-detail-section');
+    expect(within(basicSection).getByText('Won', { exact: true })).toBeInTheDocument();
+    expect(within(basicSection).queryByText('Customer', { exact: true })).toBeNull();
+  });
+
+  it.each(['wellness', 'travel'])('does not show Lead ID outside Generic CRM (%s)', async (vertical) => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ vertical });
+    const profile = await getProfile();
+
+    expect(profile.queryByText('Lead ID')).not.toBeInTheDocument();
+    fireEvent.click(profile.getByRole('button', {
+      name: vertical === 'wellness' ? 'Patient details' : 'Contact details',
+    }));
+    expect(profile.queryByText('Lead ID')).not.toBeInTheDocument();
   });
 
   it('does not render an orphan title/company separator when both values are empty', async () => {
@@ -680,6 +886,47 @@ describe('ContactDetail — current profile contract', () => {
 });
 
 describe('Generic CRM contact details', () => {
+  it('opens the eight-option Status dropdown from New and persists its canonical value', async () => {
+    const saveField = vi.fn().mockResolvedValue(undefined);
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/lead-custom-fields') return Promise.resolve([]);
+      if (url === '/api/contacts/tags') return Promise.resolve({ tags: [] });
+      return Promise.resolve({});
+    });
+
+    render(
+      <AuthContext.Provider value={{ tenant: { vertical: 'generic' } }}>
+        <ContactDetailsDrawer
+          inline
+          genericTagsEnabled
+          contact={{ ...BASE_CONTACT, status: 'Lead' }}
+          onFieldSave={saveField}
+        />
+      </AuthContext.Provider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit Status' }));
+    const statusSelect = screen.getByRole('combobox', { name: 'Edit Status' });
+    expect(statusSelect).toHaveValue('Lead');
+    expect(within(statusSelect).getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'Select…',
+      'New',
+      'Contacted',
+      'Interested',
+      'Unqualified',
+      'Qualified',
+      'Lost',
+      'Won',
+      'Churned',
+    ]);
+
+    fireEvent.change(statusSelect, { target: { value: 'Interested' } });
+    await waitFor(() => expect(saveField).toHaveBeenCalledWith(
+      expect.objectContaining({ key: 'status' }),
+      'Interested',
+    ));
+  });
+
   it('filters contact data into Basic, UTM, Custom Tracking, and Ad Information tabs', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url === '/api/lead-custom-fields') return Promise.resolve({ fields: [{ id: 1, label: 'Service Type', fieldKey: 'service_type', fieldType: 'text' }] });

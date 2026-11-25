@@ -35,6 +35,7 @@ import {
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import CountBadge from "../../components/CountBadge";
+import { DashboardBackLink } from "../../components/PageHeader";
 import { AuthContext } from "../../App";
 import { useActiveSubBrand } from "../../utils/subBrand";
 import {
@@ -175,6 +176,7 @@ const pickerOnlyProps = {
 export default function PricingRules() {
   return (
     <div className="finance-page" style={{ padding: 24, width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
+      <DashboardBackLink />
       <header className="finance-page__header" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
         <div>
           <h1 className="finance-page__title" style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>

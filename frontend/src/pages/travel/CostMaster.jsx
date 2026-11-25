@@ -14,6 +14,7 @@ import {
   SUB_BRAND_IDS, SUB_BRAND_LABEL,
 } from "../../utils/travelSubBrand";
 import CountBadge from "../../components/CountBadge";
+import { DashboardBackLink } from "../../components/PageHeader";
 
 const CATEGORIES = [
   { value: "", label: "All categories" },
@@ -441,13 +442,20 @@ export default function CostMaster() {
   }, [load]);
 
   const loadLookupData = useCallback(() => {
-    fetchApi("/api/travel/suppliers?limit=500&fields=summary")
+    const supplierParams = new URLSearchParams({ limit: "500", fields: "summary" });
+    const seasonParams = new URLSearchParams();
+    if (filterSubBrand && filterSubBrand !== "all") {
+      supplierParams.set("subBrand", filterSubBrand);
+      seasonParams.set("subBrand", filterSubBrand);
+    }
+
+    fetchApi(`/api/travel/suppliers?${supplierParams.toString()}`)
       .then((res) => setSuppliers(Array.isArray(res?.suppliers) ? res.suppliers : []))
       .catch(() => setSuppliers([]));
-    fetchApi("/api/travel/seasons")
+    fetchApi(`/api/travel/seasons${seasonParams.toString() ? `?${seasonParams.toString()}` : ""}`)
       .then((res) => setSeasons(Array.isArray(res?.seasons) ? res.seasons : []))
       .catch(() => setSeasons([]));
-  }, []);
+  }, [filterSubBrand]);
 
   useEffect(() => {
     loadLookupData();
@@ -718,6 +726,7 @@ export default function CostMaster() {
 
   return (
     <div className="finance-page" style={{ padding: "28px 32px", width: "100%", maxWidth: 1480, margin: "0 auto", boxSizing: "border-box" }}>
+      <DashboardBackLink />
       {/* Header */}
       <div className="finance-page__header" style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", flexWrap: "wrap", gap: 12, marginBottom: 6 }}>
         <h1 className="finance-page__title" style={{ display: "flex", alignItems: "center", gap: 8, margin: 0, fontSize: 22, fontWeight: 600, color: "var(--success-color, #3ecf7e)" }}>

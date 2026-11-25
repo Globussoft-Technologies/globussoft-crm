@@ -80,7 +80,16 @@ async function sendEmail({ tenantId = null, to, cc = [], bcc = [], subject, text
     }
     const t = await resp.text();
     console.error(`[Email] SendGrid error ${resp.status}: ${t}`);
-    return { sent: false, reason: `sendgrid_${resp.status}`, source: provider.source };
+    const details = resp.status === 401
+      ? "SendGrid authentication failed. The API key is invalid, expired, or revoked."
+      : resp.status === 402
+        ? "SendGrid billing or subscription is inactive."
+        : resp.status === 403
+          ? "SendGrid denied this request. Check API-key permissions."
+          : resp.status === 429
+            ? "SendGrid sending quota has been exceeded."
+            : `SendGrid could not send the email (HTTP ${resp.status}).`;
+    return { sent: false, reason: `sendgrid_${resp.status}`, message: details, code: `SENDGRID_${resp.status}`, source: provider.source };
   } catch (err) {
     console.error("[Email] send failed:", err.message);
     return { sent: false, reason: err.message, source: provider.source };

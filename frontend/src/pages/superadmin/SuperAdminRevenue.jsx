@@ -129,11 +129,11 @@ export default function SuperAdminRevenue() {
             )}
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: "1rem" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))", gap: "1rem" }}>
             <div className="card" style={{ padding: "1rem", display: "grid", gap: "0.5rem" }}>
               <div style={{ fontWeight: 700 }}>Plan Mix (active platform subscriptions)</div>
               {planMix.map((p) => (
-                <div key={p.planName} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.9rem" }}>
+                <div key={p.planName} style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "0.4rem 1rem", fontSize: "0.9rem" }}>
                   <span>{p.planName}</span>
                   <span>{p.count}</span>
                 </div>
@@ -144,7 +144,7 @@ export default function SuperAdminRevenue() {
             <div className="card" style={{ padding: "1rem", display: "grid", gap: "0.5rem" }}>
               <div style={{ fontWeight: 700 }}>Top Tenants by Revenue</div>
               {topTenants.map((t, i) => (
-                <div key={t.tenantId} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.9rem" }}>
+                <div key={t.tenantId} style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "0.4rem 1rem", fontSize: "0.9rem" }}>
                   <span>{i + 1}. {t.tenantName}</span>
                   <span>{formatMoney(t.revenue, { currency: "INR" })}</span>
                 </div>

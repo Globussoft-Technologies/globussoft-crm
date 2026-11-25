@@ -675,9 +675,36 @@ router.post("/send-email", composeAttachmentUpload, emailSendLimiter, async (req
         provider: emailProvider,
       });
 
+      // EmailMessage is created before dispatch so the tracking pixel can
+      // reference it. If SendGrid rejects the request, remove that provisional
+      // row and its tracking record so failed attempts never appear in Sent.
+      // Keep the no_api_key path retained for local/CI observability, matching
+      // the existing unconfigured-provider contract.
+      const failedProviderSend = !mailResult.sent && (
+        String(mailResult.reason || "").startsWith("sendgrid_") ||
+        mailResult.reason === "send_error"
+      );
+      if (failedProviderSend && emailRecord) {
+        try {
+          if (typeof prisma.emailTracking.deleteMany === "function") {
+            await prisma.emailTracking.deleteMany({
+              where: { emailId: emailRecord.id, tenantId: req.user.tenantId },
+            });
+          }
+          if (typeof prisma.emailMessage.delete === "function") {
+            await prisma.emailMessage.delete({
+              where: { id: emailRecord.id },
+            });
+          }
+          emailRecord = null;
+        } catch (cleanupError) {
+          console.error("[Email] Failed to remove undelivered Sent row:", cleanupError.message);
+        }
+      }
+
       // Per-recipient Activity on the linked contact (if any). Same pattern as
       // single-recipient: best-effort, non-critical.
-      if (contactId) {
+      if (mailResult.sent && contactId) {
         try {
           await prisma.activity.create({
             data: {
@@ -694,14 +721,17 @@ router.post("/send-email", composeAttachmentUpload, emailSendLimiter, async (req
         }
       }
 
-      if (req.io) req.io.emit('email_sent', emailRecord);
+      if (req.io && mailResult.sent) req.io.emit('email_sent', emailRecord);
 
       results.push({
         to: recipient,
         delivered: mailResult.sent,
         email: emailRecord,
         messageId: mailResult.id,
-        ...(mailResult.sent ? {} : { reason: mailResult.reason }),
+        ...(mailResult.sent ? {} : {
+          reason: mailResult.reason,
+          ...(mailResult.details ? { error: mailResult.details } : {}),
+        }),
       });
     }
 
@@ -718,6 +748,9 @@ router.post("/send-email", composeAttachmentUpload, emailSendLimiter, async (req
     res.status(200).json({
       success: true,
       delivered: results.length > 0 && results.every(r => r.delivered),
+      ...(results.some(r => !r.delivered)
+        ? { error: results.find(r => !r.delivered)?.error || "Email was not delivered." }
+        : {}),
       email: results[0]?.email ?? null,
       messageId: results[0]?.messageId,
       ...(results[0] && !results[0].delivered ? { reason: results[0].reason } : {}),

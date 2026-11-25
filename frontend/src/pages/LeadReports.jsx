@@ -13,7 +13,7 @@ import { fetchApi } from '../utils/api';
 import { AuthContext } from '../App';
 import { formatMoney } from '../utils/money';
 import { formatPercent } from '../utils/percent';
-import { formatDateMedium } from '../utils/date';
+import { formatDateMedium, formatTimestamp, tenantTimezone } from '../utils/date';
 import { useNotify } from '../utils/notify';
 import CalendarRangePicker from '../components/CalendarRangePicker';
 import Pagination from '../components/ui/Pagination';
@@ -142,10 +142,9 @@ function Chart({ height = 300, children }) {
   );
 }
 
-function formatReportRangeDate(value) {
+function formatReportRangeDate(value, timezone) {
   if (!value) return '—';
-  const dateOnly = String(value).slice(0, 10);
-  return formatDateMedium(`${dateOnly}T00:00:00`);
+  return formatTimestamp(value, { year: 'numeric', month: 'short', day: 'numeric', timeZone: timezone || tenantTimezone() || 'UTC' });
 }
 
 // Rows per page across every report table. Small on purpose: it keeps each
@@ -651,7 +650,7 @@ function OverviewTab({ d, metric, onMetricChange }) {
             <span>{communicationTotalLabel || 'Aggregate total'}</span>
             <strong>{num(aggregateTotal)}</strong>
             {isCommunication && d.from && d.to ? (
-              <small>{formatReportRangeDate(d.from)} – {formatReportRangeDate(d.to)}</small>
+              <small>{formatReportRangeDate(d.from, d.timezone)} – {formatReportRangeDate(d.to, d.timezone)}</small>
             ) : null}
           </div>
         </aside>

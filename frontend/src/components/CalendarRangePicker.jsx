@@ -18,6 +18,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Calendar, ChevronLeft, ChevronRight, X } from 'lucide-react';
+import { workspaceDayKey } from '../utils/date';
 
 function toIsoDate(d) {
   const y = d.getFullYear();
@@ -83,10 +84,11 @@ export default function CalendarRangePicker({
   const state = value || { from: '', to: '' };
   const committedFrom = parseIso(state.from);
   const committedTo = parseIso(state.to);
+  const initialMonth = committedFrom || parseIso(workspaceDayKey(new Date()));
 
   const [open, setOpen] = useState(false);
-  const [viewYear, setViewYear] = useState((committedFrom || new Date()).getFullYear());
-  const [viewMonth, setViewMonth] = useState((committedFrom || new Date()).getMonth());
+  const [viewYear, setViewYear] = useState(initialMonth.getFullYear());
+  const [viewMonth, setViewMonth] = useState(initialMonth.getMonth());
   // Draft selection while the popover is open — committed to the parent
   // (via onChange) only once both ends are picked, so a half-made
   // selection never leaks out mid-click.

@@ -215,7 +215,7 @@ const CONTACT_FIELDS = new Set([
   "companySize",
   "website",
   "linkedin",
-  "description",
+  "note",
   "tags",
   "stateCode",
   "billingStateCode",
@@ -227,6 +227,27 @@ const CONTACT_FIELDS = new Set([
   "subBrand",
   "treatmentOfInterest",
 ]);
+
+// Attribution values captured by the embed are kept under tracking metadata
+// for persistence. Generic CRM webhooks should also expose the provider
+// identifiers directly so a selected webhook field can be delivered.
+const GENERIC_WEBHOOK_TRACKING_FIELDS = [
+  "gclid",
+  "gbraid",
+  "wbraid",
+  "fbclid",
+  "fbc",
+  "fbp",
+  "gad_source",
+  "gad_campaignid",
+  "campaign_id",
+  "adset_id",
+  "ad_id",
+  "campaign_name",
+  "adset_name",
+  "ad_name",
+  "site_source_name",
+];
 
 /**
  * Build the event payload consumed by Generic CRM contact workflows.
@@ -240,7 +261,7 @@ const CONTACT_FIELDS = new Set([
  * Keep this allow-listed to Contact/form fields: a Prisma Contact row contains
  * internal fields that must never be copied wholesale to an outbound webhook.
  */
-function genericWebFormWorkflowPayload({ contact, form, submission, payload, customFieldValues }) {
+function genericWebFormWorkflowPayload({ contact, form, submission, payload, customFieldValues, trackingMetadata }) {
   const contactFields = {};
   for (const field of CONTACT_FIELDS) {
     if (field === "tags") {
@@ -256,8 +277,15 @@ function genericWebFormWorkflowPayload({ contact, form, submission, payload, cus
     if (contact?.[field] !== undefined) contactFields[field] = contact[field];
   }
 
+  const webhookTrackingFields = Object.fromEntries(
+    GENERIC_WEBHOOK_TRACKING_FIELDS
+      .filter((key) => trackingMetadata?.[key] != null && String(trackingMetadata[key]) !== "")
+      .map((key) => [key, trackingMetadata[key]]),
+  );
+
   const workflowFields = {
     ...contactFields,
+    ...webhookTrackingFields,
     ...(payload || {}),
     ...(customFieldValues || {}),
   };
@@ -1867,7 +1895,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
           contactData.source = textOr(raw, contactData.source);
         else if (field.sourceKey === "medium")
           contactData.medium = textOr(raw) || null;
-        else if (field.sourceKey === "status")
+        else if (field.sourceKey === "status" && formScope !== "generic")
           contactData.status = textOr(raw, contactData.status);
         else if (field.sourceKey === "aiScore") {
           const score = Number(raw);
@@ -1897,8 +1925,8 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
           const list = Array.isArray(raw) ? raw : String(raw == null ? "" : raw).split(",");
           const clean = list.map((t) => textOr(t).slice(0, 60)).filter(Boolean).slice(0, 20);
           if (clean.length) contactData.tagsJson = JSON.stringify(clean);
-        } else if (field.sourceKey === "description")
-          contactData.description = textOr(raw) || null;
+        } else if (field.sourceKey === "note" || field.sourceKey === "description")
+          contactData.note = textOr(raw) || null;
         else if (field.sourceKey === "industry")
           contactData.industry = textOr(raw) || null;
         else if (field.sourceKey === "companySize")
@@ -1948,6 +1976,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       payload.utm_source = submittedUtm.source || null;
       payload.utm_medium = submittedUtm.medium || null;
       payload.utm_campaign = submittedUtm.campaign || null;
+      payload.utm_id = textOr(trackingMetadata?.utm_id) || null;
       payload.utm_term = submittedUtm.term || null;
       payload.utm_content = submittedUtm.content || null;
     }
@@ -2052,10 +2081,10 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
 
     if (contactData.title === "") contactData.title = null;
 
-    // Keep the canonical Contact status even when a legacy embedded form
-    // posts `lead`/`LEAD`; downstream auto-dial and list filters use the
-    // canonical value.
-    if (String(contactData.status || "").toLowerCase() === "lead")
+    // Generic CRM persists the automation-compatible backend value `Lead`;
+    // the frontend presents that value as `New`.
+    if (formScope === "generic") contactData.status = "Lead";
+    else if (String(contactData.status || "").toLowerCase() === "lead")
       contactData.status = "Lead";
 
     if (contactData.source === "")
@@ -2081,7 +2110,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
     // Public forms are also consumed by hand-written/legacy pages. Treat the
     // status value case-insensitively at this boundary so a hidden `lead`
     // field cannot bypass campaign assignment; persistence stays canonical.
-    if (formScope === "generic" && String(contactData.status || "").toLowerCase() === "lead" && contactData.callifiedCampaignId == null) {
+    if (formScope === "generic" && contactData.status === "Lead" && contactData.callifiedCampaignId == null) {
       try {
         const matchedCampaignId = await evaluateAutoCampaignRules(
           form.tenantId,
@@ -2328,6 +2357,7 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
             submission,
             payload,
             customFieldValues,
+            trackingMetadata,
           }),
           form.tenantId,
           req.io,
@@ -2734,6 +2764,7 @@ router.get("/:id/leads", verifyToken, async (req, res) => {
     const page = Math.max(1, Math.min(1000000, parseInt(req.query.page, 10) || 1));
     const limit = Math.max(1, Math.min(100, parseInt(req.query.limit, 10) || 25));
     const search = String(req.query.search || "").trim().slice(0, 200);
+    const fields = normalizeFields(form.fieldsJson, form.scope || "generic");
     const where = {
       tenantId, scope: "generic", webFormId: id,
       ...(search ? { OR: [
@@ -2742,7 +2773,7 @@ router.get("/:id/leads", verifyToken, async (req, res) => {
         ...["name", "email", "phone", "company"].map((key) => ({ contact: { is: { [key]: { contains: search } } } })),
       ] } : {}),
     };
-    const [total, submissions] = await Promise.all([
+    const [total, submissions, duplicateCandidates] = await Promise.all([
       prisma.webFormSubmission.count({ where }),
       prisma.webFormSubmission.findMany({
         where, skip: (page - 1) * limit, take: limit,
@@ -2751,20 +2782,66 @@ router.get("/:id/leads", verifyToken, async (req, res) => {
           submittedAt: true,
           contact: { select: { id: true, createdAt: true, updatedAt: true, deletedAt: true, status: true, assignedToId: true } } },
       }),
+      prisma.webFormSubmission.findMany({
+        where: { tenantId, scope: "generic", webFormId: id },
+        select: { payloadJson: true, filesJson: true },
+      }),
     ]);
-    const fields = normalizeFields(form.fieldsJson, form.scope || "generic");
+
+    const normalizeDuplicateValue = (value) => {
+      if (value == null) return "";
+      if (Array.isArray(value)) {
+        return value
+          .map(normalizeDuplicateValue)
+          .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+      }
+      if (typeof value === "object") {
+        return Object.fromEntries(
+          Object.keys(value).sort().map((key) => [key, normalizeDuplicateValue(value[key])]),
+        );
+      }
+      return String(value).trim();
+    };
+    const submissionValues = (row) => {
+      const payload = parseJson(row.payloadJson, {}) || {};
+      const files = parseJson(row.filesJson, []) || [];
+      if (!fields.length) {
+        return [normalizeDuplicateValue(payload), normalizeDuplicateValue(
+          files.map((file) => file?.originalName).filter(Boolean),
+        )];
+      }
+      return fields.map((field) => field.fieldType === "file"
+        ? normalizeDuplicateValue(
+            files.filter((file) => file.fieldKey === field.sourceKey).map((file) => file.originalName),
+          )
+        : normalizeDuplicateValue(
+            payload[field.sourceKind === "custom" ? `custom:${field.sourceKey}` : field.sourceKey],
+          ));
+    };
+    const duplicateFingerprint = (row) => JSON.stringify(submissionValues(row));
+    const snapshotCounts = new Map();
+    for (const row of duplicateCandidates) {
+      const key = duplicateFingerprint(row);
+      snapshotCounts.set(key, (snapshotCounts.get(key) || 0) + 1);
+    }
     res.json({ fields, total, page, limit, leads: submissions.map((row) => {
       const payload = parseJson(row.payloadJson, {}) || {};
       const files = parseJson(row.filesJson, []) || [];
       const contact = row.contact;
       const canViewAllLeads = ["ADMIN", "MANAGER"].includes(req.user.role);
-      const isLead = Boolean(contact && contact.status === "Lead" && !contact.deletedAt
+      // Generic Leads intentionally includes every CRM status. A submission
+      // remains present in Leads after moving from New/Lead to Interested,
+      // Qualified, Won, etc.; only a missing/deleted or inaccessible contact
+      // should be presented as unavailable in the form-submissions modal.
+      const isLead = Boolean(contact && !contact.deletedAt
         && (canViewAllLeads || Number(contact.assignedToId) === Number(req.user.userId)));
+      const snapshotKey = duplicateFingerprint(row);
       return { id: row.id, contactId: contact?.id || null,
         createdAt: contact?.createdAt || row.submittedAt,
         updatedAt: contact?.updatedAt || row.submittedAt,
         deletedAt: contact?.deletedAt || null,
         isLead,
+        isDuplicate: (snapshotCounts.get(snapshotKey) || 0) > 1,
         values: fields.map((field) => field.fieldType === "file"
           ? files.filter((file) => file.fieldKey === field.sourceKey).map((file) => file.originalName)
           : payload[field.sourceKind === "custom" ? `custom:${field.sourceKey}` : field.sourceKey] ?? null),

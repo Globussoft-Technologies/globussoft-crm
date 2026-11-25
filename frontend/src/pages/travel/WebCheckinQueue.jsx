@@ -40,6 +40,7 @@ import {
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import CountBadge from "../../components/CountBadge";
+import { DashboardBackLink } from "../../components/PageHeader";
 import PatientPager from "../wellness/patients/PatientPager";
 import TopScrollSync from "../../components/TopScrollSync";
 import { useActiveSubBrand } from "../../utils/subBrand";
@@ -428,6 +429,7 @@ export default function WebCheckinQueue() {
         boxSizing: "border-box",
       }}
     >
+      <DashboardBackLink />
       {openedFromReports ? (
         <Link to="/travel/reports" style={backLinkStyle}>
           <ArrowLeft size={15} aria-hidden /> Back to reports

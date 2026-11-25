@@ -7,6 +7,7 @@ import { formatPercent } from '../../utils/percent';
 import Avatar from '../../components/Avatar';
 import { DateRangeFilter, resolveDateRangeYmd } from '../../components/wellness/DateRangeFilter';
 import ProductSalesImportModal from '../../components/wellness/ProductSalesImportModal';
+import { DashboardBackLink } from '../../components/PageHeader';
 
 const TABS = [
   { key: 'pnl', label: 'Sales by Services', icon: BarChart3 },
@@ -349,6 +350,7 @@ export default function Reports() {
 
   return (
     <div className="wellness-reports-page" style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+      <DashboardBackLink />
       <header style={{ marginBottom: '1.25rem' }}>
         <h1 style={{ fontSize: '1.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <BarChart3 size={24} /> Reports

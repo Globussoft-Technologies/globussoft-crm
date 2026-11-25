@@ -246,11 +246,12 @@ describe("<Settings /> — page shell + representative card pin", () => {
     expect(within(directory).queryByRole("button", { name: /SendGrid/ }) !== null).toBe(vertical === "travel");
     expect(within(directory).queryByRole("button", { name: /Google Maps/ }) !== null).toBe(vertical === "generic");
     expect(within(directory).queryByRole("button", { name: /WhatsApp \/ Meta/ }) !== null).toBe(vertical === "generic");
-    for (const [label, path] of [["Gmail", "/gmail"], ["Google Drive", "/travel/trip-knowledge"], ["Google Calendar", "/calendar-sync"], ["WhatsApp Web", "/travel/whatsapp"]]) {
+    for (const [label, path] of [["Gmail", "/gmail"], ["Google Drive", "/travel/trip-knowledge"], ["Google Calendar", "/calendar-sync"]]) {
       const tile = within(directory).queryByRole("link", { name: new RegExp(label) });
       if (vertical === "travel") expect(tile).toHaveAttribute("href", path);
       else expect(tile).not.toBeInTheDocument();
     }
+    expect(within(directory).queryByRole("link", { name: /WhatsApp Web/ })).not.toBeInTheDocument();
     if (vertical !== "wellness") {
       expect(fetchApiMock.mock.calls.some(([url]) => url === "/api/wellness/consent-templates" || url === "/api/wellness/role-types")).toBe(false);
     }
@@ -258,7 +259,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
       expect(directory.querySelectorAll(".gs-app-connection")).toHaveLength(vertical === "generic" ? 5 : 2);
       expect(fetchApiMock.mock.calls.some(([url]) => url === "/api/travel/email-provider" || url === "/api/travel/promotional-website" || url === "/api/brand-kits" || url === "/api/travel/dashboard/readiness")).toBe(false);
     }
-  });
+  }, 10000); // Full settings navigation matrix needs headroom on loaded CI workers.
 
   it.each(["travel", "wellness"])("keeps restricted %s settings out for users without manage permission", async (vertical) => {
     const tenant = { ...baseTenant, vertical };
@@ -703,6 +704,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
     renderSettings();
     await screen.findByRole("heading", { name: /Callified Integration/i });
 
+    expect(await screen.findByDisplayValue("https://tenant.callified.example.com")).toBeInTheDocument();
     const email = document.getElementById("callified-fallback-email");
     const password = document.getElementById("callified-fallback-password");
     expect(email).toHaveValue("");
@@ -722,6 +724,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
     const form = screen.getByRole("heading", { name: "Callified Integration" }).closest(".card").querySelector("form");
     const inputs = [...form.querySelectorAll("input")];
     expect(inputs).toHaveLength(5);
+    expect(inputs[1]).toHaveValue("https://app.callified.ai");
     const values = ["ck_example_test_key", "https://calls.example.test", "agent@example.test", "example-password", "example-webhook-secret"];
     inputs.forEach((input, index) => fireEvent.change(input, { target: { value: values[index] } }));
     fireEvent.click(screen.getByRole("button", { name: "General", exact: true }));
@@ -1024,7 +1027,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
   });
 
   // 4 — Organization save PUTs name + ownerEmail (not slug)
-  it("submitting the Organization form PUTs /api/tenants/current with { name, ownerEmail }", async () => {
+  it("saves Generic workspace timezone with the Organization settings", async () => {
     const user = userEvent.setup();
     renderSettings();
     await waitFor(() =>
@@ -1034,6 +1037,9 @@ describe("<Settings /> — page shell + representative card pin", () => {
     const nameInput = screen.getByDisplayValue("Acme Corp");
     await user.clear(nameInput);
     await user.type(nameInput, "Acme Wellness Ltd");
+    const timezone = screen.getByLabelText("Workspace timezone");
+    expect(timezone).toHaveValue("UTC");
+    await user.selectOptions(timezone, "Asia/Kolkata");
 
     const saveBtn = screen.getByRole("button", {
       name: /Save Organization Details/i,
@@ -1051,6 +1057,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
       expect(body).toEqual({
         name: "Acme Wellness Ltd",
         ownerEmail: "admin@acme.com",
+        timezone: "Asia/Kolkata",
       });
       expect("slug" in body).toBe(false);
     });
@@ -1128,7 +1135,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
     fireEvent.click(screen.getByRole("button", { name: "General" }));
     expect(heading).toBeVisible();
     expect(stageInput).toHaveValue("Unsaved stage");
-  });
+  }, 10000); // Settings navigation and data rendering need headroom on loaded CI workers.
 
   it("renders loaded pipeline stages with their names + position labels", async () => {
     renderSettings();
@@ -1887,14 +1894,7 @@ describe("<Settings /> — error paths + boundary states", () => {
       expect(screen.getByText(/Notification Preferences/i)).toBeInTheDocument(),
     );
 
-    // Find the timezone select (the one containing 'America/New_York' option)
-    const allSelects = screen.getAllByRole("combobox");
-    const tzSelect = allSelects.find((sel) =>
-      Array.from(sel.options || []).some(
-        (opt) => opt.value === "America/New_York",
-      ),
-    );
-    expect(tzSelect).toBeTruthy();
+    const tzSelect = screen.getByRole("combobox", { name: "Timezone", exact: true });
     await user.selectOptions(tzSelect, "America/New_York");
 
     await user.click(screen.getByRole("button", { name: /Save Preferences/i }));

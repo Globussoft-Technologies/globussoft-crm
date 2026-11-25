@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { fetchApi, setAuthToken, clearAuthToken, registerGlobalNotify } from '../utils/api';
+import { runLeadBatches } from '../utils/leadBulkWork';
 
 /**
  * frontend/src/utils/api.js — fetchApi wrapper contract
@@ -163,6 +164,15 @@ describe('utils/api — fetchApi', () => {
     mockFetch({ status: 200, body: {}, method: 'DELETE' });
     const out = await fetchApi('/api/x/1', { method: 'DELETE' });
     expect(out).toBe(true);
+  });
+
+  it('adds the confirmed bulk DELETE counts across batches', async () => {
+    const spy = mockFetch({ body: { deleted: 2 } });
+    spy.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ deleted: 98 }) });
+    const ids = Array.from({ length: 103 }, (_, index) => index + 1);
+    const result = await runLeadBatches('/api/contacts/bulk-delete', 'DELETE', ids);
+    expect(result.deleted).toBe(100);
+    expect(spy).toHaveBeenCalledTimes(2);
   });
 
   it('returns true for 204 No Content response', async () => {

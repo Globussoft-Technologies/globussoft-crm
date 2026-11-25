@@ -71,6 +71,7 @@ import prisma from '../../lib/prisma.js';
 // `require('../lib/prisma')` resolves at import time.
 prisma.emailMessage = {
   create: vi.fn(),
+  delete: vi.fn(),
   findFirst: vi.fn(),
   findMany: vi.fn(),
   count: vi.fn(),
@@ -78,6 +79,7 @@ prisma.emailMessage = {
 };
 prisma.emailTracking = {
   create: vi.fn(),
+  deleteMany: vi.fn(),
   update: vi.fn(),
   updateMany: vi.fn(),
   findFirst: vi.fn(),
@@ -156,6 +158,8 @@ beforeEach(() => {
     Promise.resolve({ id: 1001, ...data, createdAt: new Date() })
   );
   prisma.emailTracking.create.mockResolvedValue({ id: 1, trackingId: 'stub' });
+  prisma.emailTracking.deleteMany.mockReset().mockResolvedValue({ count: 1 });
+  prisma.emailMessage.delete.mockReset().mockResolvedValue({ id: 1001 });
   prisma.activity.create.mockResolvedValue({ id: 1 });
   prisma.emailMessage.findMany.mockResolvedValue([]);
 });
@@ -433,6 +437,32 @@ describe('POST /send-email — Travel SendGrid BYOK identity', () => {
         from: 'Acme Travel <bookings@acme-travel.test>',
       }),
     });
+  });
+
+  test('removes the provisional Sent row when SendGrid rejects delivery', async () => {
+    vi.spyOn(travelSendGrid, 'resolveSendGridConfig').mockResolvedValue({
+      apiKey: 'SG.test',
+      fromEmail: 'unverified@acme-travel.test',
+      fromName: 'Acme Travel',
+      source: 'tenant',
+    });
+    prisma.tenant.findUnique.mockResolvedValueOnce({ emailRetention: true, vertical: 'travel' });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: false,
+      status: 403,
+      text: () => Promise.resolve('{"errors":[{"message":"sender is not verified"}]}'),
+    });
+
+    const res = await request(makeApp({ tenantId: 73, vertical: 'travel' }))
+      .post('/api/communications/send-email')
+      .send({ to: 'guest@example.com', subject: 'Rejected delivery', body: 'Hello' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.delivered).toBe(false);
+    expect(prisma.emailTracking.deleteMany).toHaveBeenCalledWith({
+      where: { emailId: 1001, tenantId: 73 },
+    });
+    expect(prisma.emailMessage.delete).toHaveBeenCalledWith({ where: { id: 1001 } });
   });
 });
 

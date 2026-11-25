@@ -12,7 +12,7 @@ import { usePermissions } from '../../hooks/usePermissions';
 import { AuthContext } from '../../App';
 // Issue #816: Reusable CSV import/export toolbar for the Catalog + Packages tabs.
 import CsvImportExportToolbar from '../../components/wellness/CsvImportExportToolbar';
-import PageHeader from '../../components/PageHeader';
+import PageHeader, { DashboardBackLink } from '../../components/PageHeader';
 import TabBtn from './services/TabBtn';
 import CatalogTab from './services/CatalogTab';
 import PackageBuilder from './services/PackageBuilder';
@@ -59,8 +59,11 @@ export default function Services() {
   const [serviceTotal, setServiceTotal] = useState(0);
   const [servicePage, setServicePage] = useState(1);
   const [serviceSort, setServiceSort] = useState('default');
+  const [serviceSearch, setServiceSearch] = useState('');
+  const [serviceQuery, setServiceQuery] = useState('');
   const [loadingMoreServices, setLoadingMoreServices] = useState(false);
   const serviceRequestRef = useRef({ sequence: 0, loadingPage: null });
+  const serviceSearchTimerRef = useRef(null);
   const [packageServiceOptions, setPackageServiceOptions] = useState([]);
   const [categories, setCategories] = useState([]);
   const [categorySearch, setCategorySearch] = useState('');
@@ -114,6 +117,7 @@ export default function Services() {
       pageSize: String(SERVICE_PAGE_SIZE),
       sortBy: serviceSort,
     });
+    if (serviceQuery) params.set('q', serviceQuery);
     return fetchApi(`/api/wellness/services?${params}`)
       .then((res) => {
         if (requestId !== requestState.sequence) return;
@@ -123,7 +127,10 @@ export default function Services() {
         setServicePage(page);
       })
       .catch(() => {
-        if (requestId === requestState.sequence && !append) setServices([]);
+        if (requestId === requestState.sequence && !append) {
+          setServices([]);
+          setServiceTotal(0);
+        }
       })
       .finally(() => {
         if (append && requestState.loadingPage === page) requestState.loadingPage = null;
@@ -131,7 +138,7 @@ export default function Services() {
         setLoading(false);
         setLoadingMoreServices(false);
       });
-  }, [serviceSort]);
+  }, [serviceQuery, serviceSort]);
 
   const loadMoreServices = useCallback(() => {
     if (loadingMoreServices || services.length >= serviceTotal) return;
@@ -170,6 +177,11 @@ export default function Services() {
     clearTimeout(categorySearchTimerRef.current);
     categorySearchTimerRef.current = setTimeout(() => loadCategories(1, q), 250);
   };
+  const searchServices = (q) => {
+    setServiceSearch(q);
+    clearTimeout(serviceSearchTimerRef.current);
+    serviceSearchTimerRef.current = setTimeout(() => setServiceQuery(q.trim()), 250);
+  };
 
   const loadTreatments = ({ quiet = false } = {}) => {
     // Same rule as loadPackages: pausing or cancelling a patient's package
@@ -179,7 +191,10 @@ export default function Services() {
   };
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => () => clearTimeout(categorySearchTimerRef.current), []);
+  useEffect(() => () => {
+    clearTimeout(categorySearchTimerRef.current);
+    clearTimeout(serviceSearchTimerRef.current);
+  }, []);
   // Customers only ever see published packages; the backend enforces that
   // too, so a crafted request cannot pull drafts.
   const loadPackages = ({ quiet = false } = {}) => {
@@ -264,6 +279,7 @@ export default function Services() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+      <DashboardBackLink />
       <PageHeader
         icon={Sparkles}
         title="Service catalog"
@@ -327,6 +343,8 @@ export default function Services() {
           loadingMore={loadingMoreServices}
           hasMore={services.length < serviceTotal}
           onLoadMore={loadMoreServices}
+          serviceSearch={serviceSearch}
+          onServiceSearch={searchServices}
           sortBy={serviceSort}
           onSortChange={setServiceSort}
           categories={categories}

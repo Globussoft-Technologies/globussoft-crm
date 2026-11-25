@@ -465,7 +465,7 @@ function TenantDetailView() {
         <div className="card" style={{ padding: "1rem", display: "grid", gap: "0.75rem" }}>
           <div style={{ fontWeight: 700 }}>Provider breakdown</div>
           {(usage.providerBreakdown || []).map((row) => (
-            <div key={row.provider} style={{ display: "flex", justifyContent: "space-between", gap: "1rem", fontSize: "0.9rem" }}>
+            <div key={row.provider} style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem 1rem", minWidth: 0, fontSize: "0.9rem" }}>
               <span>{row.provider}</span>
               <span>{fmtNumber(row.requests)} req | {fmtNumber(row.totalTokens)} tokens</span>
             </div>
@@ -475,7 +475,7 @@ function TenantDetailView() {
         <div className="card" style={{ padding: "1rem", display: "grid", gap: "0.75rem" }}>
           <div style={{ fontWeight: 700 }}>Task breakdown</div>
           {(usage.taskBreakdown || []).map((row) => (
-            <div key={row.task} style={{ display: "flex", justifyContent: "space-between", gap: "1rem", fontSize: "0.9rem" }}>
+            <div key={row.task} style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: "0.5rem 1rem", minWidth: 0, fontSize: "0.9rem" }}>
               <span>{row.task}</span>
               <span>{fmtNumber(row.requests)} req | {fmtNumber(row.totalTokens)} tokens</span>
             </div>
@@ -489,7 +489,7 @@ function TenantDetailView() {
         {(usage.daily || []).length ? (
           <div style={{ display: "grid", gap: "0.55rem" }}>
             {usage.daily.map((row) => (
-              <div key={row.date} style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1fr 1fr", gap: "0.75rem", fontSize: "0.9rem", padding: "0.65rem 0.75rem", borderRadius: 8, background: "rgba(255,255,255,0.02)" }}>
+              <div key={row.date} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))", gap: "0.75rem", fontSize: "0.9rem", padding: "0.65rem 0.75rem", borderRadius: 8, background: "rgba(255,255,255,0.02)" }}>
                 <div>{row.date}</div>
                 <div>{fmtNumber(row.requests)} requests</div>
                 <div>{fmtNumber(row.totalTokens)} tokens</div>

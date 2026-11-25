@@ -101,7 +101,7 @@ function readPersistedTheme() {
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Home = lazy(() => import("./pages/Home"));
 const Contacts = lazy(() => import("./pages/Contacts"));
-const ContactDetail = lazy(() => import("./pages/ContactDetail"));
+const ContactDetailRoute = lazy(() => import("./pages/ContactDetailRoute"));
 const Pipeline = lazy(() => import("./pages/Pipeline"));
 const DealDetails = lazy(() => import("./pages/DealDetails"));
 const Workflows = lazy(() => import("./pages/Workflows"));
@@ -919,6 +919,26 @@ function GenericOrWellnessOnly({ children }) {
   return children;
 }
 
+// Converted Leads is a legacy cross-contact status queue. Wellness tenants
+// manage lead progression through the clinic-specific stages on lead detail.
+// Keep this route available to Generic and Travel tenants without exposing it
+// to Wellness users by direct URL.
+function NonWellnessOnly({ children }) {
+  const { tenant, user } = useContext(AuthContext);
+  if (tenant?.vertical === "wellness") {
+    const target = landingFor(user, tenant);
+    const targetIsRemovedPage =
+      target === "/converted-leads" || target.startsWith("/converted-leads?");
+    return (
+      <Navigate
+        to={targetIsRemovedPage ? wellnessLandingFor(user) : target}
+        replace
+      />
+    );
+  }
+  return children;
+}
+
 // Lead Routing is intentionally disabled for Generic CRM only. The component,
 // backend routes, and non-generic behavior remain intact so this does not alter
 // Callified's independent "Assigning Staff" configuration.
@@ -1267,7 +1287,10 @@ export default function App() {
           const profile = await res.json();
           if (!cancelled) {
             setUser(profile);
-            if (profile.tenant) setTenant(profile.tenant);
+            if (profile.tenant) {
+              localStorage.setItem("tenant", JSON.stringify(profile.tenant));
+              setTenant(profile.tenant);
+            }
             setTheme(resolveThemePreference(themeRef.current, profile?.themePreference));
           }
         } else if (res.status === 401 || res.status === 403) {
@@ -1317,6 +1340,20 @@ export default function App() {
       localStorage.removeItem("tenant");
     }
   }, [tenant]);
+
+  useEffect(() => {
+    const onTenantStorage = (event) => {
+      if (event.key !== "tenant" || !event.newValue) return;
+      let updated;
+      try { updated = JSON.parse(event.newValue); } catch { return; }
+      setTenant((current) => current?.vertical === "generic" && updated?.id === current.id &&
+        updated.timezone && current.timezone !== updated.timezone
+        ? { ...current, timezone: updated.timezone }
+        : current);
+    };
+    window.addEventListener("storage", onTenantStorage);
+    return () => window.removeEventListener("storage", onTenantStorage);
+  }, []);
 
   // Admins receive billing details; other staff need only workspace access.
   useEffect(() => {
@@ -1516,6 +1553,10 @@ export default function App() {
       throw new Error("SSO token rejected");
     }
     const profile = await res.json();
+    if (profile.tenant) {
+      localStorage.setItem("tenant", JSON.stringify(profile.tenant));
+      setTenant(profile.tenant);
+    }
     setUser(profile);
     localStorage.setItem("user", JSON.stringify(profile));
     setTheme(resolveThemePreference(themeRef.current, profile?.themePreference));
@@ -2636,7 +2677,7 @@ export default function App() {
                       <Route path="contacts" element={<Contacts />} />
                       {/* Travel contact names use the preview drawer; this shared
                           route remains active for Generic and Wellness deep links. */}
-                      <Route path="contacts/:id" element={<ContactDetail />} />
+                      <Route path="contacts/:id" element={<ContactDetailRoute />} />
                       <Route
                         path="pipeline"
                         element={
@@ -2882,7 +2923,7 @@ export default function App() {
                       >
                         <Route
                           path=":id"
-                          element={<ContactDetail renderBackdrop={false} />}
+                          element={<ContactDetailRoute renderBackdrop={false} />}
                         />
                       </Route>
                       <Route
@@ -2898,7 +2939,7 @@ export default function App() {
                       />
                       <Route
                         path="converted-leads"
-                        element={<ConvertedLeads />}
+                        element={<NonWellnessOnly><ConvertedLeads /></NonWellnessOnly>}
                       />
                       <Route
                         path="callified-data"

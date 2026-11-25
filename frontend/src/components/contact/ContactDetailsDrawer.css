@@ -268,3 +268,104 @@ body[data-vertical="generic"] .cd-generic-tags-card .cd-add-tag-btn {
 .cd-create-tag-color {
   margin-left: 0.15rem;
 }
+
+/* Wellness lead details use the clinic's warm surfaces and gold accent. */
+.cd-inline--wellness-lead .cd-tools {
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.85rem;
+  margin: 0.25rem 0 0.55rem;
+}
+.cd-inline--wellness-lead .cd-tag-form input::placeholder {
+  color: var(--wellness-lead-muted, var(--text-secondary));
+  opacity: 0.85;
+}
+.cd-inline--wellness-lead .cd-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 42px;
+  box-sizing: border-box;
+  margin-bottom: 0.8rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--wellness-lead-border, var(--border-color));
+  border-radius: 9px;
+  background: var(--wellness-lead-surface, var(--surface-color));
+  color: var(--wellness-lead-ink, var(--text-primary));
+}
+.cd-inline--wellness-lead .cd-tags > svg {
+  color: var(--accent-color, #c9a063);
+}
+.cd-inline--wellness-lead .cd-tag-values {
+  flex: 1 1 12rem;
+  min-width: 0;
+  align-items: center;
+  gap: 0.4rem;
+}
+.cd-inline--wellness-lead .cd-wellness-lead-tag-control {
+  position: relative;
+  display: inline-flex;
+}
+.cd-inline--wellness-lead .cd-wellness-lead-tag-select {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  min-width: 9rem;
+  min-height: 34px;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--wellness-lead-border, var(--border-color));
+  border-radius: 7px;
+  background: var(--wellness-lead-surface, var(--surface-color));
+  color: var(--wellness-lead-muted, var(--text-secondary));
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.75rem;
+}
+.cd-inline--wellness-lead .cd-wellness-lead-tag-select:hover,
+.cd-inline--wellness-lead .cd-wellness-lead-tag-select[aria-expanded="true"] {
+  border-color: var(--wellness-lead-accent, var(--primary-color, var(--accent-color)));
+  color: var(--wellness-lead-ink, var(--text-primary));
+}
+.cd-inline--wellness-lead .cd-wellness-lead-tag-select:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+.cd-inline--wellness-lead .cd-tag-value,
+.cd-inline--wellness-lead .cd-tag-values > span:not(.cd-tag-chip) {
+  padding: 0.3rem 0.65rem;
+  border: 1px solid var(--wellness-lead-border, var(--border-color));
+  border-radius: 999px;
+  background: var(--wellness-lead-soft, var(--subtle-bg));
+  color: var(--wellness-lead-ink, var(--text-primary));
+}
+.cd-inline--wellness-lead .cd-tag-value:hover {
+  border-color: var(--accent-color, #c9a063);
+}
+.cd-inline--wellness-lead .cd-tag-chip button {
+  color: inherit;
+}
+.cd-inline--wellness-lead .cd-tag-form {
+  margin: 0;
+}
+.cd-inline--wellness-lead .cd-tag-form input {
+  box-sizing: border-box;
+  width: 8.5rem;
+  min-height: 34px;
+  padding: 0.35rem 0.6rem;
+  border-color: var(--wellness-lead-border, var(--border-color));
+  border-radius: 7px;
+  background: var(--wellness-lead-surface, var(--surface-color));
+  color: var(--wellness-lead-ink, var(--text-primary));
+}
+.cd-inline--wellness-lead .cd-tag-form input.wellness-lead-tag-input {
+  border: 1px solid var(--wellness-lead-border, var(--border-color)) !important;
+  background: var(--wellness-lead-surface, var(--surface-color)) !important;
+  box-shadow: none !important;
+}
+.cd-inline--wellness-lead .cd-tag-form input:focus {
+  border-color: var(--accent-color, #c9a063);
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--wellness-lead-soft, rgba(201, 160, 99, 0.12));
+}

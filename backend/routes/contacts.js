@@ -31,7 +31,8 @@ const {
 } = require("../utils/deduplication");
 const { notify } = require("../lib/notificationService");
 const { notifyAdminsOfNewLead } = require("../lib/leadNotifications");
-const { getSetting, setSetting, KEYS } = require("../lib/tenantSettings");
+const { getSetting, setSetting, KEYS, getGenericCrmTimezone } = require("../lib/tenantSettings");
+const { parseDateTimeLocalInTZ, formatInTenantTZ } = require('../lib/datetime');
 const {
   evaluateAutoCampaignRules,
 } = require("../lib/callifiedAutoCampaignRules");
@@ -75,6 +76,7 @@ function canonicalAttachmentUrl(fileUrl) {
 // actual first/last result. Keep this allowlist explicit so a query parameter
 // can never become an arbitrary Prisma property.
 const CONTACT_LIST_SORTS = Object.freeze({
+  id: (direction) => ({ id: direction }),
   name: (direction) => ({ name: direction }),
   email: (direction) => ({ email: direction }),
   phone: (direction) => ({ phone: direction }),
@@ -366,6 +368,80 @@ const GENERIC_ACCEPTED_CONTACT_STATUSES = [
   ...GENERIC_CONTACT_STATUSES,
   ...LEGACY_CONTACT_STATUSES,
 ];
+const WELLNESS_CONTACT_LIFECYCLE_STAGES = {
+  new: { label: "New", status: "Lead" },
+  contacted: { label: "Contacted", status: "Prospect" },
+  interested: { label: "Interested", status: "Prospect" },
+  qualified: { label: "Qualified", status: "Prospect" },
+  booked: { label: "Booked", status: "Customer" },
+  active_patient: { label: "Active Patient", status: "Customer" },
+  not_interested: { label: "Not Interested", status: "Churned", negative: true },
+  not_qualified: { label: "Not Qualified", status: "Churned", negative: true },
+  lost_lead: { label: "Lost Lead", status: "Churned", negative: true },
+};
+const WELLNESS_CONTACT_LIFECYCLE_STAGE_INDEX = {
+  new: 0,
+  contacted: 1,
+  interested: 2,
+  not_interested: 2,
+  qualified: 3,
+  not_qualified: 3,
+  booked: 4,
+  lost_lead: 4,
+  active_patient: 5,
+};
+const WELLNESS_CONTACT_STATUS_STAGE_INDEX = {
+  Lead: 0,
+  Prospect: 1,
+  Customer: 5,
+  Churned: 4,
+  Junk: 3,
+};
+
+// Generic CRM status compatibility. Existing rows may still contain the
+// pre-v3.9 lifecycle values; filters must treat them as their replacement
+// values until the idempotent boot backfill has updated every Generic tenant.
+const GENERIC_STATUS_ALIASES = Object.freeze({
+  New: ["New", "Lead"],
+  Contacted: ["Contacted", "Prospect"],
+  Interested: ["Interested"],
+  Unqualified: ["Unqualified", "Junk"],
+  Qualified: ["Qualified"],
+  Lost: ["Lost"],
+  Won: ["Won", "Customer"],
+  Churned: ["Churned"],
+});
+const GENERIC_PERSISTED_STATUS_BY_LABEL = Object.freeze({
+  New: "Lead",
+});
+const GENERIC_STATUS_LABEL_BY_VALUE = Object.freeze(
+  Object.fromEntries(
+    Object.entries(GENERIC_STATUS_ALIASES).flatMap(([label, values]) =>
+      values.map((value) => [value.toLowerCase(), label]),
+    ),
+  ),
+);
+
+function genericStatusAliases(values) {
+  return [...new Set(values.flatMap((raw) => {
+    const value = String(raw || "").trim();
+    const label = GENERIC_STATUS_LABEL_BY_VALUE[value.toLowerCase()] || value;
+    return GENERIC_STATUS_ALIASES[label] || [value];
+  }).filter(Boolean))];
+}
+
+function normalizeGenericPersistedStatus(status) {
+  const value = String(status || "").trim();
+  return GENERIC_PERSISTED_STATUS_BY_LABEL[value] || value;
+}
+
+function buildGenericStatusFilterClause(operator, values) {
+  const aliases = genericStatusAliases(values);
+  if (aliases.length === 0) return null;
+  if (operator === "contains") return { status: { in: aliases } };
+  if (operator === "not_contains") return { status: { notIn: aliases } };
+  return null;
+}
 
 function validateContactInput(
   body,
@@ -599,6 +675,7 @@ async function canReassignLead(req, contact) {
 //              mirror the Lead Score dropdown Contacts.jsx already ships
 //              (SCORE_BUCKETS), so both surfaces offer the same choices.
 const FILTERABLE_FIELDS = {
+  id: { column: "id", kind: "number", label: "Lead ID", required: true, verticals: ["generic"] },
   name: { column: "name", kind: "text", label: "Name", required: true },
   firstName: { column: "name", kind: "text", label: "First Name", required: true, verticals: ["generic"], namePart: "first" },
   lastName: { column: "name", kind: "text", label: "Last Name", required: true, verticals: ["generic"], namePart: "last" },
@@ -611,7 +688,7 @@ const FILTERABLE_FIELDS = {
   linkedin: { column: "linkedin", kind: "text", label: "LinkedIn", verticals: ["generic"] },
   industry: { column: "industry", kind: "text", label: "Service Type", verticals: ["generic"] },
   companySize: { column: "companySize", kind: "text", label: "No Of Employee", verticals: ["generic"] },
-  description: { column: "description", kind: "text", label: "Note", verticals: ["generic"] },
+  note: { column: "note", kind: "text", label: "Note", verticals: ["generic"] },
   stateCode: { column: "stateCode", kind: "text", label: "State", verticals: ["generic"] },
   status: { column: "status", kind: "text", label: "Status", required: true },
   source: { column: "source", kind: "text", label: "Source" },
@@ -808,39 +885,23 @@ function customFieldDefIdFromKey(field) {
 // (see that route), so a "contains" match here means "occurred on this
 // day", not an exact-to-the-millisecond DateTime equality that would never
 // match a real timestamp.
-function dayRange(value) {
-  const start = new Date(value);
-  if (Number.isNaN(start.getTime())) return null;
-  start.setUTCHours(0, 0, 0, 0);
-  const end = new Date(start);
-  end.setUTCDate(end.getUTCDate() + 1);
-  return { gte: start, lt: end };
+function dayRange(value, timezone = "UTC") {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const startDay = date.toISOString().slice(0, 10);
+  date.setUTCDate(date.getUTCDate() + 1);
+  const endDay = date.toISOString().slice(0, 10);
+  return {
+    gte: parseDateTimeLocalInTZ(`${startDay}T00:00`, timezone),
+    lt: parseDateTimeLocalInTZ(`${endDay}T00:00`, timezone),
+  };
 }
 
-// [from, to] "YYYY-MM-DD" pair → an inclusive-of-both-days Prisma range.
-// `to` becomes the START of the following day and is compared with `lt`, so
-// a stored timestamp anywhere inside the end day still matches — comparing
-// `lte` against the end day's midnight would drop everything after 00:00 on
-// that day. Either side may be blank for an open-ended range; both blank
-// (or both unparseable) yields null so the caller drops the clause.
-function betweenRange(fromValue, toValue) {
-  const range = {};
-  if (fromValue) {
-    const from = new Date(fromValue);
-    if (!Number.isNaN(from.getTime())) {
-      from.setUTCHours(0, 0, 0, 0);
-      range.gte = from;
-    }
-  }
-  if (toValue) {
-    const to = new Date(toValue);
-    if (!Number.isNaN(to.getTime())) {
-      to.setUTCHours(0, 0, 0, 0);
-      to.setUTCDate(to.getUTCDate() + 1);
-      range.lt = to;
-    }
-  }
-  return Object.keys(range).length ? range : null;
+// An end date is inclusive of its entire local calendar day.
+function betweenRange(fromValue, toValue, timezone) {
+  const from = fromValue ? dayRange(fromValue, timezone) : null;
+  const to = toValue ? dayRange(toValue, timezone) : null;
+  return from || to ? { ...(from ? { gte: from.gte } : {}), ...(to ? { lt: to.lt } : {}) } : null;
 }
 
 // is_empty/is_not_empty on a `required` (non-nullable) column — Contact.
@@ -852,7 +913,7 @@ function betweenRange(fromValue, toValue) {
 // NUMBER/DATE field (aiScore, createdAt) has no such "empty" representation
 // at all — every row always has a value — so is_empty matches nothing and
 // is_not_empty matches everything for those two kinds.
-function buildFilterClause(fieldDef, operator, values) {
+function buildFilterClause(fieldDef, operator, values, timezone) {
   const { column, kind, required } = fieldDef;
   // A DateTime / Int column has no empty-string state, and Prisma rejects
   // '' as a value for one outright ("Invalid value for argument: Expected
@@ -880,7 +941,7 @@ function buildFilterClause(fieldDef, operator, values) {
   // an open-ended range — compacting the array would shift `to` into `from`.
   if (operator === "between") {
     if (kind !== "date") return null;
-    const range = betweenRange((values || [])[0], (values || [])[1]);
+    const range = betweenRange((values || [])[0], (values || [])[1], timezone);
     return range ? { [column]: range } : null;
   }
   const list = (values || []).filter(
@@ -945,7 +1006,7 @@ function buildFilterClause(fieldDef, operator, values) {
       : { OR: picked.map((b) => ({ [column]: { gte: b.min, lte: b.max } })) };
   }
   if (kind === "date") {
-    const ranges = list.map(dayRange).filter(Boolean);
+    const ranges = list.map((value) => dayRange(value, timezone)).filter(Boolean);
     if (ranges.length === 0) return null;
     return operator === "not_contains"
       ? { AND: ranges.map((r) => ({ NOT: { [column]: r } })) }
@@ -1117,12 +1178,12 @@ function buildWebFormClause(operator, values) {
   return { webFormSubmissions: { some: { webForm: { name: { in: list } } } } };
 }
 
-function buildTrackingFilterClause(field, operator, values) {
+function buildTrackingFilterClause(field, operator, values, timezone) {
   if (field !== "submittedAt") return null;
   if (operator === "is_empty") return { webFormSubmissions: { none: {} } };
   if (operator === "is_not_empty") return { webFormSubmissions: { some: {} } };
   if (operator !== "between") return null;
-  const range = betweenRange((values || [])[0], (values || [])[1]);
+  const range = betweenRange((values || [])[0], (values || [])[1], timezone);
   return range ? { webFormSubmissions: { some: { submittedAt: range } } } : null;
 }
 
@@ -1186,7 +1247,7 @@ async function attachComputedWalletBalance(contact, tenantId) {
   }
 }
 
-// Wellness-only contact enrichment for the Patient details appointment flow.
+// Wellness-only contact enrichment for the patient records and appointment flow.
 // Generic and travel contacts retain their existing response shape.
 async function attachWellnessAppointments(contact, tenantId, tenantVertical) {
   if (!contact || typeof contact !== 'object' || !contact.id) return contact;
@@ -1195,13 +1256,14 @@ async function attachWellnessAppointments(contact, tenantId, tenantVertical) {
       ? tenantVertical
       : (await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } }))?.vertical;
     if (vertical !== 'wellness') return contact;
-    const patient = await prisma.patient.findFirst({
+    const patients = await prisma.patient.findMany({
       where: { tenantId, contactId: contact.id, deletedAt: null },
       select: { id: true },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     });
-    if (!patient) return { ...contact, patientId: null, appointments: [] };
+    if (!patients.length) return { ...contact, patientId: null, patientIds: [], appointments: [] };
     const visits = await prisma.visit.findMany({
-      where: { tenantId, patientId: patient.id, status: { notIn: ['cancelled', 'completed', 'no-show'] } },
+      where: { tenantId, patientId: { in: patients.map((patient) => patient.id) }, status: { notIn: ['cancelled', 'completed', 'no-show'] } },
       include: {
         doctor: { select: { id: true, name: true } },
         service: { select: { id: true, name: true } },
@@ -1211,9 +1273,11 @@ async function attachWellnessAppointments(contact, tenantId, tenantVertical) {
     });
     return {
       ...contact,
-      patientId: patient.id,
+      patientId: patients[0].id,
+      patientIds: patients.map((patient) => patient.id),
       appointments: visits.map((visit) => ({
         id: visit.id,
+        patientId: visit.patientId,
         doctorName: visit.doctor?.name || 'Pending assignment',
         serviceName: visit.service?.name || 'General',
         appointmentDate: visit.visitDate,
@@ -1756,6 +1820,10 @@ router.get("/", async (req, res) => {
     // FILTER_OPERATORS. Invalid entries are skipped rather than erroring —
     // the panel only ever sends known field/operator pairs, so a mismatch
     // here means stale client cache, not attacker input.
+    let timezonePromise;
+    const timestampZone = () => timezonePromise ??= isGenericCrmRequest(req)
+      ? getGenericCrmTimezone(req.user.tenantId)
+      : Promise.resolve("UTC");
     if (req.query.filters) {
       let parsed;
       try {
@@ -1872,6 +1940,7 @@ router.get("/", async (req, res) => {
             f.field,
             f.operator,
             rawValues,
+            await timestampZone(),
           );
           if (clause) clauses.push(clause);
           continue;
@@ -1895,6 +1964,12 @@ router.get("/", async (req, res) => {
         // same normalization as the table and direct query filter.
         if (
           (req.user.vertical || "generic") === "generic" &&
+          f.field === "status" &&
+          ["contains", "not_contains"].includes(f.operator)
+        ) {
+          clause = buildGenericStatusFilterClause(f.operator, rawValues);
+        } else if (
+          (req.user.vertical || "generic") === "generic" &&
           f.field === "callifiedLeadStatus" &&
           f.operator === "contains" &&
           rawValues.some((value) => String(value) === CALL_STATUS.YET_TO_CALL)
@@ -1911,7 +1986,8 @@ router.get("/", async (req, res) => {
             ],
           };
         } else {
-          clause = buildFilterClause(fieldDef, f.operator, rawValues);
+          const timezone = ["createdAt", "updatedAt"].includes(fieldDef.column) ? await timestampZone() : undefined;
+          clause = buildFilterClause(fieldDef, f.operator, rawValues, timezone);
         }
         if (clause) clauses.push(clause);
       }
@@ -1926,19 +2002,37 @@ router.get("/", async (req, res) => {
     // Total Contacts KPI on /dashboard now reflects own-book size for sales reps.
     if (!viewAllLeads) where.assignedToId = req.user.userId;
     if (req.query.from || req.query.to) {
-      const from = req.query.from ? new Date(req.query.from) : null;
-      const to = req.query.to ? new Date(req.query.to) : null;
-      if ((from && Number.isNaN(from.getTime())) || (to && Number.isNaN(to.getTime())) || (from && to && from > to)) {
+      const isDateOnly = (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+      const dateOnlyFrom = isDateOnly(req.query.from);
+      const dateOnlyTo = isDateOnly(req.query.to);
+      const zone = dateOnlyFrom || dateOnlyTo ? await timestampZone() : undefined;
+      const from = dateOnlyFrom ? dayRange(req.query.from, zone)?.gte : req.query.from ? new Date(req.query.from) : null;
+      const to = dateOnlyTo ? dayRange(req.query.to, zone)?.lt : req.query.to ? new Date(req.query.to) : null;
+      if ((req.query.from && !Number.isFinite(from?.getTime())) ||
+          (req.query.to && !Number.isFinite(to?.getTime())) ||
+          (from && to && (dateOnlyTo ? from >= to : from > to))) {
         return res.status(400).json({ error: "Invalid date range", code: "INVALID_DATE_RANGE" });
       }
-      const dateOnlyTo = typeof req.query.to === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to);
-      if (dateOnlyTo) to.setUTCDate(to.getUTCDate() + 1);
       where.createdAt = { ...(from ? { gte: from } : {}), ...(to ? (dateOnlyTo ? { lt: to } : { lte: to }) : {}) };
     }
     // ?count=1 — sidebar badge polls: return { total } only, skip full fetch.
     if (req.query.count === "1") {
       const total = await prisma.contact.count({ where });
       return res.json({ total });
+    }
+    if (req.query.fields === "ids") {
+      const afterId = Number(req.query.afterId ?? 0);
+      if (!Number.isSafeInteger(afterId) || afterId < 0) {
+        return res.status(400).json({ error: "Invalid contact cursor", code: "INVALID_CURSOR" });
+      }
+      const rows = await prisma.contact.findMany({
+        where: { ...where, AND: [...(where.AND || []), { id: { gt: afterId } }] },
+        select: { id: true },
+        orderBy: { id: "asc" },
+        take: 501,
+      });
+      const ids = rows.slice(0, 500).map(({ id }) => id);
+      return res.json({ ids, nextAfterId: rows.length > 500 ? ids[499] : null });
     }
     // #172: honor limit / offset / page query params with sensible defaults + a hard cap.
     // Pre-fix the API silently returned the entire dataset, breaking pagination
@@ -2189,7 +2283,9 @@ router.get("/filter-values/:field", async (req, res) => {
         : {};
     const valueSearch =
       typeof req.query.q === "string" ? req.query.q.trim().slice(0, 191) : "";
-    const scopeWhere = statusScope ? { status: statusScope } : {};
+    const scopeWhere = { ...(statusScope && { status: statusScope }), ...assignedToScope };
+    const ruleValues = req.query.ruleValues === "1";
+    if (ruleValues && !viewAllLeads) scopeWhere.assignedToId = req.user.userId;
     if (isCustomField(req.params.field)) {
       const defId = customFieldDefIdFromKey(req.params.field);
       if (defId === null)
@@ -2222,14 +2318,8 @@ router.get("/filter-values/:field", async (req, res) => {
           valueText: valueSearch
             ? { contains: valueSearch }
             : { not: null },
-          ...(statusScope || Object.keys(assignedToScope).length
-            ? {
-                contact: {
-                  ...(statusScope ? { status: statusScope } : {}),
-                  ...assignedToScope,
-                  deletedAt: null,
-                },
-              }
+          ...(Object.keys(scopeWhere).length
+            ? { contact: { ...scopeWhere, deletedAt: null } }
             : {}),
         },
         select: { valueText: true },
@@ -2472,6 +2562,13 @@ router.get("/filter-values/:field", async (req, res) => {
         .filter((option) => !normalizedSearch || option.label.toLowerCase().includes(normalizedSearch));
       return res.json({ values });
     }
+    if (req.params.field === "status" && genericLeadsPageScope) {
+      const normalizedSearch = valueSearch.toLowerCase();
+      const values = Object.keys(GENERIC_STATUS_ALIASES)
+        .filter((status) => !normalizedSearch || status.toLowerCase().includes(normalizedSearch))
+        .map((status) => ({ value: status, label: status }));
+      return res.json({ values });
+    }
     if (req.params.field === "territoryId") {
       const territories = await prisma.territory.findMany({
         where: { tenantId },
@@ -2515,7 +2612,7 @@ router.get("/filter-values/:field", async (req, res) => {
     // range-kind fields offer their fixed buckets, not a DISTINCT scan of
     // every individual value present (see the "range" note above
     // FILTERABLE_FIELDS — Lead Score would otherwise list 5, 36, 49, 64…).
-    if (fieldDef.kind === "range") {
+    if (fieldDef.kind === "range" && !ruleValues) {
       return res.json({
         values: (fieldDef.buckets || []).map((b) => ({
           value: b.value,
@@ -2532,7 +2629,7 @@ router.get("/filter-values/:field", async (req, res) => {
     let notNullFilter;
     if (
       fieldDef.required &&
-      (fieldDef.kind === "number" || fieldDef.kind === "date")
+      (fieldDef.kind === "number" || fieldDef.kind === "date" || fieldDef.kind === "range")
     ) {
       notNullFilter = undefined;
     } else if (fieldDef.required) {
@@ -2572,12 +2669,15 @@ router.get("/filter-values/:field", async (req, res) => {
     // deliberately — the panel filters by "occurred on this day", matching
     // how a human reads a date column in a table, not exact timestamps.
     if (fieldDef.kind === "date") {
+      const zone = isGenericCrmRequest(req) && ["createdAt", "updatedAt"].includes(fieldDef.column)
+        ? await getGenericCrmTimezone(tenantId)
+        : "UTC";
       const days = [
         ...new Set(
           rows
             .map((r) => r[fieldDef.column])
             .filter((v) => v !== null)
-            .map((v) => new Date(v).toISOString().slice(0, 10)),
+            .map((v) => formatInTenantTZ(v, zone, "yyyy-MM-dd")),
         ),
       ].sort();
       return res.json({ values: days.map((d) => ({ value: d, label: d })) });
@@ -2963,6 +3063,9 @@ router.post("/", requireContactOrLeadWrite, async (req, res) => {
           ? req.body.name.trim()
           : req.body.name,
     };
+    if (isGenericCrmRequest(req) && normalised.status) {
+      normalised.status = normalizeGenericPersistedStatus(normalised.status);
+    }
     if (isGenericCrmRequest(req) && normalised.phone) {
       normalised.phone = normalizeGenericCrmPhone(normalised.phone);
     }
@@ -2990,12 +3093,12 @@ router.post("/", requireContactOrLeadWrite, async (req, res) => {
     // Explicit assignedToId still wins, and non-generic contact creation keeps the existing creator default.
     const isGenericLeadAwaitingCall =
       (req.user.vertical || "generic") === "generic" &&
-      normalised.status === (isGenericCrmRequest(req) ? "New" : "Lead") &&
+      normalised.status === "Lead" &&
       (!normalised.callifiedLeadStatus ||
         normalised.callifiedLeadStatus === "yet_to_call");
     const shouldSkipInitialAssignee =
       isGenericLeadAwaitingCall ||
-      (skipInitialAssignee && normalised.status === (isGenericCrmRequest(req) ? "New" : "Lead"));
+      (skipInitialAssignee && normalised.status === "Lead");
     if (normalised.assignedToId == null && !shouldSkipInitialAssignee) {
       normalised.assignedToId = req.user.userId;
     }
@@ -3273,26 +3376,22 @@ router.put(
 
     if (nextAssignedToId) {
       const actorName = req.user?.name || req.user?.email || "Admin";
-      for (const row of assignableRows) {
-        if (nextAssignedToId === row.assignedToId) continue;
+      const changed = assignableRows.filter((row) => nextAssignedToId !== row.assignedToId);
+      const grouped = isGenericCrmRequest(req) && changed.length > 1;
+      await require('../lib/boundedWork').mapBounded(grouped ? [null] : changed, 4, async (row) => {
         try {
-          const leadName = row.name || "#" + row.id;
           await notify({
             userId: nextAssignedToId,
             tenantId: req.user.tenantId,
-            title: "New lead assigned",
-            message:
-              actorName +
-              ' has assigned lead "' +
-              leadName +
-              '" to you. Please look into it.',
+            title: grouped ? `${changed.length} leads assigned` : "New lead assigned",
+            message: grouped
+              ? `${actorName} assigned ${changed.length} leads to you.`
+              : `${actorName} has assigned lead "${row.name || "#" + row.id}" to you. Please look into it.`,
             type: "info",
             category: "lead",
             entityType: "lead",
-            entityId: row.id,
-            link:
-              (req.user?.vertical === "travel" ? "/travel/leads/" : "/contacts/") +
-              row.id,
+            entityId: row?.id,
+            link: grouped ? "/leads" : (req.user?.vertical === "travel" ? "/travel/leads/" : "/contacts/") + row.id,
             io: req.io,
           });
         } catch (notifyErr) {
@@ -3301,7 +3400,7 @@ router.put(
             notifyErr && notifyErr.message,
           );
         }
-      }
+      });
     }
 
     res.json({
@@ -3448,11 +3547,18 @@ router.get("/:id/activities", async (req, res) => {
     const limit = Math.max(1, Math.min(parseInt(req.query.limit) || 10, 100));
     const page = Math.max(1, parseInt(req.query.page) || 1);
     const where = { contactId: id, tenantId: req.user.tenantId };
+    const requestedType = typeof req.query.type === "string" ? req.query.type.trim().slice(0, 80) : "";
+    const excludedType = typeof req.query.excludeType === "string" ? req.query.excludeType.trim().slice(0, 80) : "";
+    const activityWhere = { ...where };
+    if (requestedType) activityWhere.type = requestedType;
+    else if (excludedType) activityWhere.type = { not: excludedType };
     const tenant = await prisma.tenant.findUnique({
       where: { id: req.user.tenantId },
       select: { vertical: true },
     });
     const isGeneric = tenant?.vertical === "generic";
+    const includeCallLogs = isGeneric && (!requestedType || requestedType === "Call") && excludedType !== "Call";
+    const includeTasks = isGeneric && (!requestedType || requestedType === "Task") && excludedType !== "Task";
     const offset = (page - 1) * limit;
     const mergeWindow = offset + limit;
     const callLogWhere = {
@@ -3467,7 +3573,7 @@ router.get("/:id/activities", async (req, res) => {
     };
     const [activityRows, activityTotal, callLogs, callLogTotal, taskRows, taskTotal] = await Promise.all([
       prisma.activity.findMany({
-        where,
+        where: activityWhere,
         include: {
           user: { select: { id: true, name: true, email: true } },
         },
@@ -3475,23 +3581,23 @@ router.get("/:id/activities", async (req, res) => {
         take: isGeneric ? mergeWindow : limit,
         skip: isGeneric ? 0 : offset,
       }),
-      prisma.activity.count({ where }),
-      isGeneric
+      prisma.activity.count({ where: activityWhere }),
+      includeCallLogs
         ? prisma.callLog.findMany({
             where: callLogWhere,
             orderBy: [{ createdAt: "desc" }, { id: "desc" }],
             take: mergeWindow,
           })
         : Promise.resolve([]),
-      isGeneric ? prisma.callLog.count({ where: callLogWhere }) : Promise.resolve(0),
-      isGeneric
+      includeCallLogs ? prisma.callLog.count({ where: callLogWhere }) : Promise.resolve(0),
+      includeTasks
         ? prisma.task.findMany({
             where: taskWhere,
             orderBy: [{ createdAt: "desc" }, { id: "desc" }],
             take: mergeWindow,
           })
         : Promise.resolve([]),
-      isGeneric ? prisma.task.count({ where: taskWhere }) : Promise.resolve(0),
+      includeTasks ? prisma.task.count({ where: taskWhere }) : Promise.resolve(0),
     ]);
     let merged = activityRows;
     if (isGeneric) {
@@ -3639,7 +3745,7 @@ router.delete("/:id/activities/:activityId", async (req, res) => {
 });
 
 // "Summarize" (2026-07-07) — on-demand full-history AI narrative. Re-reads
-// EVERY WhatsApp message linked to this contact and REPLACES Contact.description
+// EVERY WhatsApp message linked to this contact and REPLACES Contact.note
 // with one flowing narrative + a current lead-stage line. Independent of the
 // incremental "Sync Lead" action on the WhatsApp thread view.
 router.post("/:id/summarize-chat", async (req, res) => {
@@ -3681,10 +3787,10 @@ router.post("/:id/summarize-chat", async (req, res) => {
 // extension-sourced leads (gmail / whatsapp-extension). These sources have
 // no raw message log to re-read (unlike /summarize-chat's WhatsAppMessage
 // rows) — each capture already wrote a one-time dated block straight into
-// Contact.description (routes/leads_extension_capture.js). This reads
+// Contact.note (routes/leads_extension_capture.js). This reads
 // whatever dated blocks have piled up from repeat captures and REPLACES
-// description with one consolidated AI narrative, same replace-outright
-// semantics as /summarize-chat, just fed the description text itself.
+// note with one consolidated AI narrative, same replace-outright
+// semantics as /summarize-chat, just fed the note text itself.
 router.post("/:id/resummarize-capture", async (req, res) => {
   try {
     const id = parseInt(req.params.id);
@@ -3771,6 +3877,9 @@ const updateContactById = async (req, res) => {
     if (inputErr) return res.status(inputErr.status).json(inputErr);
     // PRD Gap §1.1a/§1.1d — coerce date strings to Date objects (mirrors POST handler).
     const updateData = { ...req.body };
+    if (isGenericCrmRequest(req) && updateData.status) {
+      updateData.status = normalizeGenericPersistedStatus(updateData.status);
+    }
     if (isGenericCrmRequest(req) && updateData.phone) {
       updateData.phone = normalizeGenericCrmPhone(updateData.phone);
     }
@@ -3790,7 +3899,33 @@ const updateContactById = async (req, res) => {
     });
     let lifecycleStagesConfig = null;
     if (Object.prototype.hasOwnProperty.call(updateData, "lifecycleStageKey")) {
-      if (tenant?.vertical !== "generic") {
+      if (tenant?.vertical === "wellness") {
+        const lifecycleStageKey = String(updateData.lifecycleStageKey || "").trim();
+        const hasStage = Object.prototype.hasOwnProperty.call(WELLNESS_CONTACT_LIFECYCLE_STAGES, lifecycleStageKey);
+        const stage = hasStage ? WELLNESS_CONTACT_LIFECYCLE_STAGES[lifecycleStageKey] : null;
+        if (!stage) {
+          return res.status(400).json({ error: "Invalid Wellness patient journey stage", code: "INVALID_LIFECYCLE_STAGE" });
+        }
+        if (updateData.status && updateData.status !== stage.status) {
+          return res.status(400).json({ error: "Lifecycle stage does not match the contact status", code: "LIFECYCLE_STATUS_MISMATCH" });
+        }
+        if (stage.negative && !lifecycleTransitionReason) {
+          return res.status(400).json({ error: "A reason is required for a negative patient journey status", code: "NEGATIVE_STAGE_REASON_REQUIRED" });
+        }
+        const currentStageIndex = WELLNESS_CONTACT_LIFECYCLE_STAGE_INDEX[existing.lifecycleStageKey]
+          ?? WELLNESS_CONTACT_STATUS_STAGE_INDEX[existing.status];
+        const nextStageIndex = WELLNESS_CONTACT_LIFECYCLE_STAGE_INDEX[lifecycleStageKey];
+        if (
+          Number.isInteger(currentStageIndex) &&
+          Number.isInteger(nextStageIndex) &&
+          nextStageIndex < currentStageIndex &&
+          !lifecycleTransitionReason
+        ) {
+          return res.status(400).json({ error: "A reason is required when moving backward in the patient journey", code: "BACKWARD_STAGE_REASON_REQUIRED" });
+        }
+        updateData.status = stage.status;
+        updateData.lifecycleStageKey = lifecycleStageKey;
+      } else if (tenant?.vertical !== "generic") {
         delete updateData.lifecycleStageKey;
       } else {
         const lifecycleStageKey = String(updateData.lifecycleStageKey || "").trim();
@@ -3849,6 +3984,11 @@ const updateContactById = async (req, res) => {
     const statusWillChange =
       Object.prototype.hasOwnProperty.call(updateData, "status") &&
       existing.status !== updateData.status;
+    const wellnessLifecycleStageWillChange =
+      tenant?.vertical === "wellness" &&
+      Object.prototype.hasOwnProperty.call(updateData, "lifecycleStageKey") &&
+      existing.lifecycleStageKey !== updateData.lifecycleStageKey;
+    const lifecycleWillChange = statusWillChange || wellnessLifecycleStageWillChange;
     const terminalStatus = ["churned", "junk"].includes(
       String(updateData.status || "").toLowerCase(),
     );
@@ -3859,16 +3999,24 @@ const updateContactById = async (req, res) => {
       });
     }
     let lifecycleActivity = null;
-    const contact = statusWillChange
+    const contact = lifecycleWillChange
       ? await prisma.$transaction(async (tx) => {
           const updated = await tx.contact.update({
             where: { id: existing.id },
             data: updateData,
           });
+          const fromStage = tenant?.vertical === "wellness"
+            ? WELLNESS_CONTACT_LIFECYCLE_STAGES[existing.lifecycleStageKey]?.label || existing.status || "(empty)"
+            : existing.status || "(empty)";
+          const toStage = tenant?.vertical === "wellness"
+            ? WELLNESS_CONTACT_LIFECYCLE_STAGES[updated.lifecycleStageKey]?.label || updated.status || "(empty)"
+            : updated.status || "(empty)";
           lifecycleActivity = await tx.activity.create({
             data: {
-              type: "Lead Status updated",
-              description: `Updated from ${existing.status || "(empty)"} to ${updated.status || "(empty)"}${lifecycleTransitionReason ? `. Reason: ${lifecycleTransitionReason}` : ""}`,
+              type: tenant?.vertical === "wellness" && wellnessLifecycleStageWillChange
+                ? "Patient journey stage updated"
+                : "Lead Status updated",
+              description: `Updated from ${fromStage} to ${toStage}${lifecycleTransitionReason ? `. Reason: ${lifecycleTransitionReason}` : ""}`,
               contactId: updated.id,
               userId: req.user.userId,
               tenantId: req.user.tenantId,
@@ -3898,7 +4046,9 @@ const updateContactById = async (req, res) => {
       if (changes.status || changes.lifecycleStageKey) {
         const options = (lifecycleStagesConfig || [])
           .flatMap((stage) => Array.isArray(stage?.options) ? stage.options : []);
-        const labelFor = (stageKey) => options.find((option) => option?.id === stageKey)?.label || null;
+        const labelFor = (stageKey) => tenant?.vertical === "wellness"
+          ? WELLNESS_CONTACT_LIFECYCLE_STAGES[stageKey]?.label || null
+          : options.find((option) => option?.id === stageKey)?.label || null;
         lifecycleTransition = {
           fromStage: labelFor(existing.lifecycleStageKey) || existing.status || '(not set)',
           toStage: labelFor(contact.lifecycleStageKey) || contact.status || '(not set)',
@@ -3999,8 +4149,8 @@ const updateContactById = async (req, res) => {
     // rule author can subscribe specifically to conversion events.
     try {
       if (
-        existing.status === "Lead" &&
-        (contact.status === "Customer" || contact.status === "Prospect") &&
+        ["Lead", "New"].includes(existing.status) &&
+        ["Customer", "Prospect", "Won", "Contacted"].includes(contact.status) &&
         existing.status !== contact.status
       ) {
         require("../lib/eventBus").emitEvent(
@@ -4174,16 +4324,19 @@ router.post("/import-csv", requireContactOrLeadWrite, async (req, res) => {
           errors.push(`Row ${rowNum}: invalid email (${email})`);
           continue;
         }
-        const status = String(row.status || "Lead").trim();
+        const submittedStatus = String(row.status || "Lead").trim();
         const allowedStatuses = isGenericCrmRequest(req)
           ? new Set(GENERIC_ACCEPTED_CONTACT_STATUSES)
           : ALLOWED_STATUSES;
-        if (!allowedStatuses.has(status)) {
+        if (!allowedStatuses.has(submittedStatus)) {
           errors.push(
-            `Row ${rowNum}: invalid status "${status}" (allowed: ${[...allowedStatuses].join(", ")})`,
+            `Row ${rowNum}: invalid status "${submittedStatus}" (allowed: ${[...allowedStatuses].join(", ")})`,
           );
           continue;
         }
+        const status = isGenericCrmRequest(req)
+          ? normalizeGenericPersistedStatus(submittedStatus)
+          : submittedStatus;
 
         // email is globally unique, so any tenant collision skips
         const existing = await prisma.contact.findFirst({ where: { email } });

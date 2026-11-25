@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Building2, LoaderCircle, Search, Trash2, X } from "lucide-react";
 import { superAdminFetch } from "../../utils/superAdminApi";
+import "./SuperAdminOrganizationDeletion.css";
 
-const ORGANIZATION_PAGE_SIZE = 50;
+const ORGANIZATION_BATCH_SIZE = 25;
 
 function normalizeConfirmationName(value) {
   return String(value ?? "").normalize("NFC").trim().replace(/\s+/gu, " ");
@@ -20,7 +21,6 @@ function organizationDetails(organization) {
 
 export default function SuperAdminOrganizationDeletion() {
   const [query, setQuery] = useState("");
-  const [offset, setOffset] = useState(0);
   const [organizations, setOrganizations] = useState([]);
   const [total, setTotal] = useState(0);
   const [selected, setSelected] = useState(null);
@@ -30,9 +30,18 @@ export default function SuperAdminOrganizationDeletion() {
   const [deleting, setDeleting] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState("");
+  const listRef = useRef(null);
+  const requestVersion = useRef(0);
+  const loadingMoreRef = useRef(false);
 
   useEffect(() => {
     const normalizedQuery = query.trim();
+    const requestId = ++requestVersion.current;
+    loadingMoreRef.current = false;
+    setLoadingMore(false);
+    setLoadMoreError("");
     if (normalizedQuery.length > 0 && normalizedQuery.length < 2 && !/^\d+$/.test(normalizedQuery)) {
       setOrganizations([]);
       setTotal(0);
@@ -45,17 +54,17 @@ export default function SuperAdminOrganizationDeletion() {
     setError("");
     const timer = window.setTimeout(async () => {
       try {
-        const params = new URLSearchParams({ limit: String(ORGANIZATION_PAGE_SIZE), offset: String(offset) });
+        const params = new URLSearchParams({ limit: String(ORGANIZATION_BATCH_SIZE), offset: "0" });
         if (normalizedQuery) params.set("q", normalizedQuery);
         const response = await superAdminFetch(`/tenant-management/organizations/search?${params.toString()}`);
-        if (current) {
+        if (current && requestId === requestVersion.current) {
           setOrganizations(Array.isArray(response?.organizations) ? response.organizations : []);
           setTotal(Number(response?.total || 0));
         }
       } catch (err) {
-        if (current) setError(err.message || "Organization search failed.");
+        if (current && requestId === requestVersion.current) setError(err.message || "Organization search failed.");
       } finally {
-        if (current) setLoading(false);
+        if (current && requestId === requestVersion.current) setLoading(false);
       }
     }, 250);
 
@@ -63,7 +72,43 @@ export default function SuperAdminOrganizationDeletion() {
       current = false;
       window.clearTimeout(timer);
     };
-  }, [offset, query]);
+  }, [query]);
+
+  const loadMoreOrganizations = async () => {
+    if (loading || loadingMoreRef.current || organizations.length >= total) return;
+    const requestId = requestVersion.current;
+    const offset = organizations.length;
+    const normalizedQuery = query.trim();
+    const params = new URLSearchParams({ limit: String(ORGANIZATION_BATCH_SIZE), offset: String(offset) });
+    if (normalizedQuery) params.set("q", normalizedQuery);
+
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    setLoadMoreError("");
+    try {
+      const response = await superAdminFetch(`/tenant-management/organizations/search?${params.toString()}`);
+      if (requestId === requestVersion.current) {
+        const nextOrganizations = Array.isArray(response?.organizations) ? response.organizations : [];
+        setOrganizations((current) => {
+          const currentIds = new Set(current.map((organization) => organization.id));
+          return [...current, ...nextOrganizations.filter((organization) => !currentIds.has(organization.id))];
+        });
+        setTotal(Number(response?.total ?? total));
+      }
+    } catch (err) {
+      if (requestId === requestVersion.current) setLoadMoreError(err.message || "Could not load more organizations.");
+    } finally {
+      if (requestId === requestVersion.current) {
+        loadingMoreRef.current = false;
+        setLoadingMore(false);
+      }
+    }
+  };
+
+  const handleListScroll = (event) => {
+    const { scrollTop, scrollHeight, clientHeight } = event.currentTarget;
+    if (scrollHeight - scrollTop - clientHeight < 120) loadMoreOrganizations();
+  };
 
   const openConfirmation = (organization) => {
     setSelected(organization);
@@ -95,7 +140,6 @@ export default function SuperAdminOrganizationDeletion() {
       setMessage(`Organization “${response.organization}” was permanently deleted. ${Number(response.deletedRowCount || 0).toLocaleString()} tenant-scoped rows were removed, along with dependent records. Audit entry #${response.auditId} was saved.`);
       setOrganizations((current) => current.filter((organization) => organization.id !== selected.id));
       setTotal((current) => Math.max(0, current - 1));
-      if (organizations.length === 1 && offset > 0) setOffset(Math.max(0, offset - ORGANIZATION_PAGE_SIZE));
       setSelected(null);
       setConfirmationName("");
       setReason("");
@@ -107,12 +151,11 @@ export default function SuperAdminOrganizationDeletion() {
   };
 
   const confirmationMatches = selected && normalizeConfirmationName(confirmationName) === normalizeConfirmationName(selected.name);
-  const listStart = total === 0 ? 0 : offset + 1;
-  const listEnd = Math.min(offset + organizations.length, total);
+  const hasMoreOrganizations = organizations.length < total;
 
   return (
-    <div style={{ display: "grid", gap: "1rem", width: "100%", minWidth: 0 }}>
-      <header>
+    <div className="super-admin-organization-deletion">
+      <header className="super-admin-organization-deletion__header">
         <h1 style={{ margin: 0, display: "flex", alignItems: "center", gap: "0.6rem" }}>
           <Trash2 size={24} color="#ef4444" /> Permanently Delete Organization
         </h1>
@@ -121,72 +164,85 @@ export default function SuperAdminOrganizationDeletion() {
         </p>
       </header>
 
-      <div role="note" className="card" style={{ padding: "1rem", display: "flex", alignItems: "flex-start", gap: "0.75rem", borderLeft: "4px solid #f59e0b" }}>
+      <div role="note" className="card super-admin-organization-deletion__warning">
         <AlertTriangle size={19} color="#f59e0b" style={{ flexShrink: 0, marginTop: 2 }} />
-        <div style={{ color: "var(--text-secondary)", fontSize: "0.9rem" }}>
+        <div>
           This cannot be undone. Financial, clinical, communication, and tenant audit records will be removed from the database. Uploaded files stored outside the database are not purged by this action. A separate platform audit record will remain. The platform default organization is protected.
         </div>
       </div>
 
-      {message && <div role="status" className="card" style={{ padding: "0.85rem 1rem", borderLeft: "4px solid #22c55e" }}>{message}</div>}
-      {error && !selected && <div role="alert" className="card" style={{ padding: "0.85rem 1rem", borderLeft: "4px solid #ef4444" }}>{error}</div>}
+      {message && <div role="status" className="card super-admin-organization-deletion__notice is-success">{message}</div>}
+      {error && !selected && <div role="alert" className="card super-admin-organization-deletion__notice is-error">{error}</div>}
 
-      <section className="card" style={{ padding: "1rem", display: "grid", gap: "0.85rem" }} aria-label="Search organizations">
-        <label htmlFor="organization-search" style={{ fontWeight: 700 }}>Find an organization</label>
-        <div style={{ position: "relative" }}>
-          <Search size={16} style={{ position: "absolute", left: 12, top: 13, color: "var(--text-secondary)" }} />
+      <section className="card super-admin-organization-deletion__workspace" aria-label="Search organizations">
+        <label htmlFor="organization-search">Find an organization</label>
+        <div className="super-admin-organization-deletion__search">
+          <Search size={17} aria-hidden="true" />
           <input
             id="organization-search"
-            className="input-field"
-            type="search"
+            className="super-admin-organization-deletion__search-input"
+            type="text"
             autoComplete="off"
             placeholder="Organization, slug, owner email, or tenant ID"
             value={query}
             onChange={(event) => {
               setQuery(event.target.value);
-              setOffset(0);
+              if (listRef.current) listRef.current.scrollTop = 0;
               setOrganizations([]);
               setTotal(0);
               setMessage("");
               setError("");
             }}
-            style={{ width: "100%", paddingLeft: "2.35rem" }}
           />
         </div>
-        {loading && <div style={{ color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 8 }}><LoaderCircle size={16} /> {query.trim() ? "Searching organizations..." : "Loading organizations..."}</div>}
-        <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "center", paddingTop: "0.25rem" }}>
-          <strong>{query.trim() ? "Search results" : "All organizations"}</strong>
-          <span style={{ color: "var(--text-secondary)", fontSize: "0.82rem" }}>{total.toLocaleString()} {total === 1 ? "organization" : "organizations"}</span>
-        </div>
-        {!loading && query.trim().length === 1 && !/^\d+$/.test(query.trim()) && <div style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>Enter 2 characters or a tenant ID to search.</div>}
-        {!loading && organizations.length === 0 && !error && <div style={{ color: "var(--text-secondary)", fontSize: "0.85rem" }}>{query.trim() ? "No organizations matched this search." : "No organizations are available."}</div>}
+        {!loading && query.trim().length === 1 && !/^\d+$/.test(query.trim()) && <div className="super-admin-organization-deletion__search-hint">Enter 2 characters or a tenant ID to search.</div>}
 
-        <div style={{ display: "grid", gap: "0.65rem" }}>
+        <div className="super-admin-organization-deletion__results" ref={listRef} onScroll={handleListScroll} role="region" aria-label="Organization results" tabIndex={0}>
+          <table className="super-admin-organization-deletion__table">
+            <thead>
+              <tr><th scope="col">Organization</th><th scope="col">Vertical</th><th scope="col">Action</th></tr>
+            </thead>
+            <tbody>
+          {loading && organizations.length === 0 && (
+            <tr><td colSpan="3"><div className="super-admin-organization-deletion__list-state" role="status"><LoaderCircle size={17} /> {query.trim() ? "Searching organizations..." : "Loading organizations..."}</div></td></tr>
+          )}
+          {!loading && organizations.length === 0 && !error && query.trim().length !== 1 && (
+            <tr><td colSpan="3"><div className="super-admin-organization-deletion__list-state">{query.trim() ? "No organizations matched this search." : "No organizations are available."}</div></td></tr>
+          )}
           {organizations.map((organization) => (
-            <article key={organization.id} style={{ padding: "0.85rem", border: "1px solid var(--border-color)", borderRadius: 10, display: "flex", gap: "1rem", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap" }}>
-              <div style={{ minWidth: 0, display: "grid", gap: "0.25rem" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700 }}><Building2 size={16} /> {organization.name}</div>
-                <div style={{ color: "var(--text-secondary)", fontSize: "0.82rem", overflowWrap: "anywhere" }}>
-                  ID {organization.id} · {organization.slug} · {organization.ownerEmail || "No owner email"} · {organization.vertical || "generic"}
+            <tr key={organization.id}>
+              <td>
+                <div className="super-admin-organization-deletion__name"><Building2 size={16} aria-hidden="true" /> {organization.name}</div>
+                <div className="super-admin-organization-deletion__details">
+                  ID {organization.id} · {organization.slug} · {organization.ownerEmail || "No owner email"}
                 </div>
-              </div>
-              {organization.id === 1 ? (
-                <span style={{ color: "var(--text-secondary)", fontSize: "0.82rem" }}>Protected platform default</span>
-              ) : (
-                <button type="button" onClick={() => openConfirmation(organization)} style={{ border: "1px solid #ef4444", background: "rgba(239,68,68,0.1)", color: "#ef4444", borderRadius: 8, padding: "0.55rem 0.8rem", display: "inline-flex", alignItems: "center", gap: 7, cursor: "pointer" }}>
-                  <Trash2 size={15} /> Delete permanently
-                </button>
-              )}
-            </article>
+              </td>
+              <td><span className="super-admin-organization-deletion__vertical">{organization.vertical || "generic"}</span></td>
+              <td>
+                {organization.id === 1 ? (
+                  <span className="super-admin-organization-deletion__protected">Protected platform default</span>
+                ) : (
+                  <button type="button" className="super-admin-organization-deletion__delete-button" onClick={() => openConfirmation(organization)}>
+                    <Trash2 size={15} /> Delete permanently
+                  </button>
+                )}
+              </td>
+            </tr>
           ))}
+          {loadingMore && <tr><td colSpan="3"><div className="super-admin-organization-deletion__list-state" role="status"><LoaderCircle size={16} /> Loading more organizations...</div></td></tr>}
+            </tbody>
+          </table>
         </div>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", borderTop: "1px solid var(--border-color)", paddingTop: "0.75rem", color: "var(--text-secondary)", fontSize: "0.82rem" }}>
-          <span>Showing {listStart}-{listEnd} of {total.toLocaleString()}</span>
-          <div style={{ display: "flex", gap: "0.55rem" }}>
-            <button type="button" className="btn-secondary" disabled={offset === 0 || loading} onClick={() => setOffset((current) => Math.max(0, current - ORGANIZATION_PAGE_SIZE))}>Previous</button>
-            <button type="button" className="btn-secondary" disabled={offset + ORGANIZATION_PAGE_SIZE >= total || loading} onClick={() => setOffset((current) => current + ORGANIZATION_PAGE_SIZE)}>Next</button>
-          </div>
-        </div>
+        <footer className="super-admin-organization-deletion__list-footer" aria-live="polite">
+          <span>Showing {organizations.length.toLocaleString()} of {total.toLocaleString()} organizations</span>
+          {loadMoreError ? (
+            <button type="button" onClick={loadMoreOrganizations} disabled={loadingMore} className="super-admin-organization-deletion__retry">Retry loading more</button>
+          ) : hasMoreOrganizations ? (
+            <span>{loadingMore ? "Loading more organizations..." : "Scroll down to load more"}</span>
+          ) : (
+            <span>All organizations loaded</span>
+          )}
+        </footer>
       </section>
 
       {selected && (

@@ -29,6 +29,15 @@ beforeEach(() => {
 });
 
 describe("SuperAdminOrganizationAuditLog", () => {
+  test("uses an auto-fitting filter grid for narrow screens", async () => {
+    render(<SuperAdminOrganizationAuditLog />);
+    await screen.findByText("Acme Billing");
+
+    const filters = screen.getByRole("region", { name: "Audit log filters" });
+    expect(filters.style.gridTemplateColumns).toContain("auto-fit");
+    expect(filters.style.gridTemplateColumns).toContain("min(100%, 220px)");
+  });
+
   test("shows the deletion actor, outcome, reason, and retained organization snapshot", async () => {
     render(<SuperAdminOrganizationAuditLog />);
 

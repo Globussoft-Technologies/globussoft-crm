@@ -587,7 +587,7 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0, errors: [] });
     expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ description: 'Called about pricing' }),
+      data: expect.objectContaining({ note: 'Called about pricing' }),
     }));
     expect(prisma.activity.create).toHaveBeenCalledTimes(2);
     expect(prisma.activity.create).toHaveBeenCalledWith(expect.objectContaining({
@@ -653,7 +653,7 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     expect(prisma.leadCustomFieldDefinition.findMany).toHaveBeenCalledWith({ where: { tenantId: 1 } });
   });
 
-  test('stores Generic CRM spreadsheet status values directly on the contact', async () => {
+  test('stores Generic CRM New as Lead while preserving other spreadsheet statuses', async () => {
     prisma.contact.findFirst.mockResolvedValue(null);
     prisma.contact.create.mockResolvedValue({ id: 101 });
 
@@ -665,7 +665,7 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ imported: 3, updated: 0, skipped: 0, errors: [] });
     expect(prisma.contact.create.mock.calls.map(([call]) => call.data.status)).toEqual([
-      'New',
+      'Lead',
       'Qualified',
       'Lost',
     ]);
@@ -686,7 +686,7 @@ describe('POST /api/csv/contacts/import.csv with XLSX', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ imported: 1, updated: 0, skipped: 0, errors: [] });
     expect(prisma.contact.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ name: 'Mapped Lead', status: 'New' }),
+        data: expect.objectContaining({ name: 'Mapped Lead', status: 'Lead' }),
     }));
   });
 

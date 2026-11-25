@@ -21,6 +21,7 @@ import {
 } from './calendar/constants';
 
 import CalendarHeader from './calendar/CalendarHeader';
+import { DashboardBackLink } from '../../components/PageHeader';
 import HolidayBanner from './calendar/HolidayBanner';
 import CalendarDayGrid from './calendar/CalendarDayGrid';
 import CalendarLegends from './calendar/CalendarLegends';
@@ -475,6 +476,7 @@ export default function CalendarGrid() {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
+      <DashboardBackLink />
       <CalendarHeader
         practitionerRoleOptions={practitionerRoleOptions}
         selectedRoleKey={selectedRoleKey}

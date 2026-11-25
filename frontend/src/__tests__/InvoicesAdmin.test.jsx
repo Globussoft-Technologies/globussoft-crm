@@ -804,13 +804,13 @@ describe('<InvoicesAdmin /> — new-invoice modal', () => {
     fireEvent.click(screen.getByRole('button', { name: /New Invoice/i }));
     fireEvent.click(screen.getByRole('button', { name: /^Trip$/i }));
     const loadMore = await screen.findByRole('button', { name: /Load more trips/i });
-    expect(screen.getByRole('option', { name: /TMC-0001/i })).toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: /TMC-0201/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/TMC-0001/i)).toBeInTheDocument();
+    expect(screen.queryByText(/TMC-0201/i)).not.toBeInTheDocument();
 
     fireEvent.click(loadMore);
 
-    expect(await screen.findByRole('option', { name: /TMC-0201.*Oldest destination/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /TMC-0001/i })).toBeInTheDocument();
+    expect(await screen.findByText(/TMC-0201.*Oldest destination/i)).toBeInTheDocument();
+    expect(screen.getByText(/TMC-0001/i)).toBeInTheDocument();
     const pageCall = fetchApiMock.mock.calls.find(([url]) => {
       if (!url.startsWith('/api/travel/trips?')) return false;
       return new URL(url, 'http://local.test').searchParams.get('offset') === '200';

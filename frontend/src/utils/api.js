@@ -243,7 +243,7 @@ export const fetchApi = async (url, options = {}) => {
     headers['X-Active-Tenant'] = String(activeTenantId);
   }
 
-  const { silent, ...fetchOpts } = options;
+  const { silent, readDeleteResponse, ...fetchOpts } = options;
 
   let response;
   try {
@@ -379,7 +379,7 @@ export const fetchApi = async (url, options = {}) => {
     throw err;
   }
 
-  if (options.method === 'DELETE' || response.status === 204) {
+  if (response.status === 204 || (options.method === 'DELETE' && !readDeleteResponse)) {
     return true;
   }
 

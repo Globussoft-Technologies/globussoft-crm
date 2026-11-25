@@ -3691,9 +3691,12 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
 
     expect(screen.queryAllByTitle('Convert to Prospect')).toHaveLength(0);
     expect(screen.queryByRole('button', { name: 'Convert Alice Smith to Prospect' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Preview Alice Smith' }));
-    const wellnessPreview = screen.getByRole('dialog', { name: 'Lead preview' });
-    expect(within(wellnessPreview).queryByRole('button', { name: 'Convert to Prospect' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Lead preview' })).not.toBeInTheDocument();
+    navigateMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'View Alice Smith' }));
+    expect(navigateMock).toHaveBeenCalledWith('/leads/11', expect.objectContaining({
+      state: expect.objectContaining({ openFullPage: true }),
+    }));
 
     wellnessRender.unmount();
     renderLeads({

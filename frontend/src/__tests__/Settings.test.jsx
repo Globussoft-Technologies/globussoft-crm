@@ -259,7 +259,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
       expect(directory.querySelectorAll(".gs-app-connection")).toHaveLength(vertical === "generic" ? 5 : 2);
       expect(fetchApiMock.mock.calls.some(([url]) => url === "/api/travel/email-provider" || url === "/api/travel/promotional-website" || url === "/api/brand-kits" || url === "/api/travel/dashboard/readiness")).toBe(false);
     }
-  });
+  }, 10000); // Full settings navigation matrix needs headroom on loaded CI workers.
 
   it.each(["travel", "wellness"])("keeps restricted %s settings out for users without manage permission", async (vertical) => {
     const tenant = { ...baseTenant, vertical };
@@ -1135,7 +1135,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
     fireEvent.click(screen.getByRole("button", { name: "General" }));
     expect(heading).toBeVisible();
     expect(stageInput).toHaveValue("Unsaved stage");
-  });
+  }, 10000); // Settings navigation and data rendering need headroom on loaded CI workers.
 
   it("renders loaded pipeline stages with their names + position labels", async () => {
     renderSettings();

@@ -81,11 +81,14 @@ export function getImportedInvoicePaymentBreakdown(invoice) {
       : [];
   const paidAmount = Number(invoice?.amountPaid);
   const breakdownTotal = breakdown.reduce((sum, item) => sum + item.amount, 0);
+  const differenceInMinorUnits = Math.abs(
+    Math.round(breakdownTotal * 100) - Math.round(paidAmount * 100),
+  );
   if (
     breakdown.length < 2 ||
     !Number.isFinite(paidAmount) ||
     paidAmount <= 0 ||
-    Math.abs(breakdownTotal - paidAmount) > 0.01
+    differenceInMinorUnits > 1
   ) {
     return [];
   }

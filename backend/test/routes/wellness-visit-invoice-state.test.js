@@ -205,8 +205,12 @@ describe('GET /api/wellness/visits — contact appointments', () => {
       orderBy: [{ visitDate: 'asc' }, { id: 'asc' }],
     }));
     expect(prisma.visit.count).toHaveBeenCalledWith(expect.objectContaining({
-      patientId: { in: [22, 23] },
-      status: { notIn: ['cancelled', 'completed', 'no-show'] },
+      where: expect.objectContaining({
+        tenantId: 1,
+        patientId: { in: [22, 23] },
+        status: { notIn: ['cancelled', 'completed', 'no-show'] },
+        visitDate: { gte: expect.any(Date) },
+      }),
     }));
   });
 });

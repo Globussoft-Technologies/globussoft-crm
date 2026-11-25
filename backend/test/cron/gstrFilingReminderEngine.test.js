@@ -52,13 +52,13 @@
  *   - server.js cron wire-in (out of scope for slice 11 — wire-in slice
  *     deferred to a follow-up).
  *   - Real Wati / Mailgun delivery path (Q9 / Q1 cred-blocked).
- *   - Inner audit-chain hash logic (audit.js has its own test file).
+ *   - writeAudit internals (covered by backend/test/lib/audit.test.js).
  *
  * Mocking strategy:
  *   Standard prisma-singleton monkey-patch via `import prisma from
  *   '../../lib/prisma.js'`. SUT module inlined via vitest.config.js's
  *   inline list. writeAuditSafe + defaultStubNotifier are self-spied via
- *   module.exports to avoid spinning a real audit-chain write + intercept
+ *   module.exports to avoid spinning a real audit write + intercept
  *   the stub log (CJS-self-mocking-seam pattern, cron-learnings entry
  *   2026-05-24 ~01:43 UTC).
  */

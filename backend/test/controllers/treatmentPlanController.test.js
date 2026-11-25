@@ -254,7 +254,7 @@ describe('treatmentPlanController.updateTreatmentPlan', () => {
       patient: { id: 100 }, service: { id: 5 } };
     prisma.treatmentPlan.findFirst.mockResolvedValue(planBefore);
     prisma.treatmentPlan.update.mockResolvedValue(planAfter);
-    writeAuditMock.mockRejectedValue(new Error('audit chain unavailable'));
+    writeAuditMock.mockRejectedValue(new Error('audit logger unavailable'));
 
     // Silence the expected console.warn so test output stays clean.
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});

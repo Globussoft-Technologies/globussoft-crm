@@ -67,8 +67,8 @@
  *     details  = { roleId, roleKey, module, action, vertical,
  *                  reason: "cleanup-foreign-perms",
  *                  invokedBy: process.env.USER }
- *   Tamper-evidence hash chain (#558) covers these rows the same way
- *   it covers UI-driven permission edits — no special-casing.
+ *   These rows use the same audit log as UI-driven permission edits — no
+ *   special-casing.
  *
  * Reversibility:
  *   --apply DELETES rows. Reversal requires:
@@ -301,13 +301,11 @@ async function applyCleanup(args, report) {
 
         await prisma.$transaction(async (tx) => {
           await tx.rolePermission.delete({ where: { id: row.id } });
-          // Note: writeAudit uses the module-level prisma client, not
-          // the transaction client. The hash-chain helper isn't TX-
-          // aware in this codebase. We accept the small risk that a
+          // Note: writeAudit uses the module-level Prisma client, not
+          // the transaction client. We accept the small risk that a
           // crash between delete + audit leaves an unaudited delete
           // (better than the reverse — an audit pointing at a row
-          // that still exists). If the chain reports tamper after a
-          // bulk run, re-run audit-integrityEngine.js to backfill.
+          // that still exists).
           await writeAudit(
             'Role',
             'STRIP_FOREIGN_PERM',

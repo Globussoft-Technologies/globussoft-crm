@@ -352,7 +352,7 @@ router.post("/leads", perIpLimiter, voyagrAuth, perKeyLimiter, async (req, res) 
 
     // 6. Audit log — include the API key's `name` for forensic
     //    attribution (which key issued which lead). writeAudit is
-    //    fail-soft so a hash-chain glitch doesn't 500 the request.
+    //    fail-soft so an audit write failure doesn't 500 the request.
     await writeAudit(
       "Contact",
       "voyagr.lead.captured",

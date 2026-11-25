@@ -90,8 +90,6 @@ function fakeAuditRow({ id, at, tenantId = 1, report }) {
     details: typeof report === "string" ? report : JSON.stringify(report),
     createdAt: at !== undefined ? at : new Date("2026-05-20T10:00:00Z"),
     tenantId,
-    prevHash: null,
-    hash: null,
     userId: null,
   };
 }

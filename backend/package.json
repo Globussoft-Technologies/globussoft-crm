@@ -17,7 +17,6 @@
     "lint:fix": "eslint . --fix",
     "lint:strict": "eslint lib middleware services utils test --max-warnings 0",
     "audit:check": "node scripts/check-audit.js",
-    "audit:verify": "node scripts/verify-audit-chain.js",
     "db:sync": "node scripts/sync-schema.js",
     "db:sync:check": "node scripts/sync-schema.js --check"
   },

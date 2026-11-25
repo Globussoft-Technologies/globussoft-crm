@@ -62,8 +62,40 @@ describe("POST /api/portal/tmc/staff/trips/:tripId/parent-link", () => {
     }));
     expect(prisma.tmcTrip.findFirst).toHaveBeenCalledWith({
       where: { id: 12, tenantId: 1 },
-      select: { id: true, tripCode: true, destination: true, teacherContactId: true },
+      select: {
+        id: true,
+        tripCode: true,
+        destination: true,
+        teacherContactId: true,
+        teacherAssignments: {
+          orderBy: { id: "asc" },
+          select: { teacherContactId: true },
+        },
+      },
     });
+  });
+
+  test("uses an assigned co-teacher when the legacy lead teacher has been removed", async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 12,
+      tripCode: "MYSORE-2026",
+      destination: "Mysore",
+      teacherContactId: null,
+      teacherAssignments: [{ teacherContactId: 45 }],
+    });
+
+    const response = await request(makeApp())
+      .post("/api/portal/tmc/staff/trips/12/parent-link")
+      .set("Authorization", `Bearer ${staffToken()}`)
+      .set("Host", "crm.example.test");
+
+    expect(response.status).toBe(200);
+    expect(response.body.link).toBe(buildTmcParentRegistrationUrl({
+      tenantId: 1,
+      teacherContactId: 45,
+      tripId: 12,
+      baseUrl: process.env.FRONTEND_URL || "http://crm.example.test",
+    }));
   });
 
   test("MANAGER cannot generate a parent link", async () => {

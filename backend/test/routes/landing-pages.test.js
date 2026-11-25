@@ -2382,7 +2382,10 @@ describe('POST /p/:slug/registration-draft', () => {
     prisma.landingPage.findFirst.mockResolvedValue(wanderluxPaymentPage({ subBrand: 'tmc' }));
     prisma.tripParticipant.findFirst.mockResolvedValue({ id: 77, parentEmail: 'deepak@replyloop.com' });
     prisma.contact.findFirst.mockResolvedValue({ portalRole: 'CUSTOMER', subBrand: 'tmc', portalPasswordHash: null });
-    prisma.tmcTrip.findFirst.mockResolvedValue({ teacherContactId: 101 });
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      teacherContactId: null,
+      teacherAssignments: [{ teacherContactId: 101 }],
+    });
 
     const res = await request(makeApp()).post('/p/australia-2026/registration-draft')
       .send({ fields: { student_name: 'Deepu', email: 'deepak@replyloop.com' } });

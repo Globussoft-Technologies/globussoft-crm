@@ -976,9 +976,9 @@ export default function WhatsAppThreads({ transport = 'web', showThreadList = fa
       let deleted = 0;
       for (let i = 0; i < numericIds.length; i += 100) {
         const chunk = numericIds.slice(i, i + 100);
-        // Sequential on purpose: each chunk is one transaction plus a run of
-        // chained audit writes, so firing them concurrently would contend on
-        // the same rows for no wall-clock win.
+        // Sequential on purpose: each chunk is one transaction and writes
+        // audit events in order, so concurrent requests would add contention
+        // without a wall-clock win.
         const resp = await fetchApi('/api/whatsapp/threads/bulk-delete', {
           method: 'POST',
           body: JSON.stringify({ ids: chunk }),

@@ -59,7 +59,7 @@ beforeAll(() => {
   prisma.itinerary = { findMany: vi.fn() };
   prisma.webCheckinAutomationRun = { create: vi.fn() };
   prisma.notification = { findFirst: vi.fn(), create: vi.fn() };
-  // writeAudit() chains off the latest audit row then creates a new one.
+  // writeAudit() appends an audit row for the event.
   prisma.auditLog = { findFirst: vi.fn(), create: vi.fn() };
 });
 

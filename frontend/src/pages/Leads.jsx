@@ -2965,6 +2965,7 @@ const Leads = ({ initialListState = null } = {}) => {
   const { activeSubBrand } = useActiveSubBrand();
   // Callified AI calling is only available in the generic CRM vertical.
   const isGeneric = !isWellness && !isTravel;
+  const includesAllCrmStatuses = isGeneric || isWellness;
   const usesSplitLeadTableLayout = isGeneric || isTravel || isWellness;
   const [drillParams, setDrillParams] = useSearchParams();
   const focusedCallifiedLeadId = isGeneric
@@ -4383,8 +4384,10 @@ const Leads = ({ initialListState = null } = {}) => {
     const genericFilterQs = isGeneric
       ? `${effectiveNameStartsWith ? `&nameStartsWith=${encodeURIComponent(effectiveNameStartsWith)}` : ""}${effectiveSourceFilter ? `&leadSource=${encodeURIComponent(effectiveSourceFilter)}` : ""}${effectiveCampaignFilter ? `&callifiedCampaignId=${encodeURIComponent(effectiveCampaignFilter)}` : ""}${effectiveLeadStatusFilter ? `&callifiedLeadStatus=${encodeURIComponent(effectiveLeadStatusFilter)}` : ""}${effectiveAssigneeFilter === "unassigned" ? "&unassigned=true" : effectiveAssigneeFilter ? `&assignedToId=${encodeURIComponent(effectiveAssigneeFilter)}` : ""}${effectiveScoreMin !== "" ? `&scoreMin=${encodeURIComponent(effectiveScoreMin)}` : ""}${effectiveScoreMax !== "" ? `&scoreMax=${encodeURIComponent(effectiveScoreMax)}` : ""}`
       : "";
-    // Keep Generic CRM rows visible after an inline CRM Status change.
-    const crmStatusQs = isGeneric ? "&includeCrmStatuses=true" : "";
+    // Keep converted contacts visible in Generic and Wellness Leads views.
+    const crmStatusQs = includesAllCrmStatuses
+      ? "&includeCrmStatuses=true"
+      : "";
     return `${genericSearchQs}${campaignSearchQs}${genericFilterQs}${filtersQs}${crmStatusQs}`;
   };
 
@@ -11249,9 +11252,9 @@ const Leads = ({ initialListState = null } = {}) => {
             </div>
 
             <FilterPanel
-              fieldsUrl={isGeneric ? "/api/contacts/filter-fields" : "/api/contacts/filter-fields?status=Lead"}
+              fieldsUrl={includesAllCrmStatuses ? "/api/contacts/filter-fields" : "/api/contacts/filter-fields?status=Lead"}
               valuesUrl={(field) =>
-                isGeneric
+                includesAllCrmStatuses
                   ? `/api/contacts/filter-values/${field}?includeCrmStatuses=true`
                   : `/api/contacts/filter-values/${field}?status=Lead`
               }
@@ -14759,9 +14762,9 @@ const Leads = ({ initialListState = null } = {}) => {
           )}
         {headerFilterRequest && (
           <FilterPanel
-            fieldsUrl={isGeneric ? "/api/contacts/filter-fields" : "/api/contacts/filter-fields?status=Lead"}
+            fieldsUrl={includesAllCrmStatuses ? "/api/contacts/filter-fields" : "/api/contacts/filter-fields?status=Lead"}
             valuesUrl={(field) =>
-              isGeneric
+              includesAllCrmStatuses
                 ? `/api/contacts/filter-values/${field}?includeCrmStatuses=true`
                 : `/api/contacts/filter-values/${field}?status=Lead`
             }

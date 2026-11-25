@@ -93,7 +93,7 @@ Zylu's salon CRM ships ATT-004 as TWO tables + ONE per-location adapter pattern 
 - `backend/routes/attendance.js:1-793` — existing routes (extended per FR-3.4)
 - `backend/routes/attendance.js:643` — existing `/biometric/webhook` (extended per FR-3.4.a with IP-allowlist + idempotency)
 - `backend/lib/fieldEncryption.js` — existing AES-256-GCM helper (wired in for `BiometricDevice.apiKey` per FR-3.2 + NFR-4.2)
-- `backend/lib/audit.js` `writeAudit()` — existing tamper-evident chain; new `ATTENDANCE_*` event family flows through unchanged
+- `backend/lib/audit.js` `writeAudit()` — records the new `ATTENDANCE_*` event family in the tenant audit log
 - ESSL India developer docs — pending Yasin's outreach (per §5 cred chase)
 - Realtime India developer docs — pending Yasin's outreach
 - `PRD_STAFF_DETAIL.md` (D15) — `EmployeeProfile.biometricDeviceUserId` is the canonical location for the per-user device-local-id; this PRD's FR-3.3 adds a denormalised `User.biometricDeviceUserId` mirror IF the EmployeeProfile model doesn't land first (see DD-5.7)
@@ -120,7 +120,7 @@ This PRD's slice 1 ships the `AttendanceEvent` model + the mobile-checkin endpoi
 
 2. **Sales rep uses mobile PWA to punch in from field — geofence verifies location matches assigned territory.** Sales rep Priya is assigned to territoryId=4 (Bangalore South) which maps to Location 1 (Enhanced Wellness Bangalore) with `latitude=12.9716, longitude=77.5946, geofenceRadiusM=200`. She opens the mobile PWA at `/m/attendance` on her phone at 09:15 AM, taps CHECK_IN. Browser geolocation returns `{lat: 12.9719, lng: 77.5948, accuracyM: 12}`. PWA POSTs to `/api/attendance/mobile-checkin` with `{type: CHECK_IN, latitude, longitude, accuracyM, eventAt}` + JWT. Backend: `haversine(12.9719/77.5948, 12.9716/77.5946) = 35m <= 200m radius ✓`; `accuracyM 12 <= 100m threshold ✓`. Creates `AttendanceEvent` row with `source: MOBILE` + geo blob. Returns 200 `{eventId, attendanceRollup: {firstIn: 09:15, totalMinutes: 0}}`. If Priya instead tried from her home 5km away (`haversine = 5012m > 200m`), backend returns 403 `{error: "GEOFENCE_FAIL", code: "OUTSIDE_RADIUS", distance: 5012}` + writes audit `ATTENDANCE_GEOFENCE_FAIL` (high-signal event for the security review).
 
-3. **Manager manually punches in for an absent staff (e.g. forgot to scan) — source=manual flagged in audit + payroll-grade attestation.** Receptionist Sunita scanned in at 09:00 but the ESSL device's offline-cache lost her 14:00-return-from-lunch event due to a network hiccup. Manager Rishu notices the missing scan at 17:00 + opens `/wellness/attendance/manager` admin view → clicks "Add manual event for Sunita" → enters `{type: CHECK_IN, eventAt: 2026-05-25T14:00, manualReason: "Device offline cache loss; staff confirmed return time verbally"}`. Frontend POSTs `/api/attendance/manual-checkin` `{targetUserId: sunitaId, type, eventAt, manualReason}` with manager's JWT. Backend: verifyRole(MANAGER/ADMIN) ✓; creates `AttendanceEvent` `{userId: sunitaId, type: CHECK_IN, eventAt, source: MANUAL, manualReason, createdByUserId: rishuId}` + writes audit `ATTENDANCE_MANUAL_OVERRIDE {managerId: rishuId, targetUserId: sunitaId, manualReason, type, eventAt}`. The audit row is the payroll-grade attestation — if Sunita disputes the time later, Rishu's identity + reason are immutably chained.
+3. **Manager manually punches in for an absent staff (e.g. forgot to scan) — source=manual flagged in audit + payroll-grade attestation.** Receptionist Sunita scanned in at 09:00 but the ESSL device's offline-cache lost her 14:00-return-from-lunch event due to a network hiccup. Manager Rishu notices the missing scan at 17:00 + opens `/wellness/attendance/manager` admin view → clicks "Add manual event for Sunita" → enters `{type: CHECK_IN, eventAt: 2026-05-25T14:00, manualReason: "Device offline cache loss; staff confirmed return time verbally"}`. Frontend POSTs `/api/attendance/manual-checkin` `{targetUserId: sunitaId, type, eventAt, manualReason}` with manager's JWT. Backend: verifyRole(MANAGER/ADMIN) ✓; creates `AttendanceEvent` `{userId: sunitaId, type: CHECK_IN, eventAt, source: MANUAL, manualReason, createdByUserId: rishuId}` + writes audit `ATTENDANCE_MANUAL_OVERRIDE {managerId: rishuId, targetUserId: sunitaId, manualReason, type, eventAt}`. The audit row records the payroll attestation, including Rishu's identity and reason.
 
 4. **Operations report: who punched in late this week, broken down by source.** Operations head Aanya opens `/wellness/attendance/reports` and selects "Last 7 days, by source." Frontend fetches `GET /api/attendance/events?from=2026-05-18&to=2026-05-25&groupBy=source`. Backend rolls up the AttendanceEvent stream into per-user-per-day counts: `{user: 'Dr Harsh', biometric: 6, manual: 0, mobile: 0, lateDays: 1, ...}, {user: 'Priya', biometric: 0, manual: 1, mobile: 5, lateDays: 2, ...}`. Renders a stacked bar chart per user (biometric / manual / mobile coloured segments). Operationally surfaces "Priya is field-deployed via mobile 5 days; Sunita has 2 manual overrides this week (investigate why the device isn't catching her)."
 
@@ -288,7 +288,7 @@ model Location {
 
 ### FR-3.7 Audit log — additive event vocab
 
-The existing `lib/audit.js` `writeAudit()` chain accepts any new entity vocab without code change (per CLAUDE.md auditing posture). New events:
+The existing `lib/audit.js` `writeAudit()` helper accepts any new event vocabulary without code changes. New events:
 
 - `ATTENDANCE_CHECK_IN { eventId, userId, source, locationId?, biometricDeviceId? }`
 - `ATTENDANCE_CHECK_OUT { eventId, userId, source, ...same shape }`
@@ -457,7 +457,7 @@ Default `geofenceAccuracyThresholdM = 100`. Operators with weak GPS (e.g. indoor
 - `Location` model (additive geofence columns per FR-3.5)
 - `LeavePolicy` + `LeaveBalance` + `LeaveRequest` models — read-only dependency (the `/summary` endpoint joins leave data to mark holiday/leave days; preserved unchanged)
 - `lib/fieldEncryption.js` — wired for BiometricDevice.apiKey encryption per NFR-4.2
-- `lib/audit.js` `writeAudit()` — existing tamper-evident chain; new event vocab additive
+- `lib/audit.js` `writeAudit()` — records new event vocab in the tenant audit log
 - `lib/validateDateRange.js` — existing inverted-date-range guard (preserved for new endpoints)
 - `middleware/auth.js` `verifyToken` + `verifyRole(['ADMIN', 'MANAGER'])` — existing
 - `middleware/stripDangerous` — note: the new `manual-checkin` route uses `targetUserId` NOT `userId` body param (stripDangerous strips `userId`)

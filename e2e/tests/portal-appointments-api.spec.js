@@ -47,7 +47,7 @@
  */
 const { test, expect } = require('@playwright/test');
 
-// Hash-chain'd visit history + interleaved create/reschedule/cancel calls
+// Shared visit-history rows + interleaved create/reschedule/cancel calls
 // must run sequentially or shared-resource collisions (slot conflicts on
 // the same doctor / hour) will flake under shard load.
 test.describe.configure({ mode: 'serial', timeout: 120_000 });

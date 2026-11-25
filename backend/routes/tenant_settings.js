@@ -471,7 +471,7 @@ router.get("/:key", verifyToken, async (req, res) => {
 // ─── PUT /:key — upsert (ADMIN only) ──────────────────────────────────
 //
 // Body: { value, category? }. Validates `key` against the helper's KEYS
-// allowlist. Audit writes capture { key, oldValue, newValue } so a chain
+// allowlist. Audit writes capture { key, oldValue, newValue } for history
 // reader can see exactly what changed.
 router.put("/:key", verifyToken, verifyRole(["ADMIN"]), async (req, res) => {
   try {

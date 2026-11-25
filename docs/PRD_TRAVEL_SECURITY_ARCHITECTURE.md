@@ -205,7 +205,7 @@ None external. All security infrastructure is in-house.
 - **Existing config.** [backend/config/secrets.js](../backend/config/secrets.js) — JWT_SECRET centralization (P1.3 land).
 - **Existing tenantWhere helpers.** Spread across many route files; canonicalize to a shared lib in FR-3.4.
 - **Existing fieldFilter middleware.** [backend/middleware/fieldFilter.js](../backend/middleware/fieldFilter.js) — extends in FR-3.5.d.
-- **Existing audit log infrastructure.** AuditLog model + auditIntegrityEngine + writeAudit helper — extends in FR-3.7.
+- **Existing audit log infrastructure.** AuditLog model + writeAudit helper — extends in FR-3.7.
 - **Existing migration-check gate.** [.github/workflows/deploy.yml](../.github/workflows/deploy.yml) migration_check job — FR-3.3 publicId backfill goes through this gate with [allow-unique] bless marker.
 - **Frontend AuthContext.** [frontend/src/App.jsx](../frontend/src/App.jsx) — needs the cold-start `/api/auth/me` flip for FR-3.1.d.
 - **Existing external API auth.** [backend/middleware/externalAuth.js](../backend/middleware/externalAuth.js) — X-API-Key based; OUTSIDE the scope of this PRD (operator session auth only).

@@ -99,7 +99,7 @@ router.post("/send", verifyToken, pushSendLimiter, async (req, res) => {
 // a first-class endpoint:
 //   1. localStorage.user is a soft contract — any change to the auth-
 //      storage shape silently broke the test-push button.
-//   2. Audit-trail integrity — test sends are tagged type="TEST" so they
+//   2. Audit-trail accuracy — test sends are tagged type="TEST" so they
 //      don't conflate with INTERNAL/MARKETING in the PushNotification
 //      table.
 //   3. Allows future test-specific rate-limiting + role gating without

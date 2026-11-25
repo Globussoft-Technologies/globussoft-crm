@@ -2543,6 +2543,45 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     )).toBe(true);
   });
 
+  it('loads converted Wellness customer contacts in the Leads list', async () => {
+    const customer = {
+      ...SAMPLE_LEADS[0],
+      id: 71,
+      name: 'Existing Wellness Customer',
+      status: 'Customer',
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (
+        typeof url === 'string' &&
+        url.startsWith('/api/contacts?status=Lead') &&
+        !opts
+      ) {
+        return Promise.resolve({
+          data: [customer],
+          total: 1,
+          page: 1,
+          limit: 500,
+          totalPages: 1,
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads({
+      ...ADMIN_AUTH,
+      tenant: { id: 3, vertical: 'wellness', name: 'Enhanced Wellness' },
+    });
+
+    await screen.findByText('Existing Wellness Customer');
+    const listRequest = fetchApiMock.mock.calls.find(([url, opts]) =>
+      typeof url === 'string' &&
+      url.startsWith('/api/contacts?status=Lead') &&
+      !opts,
+    );
+    expect(listRequest).toBeDefined();
+    expect(new URL(listRequest[0], 'http://crm.test').searchParams.get('includeCrmStatuses')).toBe('true');
+  });
+
   it('restores the Generic CRM page from the URL after a list remount', async () => {
     const rows = Array.from({ length: 20 }, (_, index) => ({
       ...SAMPLE_LEADS[index % SAMPLE_LEADS.length],
@@ -3184,9 +3223,9 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
     expect(within(dialog).queryByRole('button', { name: 'Territory' })).toBeNull();
   });
 
-  it('limits Wellness Filter By to fields that are columns in the Wellness Leads table', async () => {
+  it('keeps Wellness Filter By aligned to the visible Leads columns', async () => {
     fetchApiMock.mockImplementation((url, opts) => {
-      if (url === '/api/contacts/filter-fields?status=Lead' && opts?.silent === true) {
+      if (url === '/api/contacts/filter-fields' && opts?.silent === true) {
         return Promise.resolve({
           fields: [
             { field: 'name', label: 'Name', kind: 'text' },

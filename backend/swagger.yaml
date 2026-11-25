@@ -3026,9 +3026,7 @@ paths:
   /audit:
     get:
       summary: List audit-log entries
-      description: |
-        Tamper-evident hash-chain audit log. `integrityVerified` and
-        `unhashedRows` are reported by `GET /audit/verify`.
+      description: Tenant-scoped audit history for administrators.
       tags: [Admin & Platform]
       parameters:
         - $ref: "#/components/parameters/Page"
@@ -3047,28 +3045,6 @@ paths:
           schema: { type: string, format: date-time }
       responses:
         "200": { description: Audit rows. }
-  /audit/verify:
-    get:
-      summary: Verify the audit hash-chain integrity
-      tags: [Admin & Platform]
-      responses:
-        "200":
-          description: Integrity result.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  integrityVerified: { type: boolean }
-                  unhashedRows: { type: integer }
-                  brokenAt: { type: integer, nullable: true }
-                  reason: { type: string, nullable: true }
-  /audit/backfill:
-    post:
-      summary: Backfill missing hash-chain rows (ADMIN)
-      tags: [Admin & Platform]
-      responses:
-        "200": { description: Backfill complete. }
   /gdpr/export:
     post:
       summary: Export all personal data for a contact / patient (GDPR DSAR)
@@ -3087,7 +3063,7 @@ paths:
   /gdpr/delete:
     post:
       summary: Hard-delete personal data after a DSAR request
-      description: Step-up auth required. Cascades through audit chain + maintains hash integrity.
+      description: Step-up auth required for the requested personal-data deletion.
       tags: [Admin & Platform]
       responses:
         "200": { description: Deletion complete. }
@@ -3174,7 +3150,6 @@ paths:
                     - low_stock
                     - leave_policy
                     - demo_hygiene
-                    - audit_integrity
                 confirmDestructive:
                   type: boolean
                   description: Required for `retention` + `demo_hygiene` engines (data-destroying).
@@ -6884,8 +6859,6 @@ paths:
       description: |
         Read-only viewer over `AuditLog` rows. Supports `?entity=`,
         `?entityId=`, `?action=`, `?userId=`, `?from=`, `?to=`, paging.
-        Each row carries `prevHash`/`hash` for the audit-integrity chain
-        (verified daily by `auditIntegrityEngine`).
       tags: [Admin & Platform]
       parameters:
         - { $ref: "#/components/parameters/Page" }

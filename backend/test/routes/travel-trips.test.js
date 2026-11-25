@@ -105,6 +105,10 @@ prisma.tmcTrip = {
   update: vi.fn(),
   delete: vi.fn(),
 };
+prisma.tmcTripTeacherAssignment = {
+  deleteMany: vi.fn(),
+  createMany: vi.fn(),
+};
 prisma.tripParticipant = {
   findFirst: vi.fn(),
   findMany: vi.fn(),
@@ -229,6 +233,8 @@ beforeEach(() => {
   prisma.tmcTrip.create.mockReset();
   prisma.tmcTrip.update.mockReset();
   prisma.tmcTrip.delete.mockReset();
+  prisma.tmcTripTeacherAssignment.deleteMany.mockReset();
+  prisma.tmcTripTeacherAssignment.createMany.mockReset();
   prisma.tripParticipant.findFirst.mockReset();
   prisma.tripParticipant.findMany.mockReset().mockResolvedValue([]);
   prisma.tripParticipant.create.mockReset();
@@ -338,6 +344,22 @@ describe('GET /api/travel/trips', () => {
       tenantId: 1,
       status: 'confirmed',
       schoolContactId: 42,
+    });
+  });
+
+  test('?contactId includes trips where the contact is a co-teacher', async () => {
+    prisma.contact.findFirst.mockResolvedValue({ id: 77, email: null });
+    prisma.tmcTrip.findMany.mockResolvedValue([]);
+    prisma.tmcTrip.count.mockResolvedValue(0);
+
+    await request(makeApp())
+      .get('/api/travel/trips?contactId=77')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    const { where } = prisma.tmcTrip.findMany.mock.calls[0][0];
+    expect(where.tenantId).toBe(1);
+    expect(where.OR).toContainEqual({
+      teacherAssignments: { some: { tenantId: 1, teacherContactId: 77 } },
     });
   });
 
@@ -886,6 +908,106 @@ describe('PATCH /api/travel/trips/:id', () => {
         data: expect.objectContaining({ destination: 'Bali Updated' }),
       }),
     );
+  });
+
+  test('assigns multiple active TMC teachers atomically and keeps the first as lead', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100,
+      status: 'confirmed',
+      driveFolderId: 'stub-folder-x',
+      tripCode: 'bali2026',
+      destination: 'Bali',
+      teacherContactId: 21,
+      teacherAssignments: [{ teacherContactId: 21 }],
+      departDate: new Date('2026-09-15'),
+    });
+    prisma.contact.findMany.mockResolvedValue([{ id: 21 }, { id: 22 }]);
+    prisma.tmcTrip.update.mockResolvedValue({ id: 100, teacherContactId: 21 });
+
+    const res = await request(makeApp())
+      .patch('/api/travel/trips/100')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ teacherContactIds: [21, 22, 22] });
+
+    expect(res.status).toBe(200);
+    expect(prisma.contact.findMany).toHaveBeenCalledWith({
+      where: {
+        id: { in: [21, 22] },
+        tenantId: 1,
+        subBrand: 'tmc',
+        portalRole: 'TEACHER',
+        deletedAt: null,
+      },
+      select: { id: true },
+    });
+    expect(prisma.tmcTrip.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 100 },
+      data: expect.objectContaining({ teacherContactId: 21 }),
+    }));
+    expect(prisma.tmcTripTeacherAssignment.deleteMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, tripId: 100 },
+    });
+    expect(prisma.tmcTripTeacherAssignment.createMany).toHaveBeenCalledWith({
+      data: [
+        { tenantId: 1, tripId: 100, teacherContactId: 21 },
+        { tenantId: 1, tripId: 100, teacherContactId: 22 },
+      ],
+    });
+  });
+
+  test('legacy teacherContactId updates still create a single join assignment', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100, status: 'confirmed' });
+    prisma.contact.findMany.mockResolvedValue([{ id: 22 }]);
+    prisma.tmcTrip.update.mockResolvedValue({ id: 100, teacherContactId: 22 });
+
+    const res = await request(makeApp())
+      .patch('/api/travel/trips/100')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ teacherContactId: 22 });
+
+    expect(res.status).toBe(200);
+    expect(prisma.tmcTripTeacherAssignment.createMany).toHaveBeenCalledWith({
+      data: [{ tenantId: 1, tripId: 100, teacherContactId: 22 }],
+    });
+  });
+
+  test('rejects the whole assignment when any selected contact is not an active TMC teacher', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100, status: 'confirmed' });
+    prisma.contact.findMany.mockResolvedValue([{ id: 21 }]);
+
+    const res = await request(makeApp())
+      .patch('/api/travel/trips/100')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ teacherContactIds: [21, 22] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_TMC_TEACHER');
+    expect(prisma.tmcTrip.update).not.toHaveBeenCalled();
+    expect(prisma.tmcTripTeacherAssignment.deleteMany).not.toHaveBeenCalled();
+  });
+
+  test('empty teacherContactIds clears all assignments and the legacy lead teacher', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100,
+      status: 'confirmed',
+      teacherContactId: 21,
+      teacherAssignments: [{ teacherContactId: 21 }],
+    });
+    prisma.tmcTrip.update.mockResolvedValue({ id: 100, teacherContactId: null });
+
+    const res = await request(makeApp())
+      .patch('/api/travel/trips/100')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ teacherContactIds: [] });
+
+    expect(res.status).toBe(200);
+    expect(prisma.tmcTrip.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ teacherContactId: null }),
+    }));
+    expect(prisma.tmcTripTeacherAssignment.deleteMany).toHaveBeenCalledWith({
+      where: { tenantId: 1, tripId: 100 },
+    });
+    expect(prisma.tmcTripTeacherAssignment.createMany).not.toHaveBeenCalled();
   });
 
   test('empty body returns 400 EMPTY_BODY (no update)', async () => {

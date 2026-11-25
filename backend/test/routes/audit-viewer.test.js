@@ -45,6 +45,9 @@ prisma.auditLog = {
 prisma.user = prisma.user || {};
 prisma.user.findUnique = vi.fn().mockResolvedValue(null);
 prisma.user.findMany = vi.fn().mockResolvedValue([]);
+prisma.user.findFirst = vi.fn().mockResolvedValue(null);
+prisma.tenant = prisma.tenant || {};
+prisma.tenant.findUnique = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -85,6 +88,15 @@ beforeEach(() => {
   prisma.auditLog.count.mockReset();
   prisma.auditLog.findMany.mockResolvedValue([]);
   prisma.auditLog.count.mockResolvedValue(0);
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
+  prisma.user.findUnique.mockReset().mockResolvedValue({ id: 1, tenantId: 1, timezone: null });
+  prisma.user.findMany.mockReset().mockResolvedValue([]);
+  prisma.user.findFirst.mockReset().mockResolvedValue({
+    id: 1,
+    tenantId: 1,
+    timezone: null,
+    tenant: { vertical: 'generic' },
+  });
 });
 
 describe('audit_viewer RBAC — #621 ADMIN-only', () => {
@@ -143,6 +155,17 @@ describe('audit_viewer RBAC — #621 ADMIN-only', () => {
     expect(Array.isArray(res.body.logs)).toBe(true);
     expect(prisma.auditLog.findMany).toHaveBeenCalled();
   });
+
+  test('GET / fails closed when the tenant has no valid vertical', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce(null);
+    const app = makeApp();
+    const res = await request(app)
+      .get('/api/audit-viewer')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe('AUDIT_SCOPE_INVALID');
+    expect(prisma.auditLog.findMany).not.toHaveBeenCalled();
+  });
 });
 
 describe('audit_viewer deletion statistics', () => {
@@ -173,6 +196,12 @@ describe('audit_viewer deletion statistics', () => {
         UPDATE: 5,
       },
     });
+    for (const call of prisma.auditLog.groupBy.mock.calls) {
+      expect(call[0].where).toMatchObject({
+        tenantId: 1,
+        tenant: { is: { vertical: 'generic' } },
+      });
+    }
   });
 });
 
@@ -273,7 +302,13 @@ describe('audit_viewer query semantics + CSV contract', () => {
     expect(res.body.limit).toBe(200);
   });
 
-  test('GET / sorts createdAt desc and includes user name+email', async () => {
+  test('GET / sorts createdAt desc and hydrates only tenant-scoped user details', async () => {
+    prisma.auditLog.findMany.mockResolvedValueOnce([
+      { id: 1, userId: 7, action: 'CREATE', entity: 'Deal', entityId: 100, createdAt: new Date(), details: null },
+    ]);
+    prisma.user.findMany.mockResolvedValueOnce([
+      { id: 7, name: 'Tenant Admin', email: 'admin@test.local', tenantId: 1, tenant: { vertical: 'generic' } },
+    ]);
     const app = makeApp();
     const res = await request(app)
       .get('/api/audit-viewer')
@@ -281,9 +316,50 @@ describe('audit_viewer query semantics + CSV contract', () => {
     expect(res.status).toBe(200);
     const call = prisma.auditLog.findMany.mock.calls[0][0];
     expect(call.orderBy).toEqual({ createdAt: 'desc' });
-    expect(call.include).toEqual({
-      user: { select: { id: true, name: true, email: true } },
+    expect(call.include).toBeUndefined();
+    expect(call.where).toMatchObject({
+      tenantId: 1,
+      tenant: { is: { vertical: 'generic' } },
     });
+    expect(prisma.user.findMany).toHaveBeenCalledWith({
+      where: {
+        id: { in: [7] },
+        tenantId: 1,
+        tenant: { is: { vertical: 'generic' } },
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        tenantId: true,
+        tenant: { select: { vertical: true } },
+      },
+    });
+    expect(prisma.user.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 1,
+        tenantId: 1,
+        tenant: { is: { vertical: 'generic' } },
+      },
+      select: { timezone: true, tenantId: true, tenant: { select: { vertical: true } } },
+    });
+    expect(res.body.logs[0].user).toEqual({ id: 7, name: 'Tenant Admin', email: 'admin@test.local' });
+  });
+
+  test('GET / hides an actor returned from a different tenant or vertical', async () => {
+    prisma.auditLog.findMany.mockResolvedValueOnce([
+      { id: 1, userId: 99, action: 'LOGIN', entity: 'Auth', entityId: null, createdAt: new Date(), details: null },
+    ]);
+    prisma.user.findMany.mockResolvedValueOnce([
+      { id: 99, name: 'Wellness Staff', email: 'staff@wellness.test', tenantId: 2, tenant: { vertical: 'wellness' } },
+    ]);
+    const app = makeApp();
+    const res = await request(app)
+      .get('/api/audit-viewer')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(200);
+    expect(res.body.logs[0].user).toBeNull();
+    expect(res.body.logs[0].userId).toBeNull();
   });
 
   test('GET / always scopes prisma where.tenantId to caller (tenant isolation)', async () => {
@@ -310,8 +386,11 @@ describe('audit_viewer query semantics + CSV contract', () => {
         entity: 'Deal',
         entityId: 100,
         details: 'created',
-        user: { name: 'Alice', email: 'alice@test.local' },
+        userId: 5,
       },
+    ]);
+    prisma.user.findMany.mockResolvedValueOnce([
+      { id: 5, name: 'Alice', email: 'alice@test.local', tenantId: 1, tenant: { vertical: 'generic' } },
     ]);
     const app = makeApp();
     const res = await request(app)
@@ -337,8 +416,11 @@ describe('audit_viewer query semantics + CSV contract', () => {
         // All three CSV-dangerous characters in the same field:
         //   comma → needs quoting; quote → needs doubling; newline → needs quoting.
         details: 'a,b "c" d\nnext line',
-        user: { name: 'Bob, Jr.', email: 'bob@test.local' },
+        userId: 6,
       },
+    ]);
+    prisma.user.findMany.mockResolvedValueOnce([
+      { id: 6, name: 'Bob, Jr.', email: 'bob@test.local', tenantId: 1, tenant: { vertical: 'generic' } },
     ]);
     const app = makeApp();
     const res = await request(app)
@@ -368,42 +450,35 @@ describe('audit_viewer query semantics + CSV contract', () => {
  * #920 slice 24 — `?fields=summary` slim-shape opt-in.
  *
  * Audit rows carry heavy `details` JSON (often PII diffs of CREATE/UPDATE
- * payloads) plus hash-chain bookkeeping (`prevHash`/`hash`) that's
- * forensically essential for the integrity verifier but irrelevant to a
- * paginated list view. The slim shape drops those + the nested user
+ * payloads) that is unnecessary for a paginated list view. The slim shape
+ * drops details and the nested user
  * include — list-view consumers (AuditLog.jsx, future ops dashboards)
  * can opt into the lighter payload without breaking existing callers.
  *
  * What this block pins
  * ────────────────────
- *   1. Default (no ?fields) — preserves full shape: uses `include`, no
- *      `select` (back-compat — existing callers keep working).
- *   2. ?fields=summary — switches to `select` with the 7-field projection
- *      (id, entity, entityId, action, userId, tenantId, createdAt) and
- *      drops the user `include` entirely.
+ *   1. Default (no ?fields) — preserves full shape and hydrates the actor
+ *      separately with tenant + vertical constraints.
+ *   2. ?fields=summary — switches to a 6-field `select` projection and
+ *      omits actor identifiers and hydration from the summary response.
  *   3. Slim `select` excludes `details` (the PII column motivation for #920).
- *   4. Slim `select` excludes `prevHash` + `hash` (hash-chain bookkeeping).
  *   5. Non-exact `?fields` values (typos, casing) fall back to the full
  *      shape — opt-in is strict-equality, not heuristic.
  */
 describe('audit_viewer ?fields=summary slim-shape opt-in — #920 slice 24', () => {
-  test('GET / (no ?fields) — preserves full-shape contract: uses include, no select', async () => {
+  test('GET / (no ?fields) — preserves the full shape without a relation include', async () => {
     const app = makeApp();
     const res = await request(app)
       .get('/api/audit-viewer')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
     expect(res.status).toBe(200);
     const call = prisma.auditLog.findMany.mock.calls[0][0];
-    // Back-compat: callers that don't pass ?fields keep the user join.
-    expect(call.include).toEqual({
-      user: { select: { id: true, name: true, email: true } },
-    });
-    // Crucially: no `select` is passed alongside, which would conflict with
-    // include and cause a Prisma validation error.
+    // Actor hydration happens separately so the join can be tenant-scoped.
+    expect(call.include).toBeUndefined();
     expect(call.select).toBeUndefined();
   });
 
-  test('GET /?fields=summary → slim `select` with 7-field projection (no user include)', async () => {
+  test('GET /?fields=summary → slim `select` without actor identifiers', async () => {
     const app = makeApp();
     const res = await request(app)
       .get('/api/audit-viewer?fields=summary')
@@ -417,7 +492,6 @@ describe('audit_viewer ?fields=summary slim-shape opt-in — #920 slice 24', () 
       entity: true,
       entityId: true,
       action: true,
-      userId: true,
       tenantId: true,
       createdAt: true,
     });
@@ -438,24 +512,9 @@ describe('audit_viewer ?fields=summary slim-shape opt-in — #920 slice 24', () 
     expect(call.select.entity).toBe(true);
   });
 
-  test('GET /?fields=summary → slim shape EXCLUDES `prevHash` + `hash` (hash-chain bookkeeping)', async () => {
-    const app = makeApp();
-    const res = await request(app)
-      .get('/api/audit-viewer?fields=summary')
-      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
-    expect(res.status).toBe(200);
-    const call = prisma.auditLog.findMany.mock.calls[0][0];
-    // #558's hash-chain columns are essential for the integrity verifier
-    // (GET /api/audit/verify) but the list-view UI never reads them. Slim
-    // shape drops both so list queries stop pulling Text columns that can
-    // grow large for malformed/multi-row diffs.
-    expect(call.select.prevHash).toBeUndefined();
-    expect(call.select.hash).toBeUndefined();
-  });
-
   test('GET /?fields=summary still scopes tenantId + still paginates (orthogonal to slim shape)', async () => {
     prisma.auditLog.findMany.mockResolvedValueOnce([
-      // Slim rows: no `user` field, no `details`, no `prevHash`/`hash`.
+      // Slim rows: no `user` field or `details`.
       { id: 1, entity: 'Deal', entityId: 100, action: 'CREATE', userId: 7, tenantId: 1, createdAt: new Date() },
       { id: 2, entity: 'Contact', entityId: 200, action: 'UPDATE', userId: 7, tenantId: 1, createdAt: new Date() },
     ]);
@@ -474,6 +533,7 @@ describe('audit_viewer ?fields=summary slim-shape opt-in — #920 slice 24', () 
     // Envelope still emits paginated meta.
     expect(res.body).toMatchObject({ total: 2, page: 1, limit: 50, pages: 1 });
     expect(res.body.logs).toHaveLength(2);
+    expect(res.body.logs[0]).not.toHaveProperty('userId');
   });
 
   test('GET /?fields=Summary (wrong casing) → falls back to full shape (strict-equality opt-in)', async () => {
@@ -487,8 +547,6 @@ describe('audit_viewer ?fields=summary slim-shape opt-in — #920 slice 24', () 
     // accidentally enter slim mode (preserves principle-of-least-surprise:
     // either you ask for summary exactly, or you get the full row).
     expect(call.select).toBeUndefined();
-    expect(call.include).toEqual({
-      user: { select: { id: true, name: true, email: true } },
-    });
+    expect(call.include).toBeUndefined();
   });
 });

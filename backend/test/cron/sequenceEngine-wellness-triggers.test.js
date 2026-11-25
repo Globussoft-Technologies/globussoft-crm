@@ -318,7 +318,7 @@ describe('eventBus.emitEvent — wellness-trigger action dispatch (#616 — exte
   test('every dispatched wellness-trigger rule writes an auditLog row', async () => {
     // The executeAction function ends with a prisma.auditLog.create call —
     // every wellness-trigger fire that successfully dispatches an action
-    // must leave a workflow audit trail. This is the audit-integrity
+    // must leave a workflow audit trail. This is the audit-logging
     // contract: a clinical event firing a drip is a traceable workflow.
     prisma.automationRule.findMany.mockResolvedValueOnce([
       {

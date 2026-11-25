@@ -260,6 +260,112 @@ beforeEach(() => {
 });
 
 describe("GET /api/billing/:id/pdf — tenant-branded invoice document", () => {
+  test("passes the visit coupon breakdown into the wellness invoice PDF", async () => {
+    const couponBreakdown = JSON.stringify({
+      baseAmount: 2999,
+      discount: 1424,
+      lockingFee: 0,
+      balance: 1575,
+      couponCode: "HALFFACE",
+    });
+    const invoice = {
+      id: 107,
+      invoiceNum: "INV-WELLNESS-107",
+      amount: 1575,
+      amountPaid: 1575,
+      balance: 0,
+      status: "PAID",
+      currency: "INR",
+      visitId: 4458,
+      lineItemsJson: JSON.stringify([
+        { type: "service", itemId: 867, name: "Half Face LHR", quantity: 1, unitPrice: 2999, amount: 2999 },
+      ]),
+      visit: {
+        visitDate: new Date("2026-10-28T00:00:00.000Z"),
+        amountCharged: 1575,
+        couponBreakdown,
+        service: { name: "Half Face LHR" },
+      },
+      contact: { id: 8, name: "Sanjeev" },
+    };
+    prisma.invoice.findFirst.mockResolvedValue(invoice);
+    prisma.visit.findMany.mockResolvedValue([]);
+    prisma.serviceConsumption.findMany.mockResolvedValue([]);
+    prisma.payment.findMany.mockResolvedValue([]);
+    prisma.tenant.findUnique.mockResolvedValue({
+      vertical: "wellness",
+      name: "Enhanced Wellness",
+      defaultCurrency: "INR",
+      locale: "en-IN",
+      logoUrl: "https://objects.example.test/branding/tenant-1/logo.png",
+    });
+    prisma.tenantSetting.findMany.mockResolvedValue([]);
+    const logoBuffer = Buffer.from("tenant-logo");
+    const logoSpy = vi.spyOn(pdfRenderer, "resolveProfessionalInvoiceLogo")
+      .mockResolvedValue(logoBuffer);
+    const renderSpy = vi.spyOn(pdfRenderer, "renderProfessionalWellnessInvoicePdf")
+      .mockResolvedValue(Buffer.from("%PDF-wellness-coupon"));
+
+    try {
+      const response = await request(makeApp({ vertical: "wellness" })).get("/api/billing/107/pdf");
+
+      expect(response.status).toBe(200);
+      expect(prisma.invoice.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+        include: expect.objectContaining({
+          visit: { select: expect.objectContaining({ amountCharged: true, couponBreakdown: true }) },
+        }),
+      }));
+      expect(renderSpy.mock.calls[0][0].visit).toEqual(expect.objectContaining({
+        amountCharged: 1575,
+        couponBreakdown,
+      }));
+      expect(logoSpy).toHaveBeenCalledWith("https://objects.example.test/branding/tenant-1/logo.png");
+      expect(renderSpy.mock.calls[0][3]).toEqual(expect.objectContaining({ logoBuffer }));
+    } finally {
+      logoSpy.mockRestore();
+      renderSpy.mockRestore();
+    }
+  });
+
+  test("loads an invoice logo URL stored in tenant branding settings", async () => {
+    const logoUrl = "https://objects.example.test/branding/tenant-1/logo.png";
+    prisma.invoice.findFirst.mockResolvedValue({
+      id: 108,
+      invoiceNum: "INV-WELLNESS-108",
+      amount: 500,
+      status: "PAID",
+      contact: { id: 9, name: "Branding Test Customer" },
+    });
+    prisma.visit.findMany.mockResolvedValue([]);
+    prisma.serviceConsumption.findMany.mockResolvedValue([]);
+    prisma.payment.findMany.mockResolvedValue([]);
+    prisma.tenant.findUnique.mockResolvedValue({
+      vertical: "wellness",
+      name: "Enhanced Wellness",
+      logoUrl: null,
+      defaultCurrency: "INR",
+    });
+    prisma.tenantSetting.findMany.mockResolvedValue([
+      { key: "branding.logoUrl", value: logoUrl },
+    ]);
+    const logoBuffer = Buffer.from("settings-logo");
+    const logoSpy = vi.spyOn(pdfRenderer, "resolveProfessionalInvoiceLogo")
+      .mockResolvedValue(logoBuffer);
+    const renderSpy = vi.spyOn(pdfRenderer, "renderProfessionalWellnessInvoicePdf")
+      .mockResolvedValue(Buffer.from("%PDF-wellness-settings-logo"));
+
+    try {
+      const response = await request(makeApp({ vertical: "wellness" })).get("/api/billing/108/pdf");
+
+      expect(response.status).toBe(200);
+      expect(logoSpy).toHaveBeenCalledWith(logoUrl);
+      expect(renderSpy.mock.calls[0][3]).toEqual(expect.objectContaining({ logoBuffer }));
+    } finally {
+      logoSpy.mockRestore();
+      renderSpy.mockRestore();
+    }
+  });
+
   test.each(['PAID', 'VOIDED', 'REFUNDED', 'CREDIT_NOTE'])('preserves terminal %s property invoice status without payment rows', async (status) => {
     const invoice = { id: 105, amount: 100, status, currency: 'USD', plotDetails: { quantity: 2, totalPrice: 100 } };
     prisma.invoice.findFirst.mockResolvedValue(invoice);

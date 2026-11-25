@@ -332,6 +332,25 @@ beforeEach(() => {
   });
 });
 
+describe('TMC teacher onboarding navigation', () => {
+  it('shows the teacher page under Administration when TMC is selected', () => {
+    renderSidebar({ vertical: 'travel', role: 'ADMIN', activeSubBrand: 'tmc' });
+
+    const link = screen.getByText('Teacher OnBoarding').closest('a');
+    expect(link).toBeTruthy();
+    expect(link).toHaveAttribute('href', '/travel/tmc/teachers');
+  });
+
+  it.each([null, 'rfu', 'travelstall', 'visasure'])(
+    'hides the teacher page when the active sub-brand is %s',
+    (activeSubBrand) => {
+      renderSidebar({ vertical: 'travel', role: 'ADMIN', activeSubBrand });
+
+      expect(screen.queryByText('Teacher OnBoarding')).not.toBeInTheDocument();
+    },
+  );
+});
+
 afterEach(() => {
   window.sessionStorage.removeItem('travel.itineraries.lastListUrl');
   window.sessionStorage.removeItem('travel.diagnostics.lastListUrl');

@@ -196,7 +196,7 @@ describe('POST /api/travel/quotes/:id/accept', () => {
     expect(prisma.auditLog.create).toHaveBeenCalledTimes(1);
     const auditCall = prisma.auditLog.create.mock.calls[0][0];
     expect(auditCall.data.action).toBe('TRAVEL_QUOTE_ACCEPTED');
-    // Audit details payload (stored as string in audit chain).
+    // Audit details payload (stored as a string in the audit row).
     const details = typeof auditCall.data.details === 'string'
       ? JSON.parse(auditCall.data.details)
       : auditCall.data.details;

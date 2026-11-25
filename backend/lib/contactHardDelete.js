@@ -193,6 +193,12 @@ async function deleteContactsDependents(tx, ids) {
     }));
   }
 
+  if (tx.tmcTripTeacherAssignment?.deleteMany) {
+    await optionalDeleteMany(() => tx.tmcTripTeacherAssignment.deleteMany({
+      where: { teacherContactId: contactId },
+    }));
+  }
+
   // TMC trips are operational records owned by the travel team, not by the
   // teacher account. Detach the teacher instead of deleting the trip.
   if (tx.tmcTrip?.updateMany) {

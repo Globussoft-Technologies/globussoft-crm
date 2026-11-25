@@ -1,9 +1,9 @@
 import { formatDateTime, tenantTimezone } from '../utils/date';
-import React, { useState, useEffect, useCallback, useMemo, useContext } from 'react';
+import React, { useState, useEffect, useContext, useMemo, useRef } from 'react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import { AuthContext } from '../App';
-import { ScrollText, Filter, Upload, ChevronDown, User, ShieldCheck, ShieldAlert, ShieldQuestion } from 'lucide-react';
+import { AuthContext } from '../appContexts';
+import { ScrollText, Filter, Upload, ChevronDown, User, Search, X, Check } from 'lucide-react';
 import TopScrollSync from '../components/TopScrollSync';
 import './AuditLog.css';
 
@@ -26,25 +26,45 @@ const ENTITY_OPTIONS = [
   'Project', 'Task', 'Ticket', 'Campaign', 'Sequence', 'User', 'Quote',
 ];
 
-function StatCard({ label, value, color }) {
-  return (
-    <div
-      className="card"
-      style={{
-        padding: '1.25rem 1.5rem',
-        borderLeft: `4px solid ${color}`,
-        flex: 1,
-        minWidth: 180,
-      }}
-    >
-      <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-        {label}
-      </div>
-      <div style={{ fontSize: '1.85rem', fontWeight: 700, marginTop: '0.4rem', color }}>
-        {value.toLocaleString()}
-      </div>
-    </div>
-  );
+const FILTER_OPTIONS = [
+  { id: 'entity', label: 'Entity', description: 'Choose a record type' },
+  { id: 'action', label: 'Action', description: 'Choose an activity type' },
+  { id: 'dateTime', label: 'Date & time', description: 'Set a start and end time' },
+];
+
+function toApiDateTime(value, timezone, isEnd = false) {
+  if (!value) return '';
+  const [datePart, timePart = '00:00'] = value.split('T');
+  const [year, month, day] = datePart.split('-').map(Number);
+  const [hour, minute] = timePart.split(':').map(Number);
+  if (![year, month, day, hour, minute].every(Number.isFinite)) return '';
+
+  const localClockAsUtc = Date.UTC(year, month - 1, day, hour, minute);
+  let date;
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone || 'UTC',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date(localClockAsUtc));
+    const values = Object.fromEntries(parts.map(({ type, value: partValue }) => [type, partValue]));
+    const zoneClockAsUtc = Date.UTC(
+      Number(values.year), Number(values.month) - 1, Number(values.day),
+      Number(values.hour), Number(values.minute), Number(values.second),
+    );
+    date = new Date(localClockAsUtc - (zoneClockAsUtc - localClockAsUtc));
+  } catch {
+    // If the configured zone isn't recognized, fall back to the browser zone.
+    date = new Date(value);
+  }
+  if (Number.isNaN(date.getTime())) return '';
+  if (isEnd) date.setUTCSeconds(date.getUTCSeconds() + 59, 999);
+  return date.toISOString();
 }
 
 function ActionBadge({ action }) {
@@ -60,18 +80,64 @@ function ActionBadge({ action }) {
       color,
       border: `1px solid ${color}55`,
     }}>
-      {action}
+      {actionLabel(action)}
     </span>
   );
 }
 
-function prettyDetails(raw) {
-  if (!raw) return '(no details)';
+function OverviewItem({ label, children }) {
+  return (
+    <div className="audit-overview-item">
+      <div className="audit-overview-item__label">{label}</div>
+      <div className="audit-overview-item__value">{children || '—'}</div>
+    </div>
+  );
+}
+
+function ActivityOverview({ log, cacheScope }) {
+  const actor = log.user?.name || 'System';
+  const entity = humanize(log.entity) || 'Record';
+  const hideDetails = hasSensitiveAuditDetails(log);
+  return (
+    <div className="audit-overview">
+      <div className="audit-overview__heading">
+        <div>
+          <div className="audit-overview__eyebrow">Activity overview</div>
+          <h2>{activitySummary(log)}</h2>
+        </div>
+        <ActionBadge action={log.action} />
+      </div>
+      <div className="audit-overview__facts">
+        <OverviewItem label="Performed by">
+          <span>{actor}</span>
+          {log.user?.email && <small>{log.user.email}</small>}
+        </OverviewItem>
+        <OverviewItem label="Date and time">
+          {formatAuditTimestamp(log.createdAt, log.viewerTimezone)}
+        </OverviewItem>
+        <OverviewItem label="Record">
+          {hideDetails || log.entityId == null ? entity : `${entity} #${log.entityId}`}
+        </OverviewItem>
+      </div>
+      <section className="audit-overview__details">
+        <h3>What happened</h3>
+        {hideDetails ? (
+          <span>Additional details are not shown for this activity.</span>
+        ) : (
+          <DetailsView raw={log.details} entity={log.entity} cacheScope={cacheScope} />
+        )}
+      </section>
+    </div>
+  );
+}
+
+function parseDetails(raw) {
+  if (isPlainObject(raw) || Array.isArray(raw)) return raw;
+  if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw);
-    return JSON.stringify(parsed, null, 2);
+    return JSON.parse(raw);
   } catch {
-    return raw;
+    return { description: String(raw) };
   }
 }
 
@@ -98,9 +164,6 @@ const DETAIL_LABELS = {
   fieldsChanged: 'Fields changed',
   applied: 'Applied rules',
   skipped: 'Skipped rules',
-  _actorType: 'Actor type',
-  _patientActorId: 'Patient actor ID',
-  _raw: 'Raw note',
 };
 
 // Some keys carry enums we can render more nicely.
@@ -113,6 +176,131 @@ const SCOPE_LABELS = {
   audit_viewer: 'Audit viewer',
 };
 
+const HIDDEN_DETAIL_KEY = /password|secret|token|api.?key|authorization|cookie|credential|otp|aadhaar|pan|ssn|bank|account.?number|diagnos|^jti$/i;
+
+function humanize(value) {
+  return String(value || '')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function actionLabel(action) {
+  const value = String(action || '').toUpperCase();
+  const exact = {
+    CREATE: 'Created',
+    UPDATE: 'Updated',
+    DELETE: 'Deleted',
+    HARD_DELETE: 'Permanently deleted',
+    SOFT_DELETE: 'Archived',
+    LOGIN: 'Signed in',
+    LOGOUT: 'Signed out',
+    PII_DISCLOSED: 'Viewed',
+    READ: 'Viewed',
+    VIEW: 'Viewed',
+    EXPORT: 'Exported',
+  };
+  if (exact[value]) return exact[value];
+  const suffixes = [
+    [/_(?:HARD_DELETE|PERMANENTLY_DELETED)$/, 'Permanently deleted'],
+    [/_(?:SOFT_DELETE|ARCHIVED)$/, 'Archived'],
+    [/_CREATE(?:D)?$/, 'Created'],
+    [/_UPDATE(?:D)?$/, 'Updated'],
+    [/_DELETE(?:D)?$/, 'Deleted'],
+    [/_LOGIN(?:NED)?$/, 'Signed in'],
+    [/_LOGOUT(?:TED)?$/, 'Signed out'],
+    [/_VIEW(?:ED)?$/, 'Viewed'],
+    [/_READ$/, 'Viewed'],
+    [/_EXPORT(?:ED)?$/, 'Exported'],
+    [/_DOWNLOAD(?:ED)?$/, 'Downloaded'],
+    [/_SEND(?:T)?$/, 'Sent'],
+    [/_DISCLOSED$/, 'Viewed'],
+  ];
+  for (const [pattern, label] of suffixes) {
+    if (pattern.test(value)) return label;
+  }
+  return humanize(value) || 'Recorded activity';
+}
+
+function activitySummary(log) {
+  const action = actionLabel(log.action);
+  if (['Signed in', 'Signed out'].includes(action)) return action;
+  const entity = humanize(log.entity) || 'record';
+  const details = parseDetails(log.details);
+  const hideDetails = hasSensitiveAuditDetails(log);
+  const subject = !hideDetails && isPlainObject(details)
+    ? details.name || details.title || details.recordName || details.resourceName || details.poNumber
+    : null;
+  const safeSubject = subject ? String(subject).slice(0, 100) : '';
+  const recordId = hideDetails || log.entityId == null ? '' : ` (#${log.entityId})`;
+  return `${action} ${entity}${safeSubject ? ` “${safeSubject}”` : ''}${recordId}`;
+}
+
+function hasSensitiveAuditDetails(log) {
+  const action = String(log?.action || '').toUpperCase();
+  if (action.includes('PII_DISCLOSED') || action.includes('SENSITIVE') || action.endsWith('DISCLOSED')) {
+    return true;
+  }
+  const details = parseDetails(log?.details);
+  return isPlainObject(details) && (
+    Array.isArray(details.disclosedFields) || details.isSensitive === true || details.sensitive === true
+  );
+}
+
+function detailsPreview(raw, log) {
+  if (hasSensitiveAuditDetails(log)) return 'Access activity recorded';
+  const details = stripInternalAuditDetails(parseDetails(raw));
+  if (!details) return 'No additional details';
+  if (isPlainObject(details) && Object.keys(details).length === 0) return 'No additional details';
+  if (typeof details === 'string' || typeof details === 'number') return String(details).slice(0, 120);
+  if (!isPlainObject(details)) return 'Activity details available';
+  for (const key of ['summary', 'description', 'message', 'reason']) {
+    if (details[key] != null && !HIDDEN_DETAIL_KEY.test(key)) {
+      return String(details[key]).slice(0, 140);
+    }
+  }
+  const changed = details.changedFields || details.fieldsChanged || details.changed;
+  if (Array.isArray(changed) && changed.length) {
+    return `Changed: ${changed.map(humanize).slice(0, 4).join(', ')}${changed.length > 4 ? ', …' : ''}`;
+  }
+  const recordCount = Number(details.recordCount) || (Array.isArray(details.recordIds) ? details.recordIds.length : 0);
+  if (recordCount > 0) {
+    const isView = /VIEW|READ|DISCLOS|ACCESS/i.test(String(log?.action || ''));
+    const fields = Array.isArray(details.disclosedFields)
+      ? details.disclosedFields.map(humanize).slice(0, 3).join(', ')
+      : '';
+    return `${isView ? 'Viewed' : 'Affected'} ${recordCount} record${recordCount === 1 ? '' : 's'}${fields ? ` · Fields: ${fields}` : ''}`;
+  }
+  const readableEntries = Object.entries(details)
+    .filter(([key, value]) => !HIDDEN_DETAIL_KEY.test(key) && !key.startsWith('_') && value != null)
+    .filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value))
+    .slice(0, 2)
+    .map(([key, value]) => `${labelFor(key)}: ${formatScalar(value)}`);
+  if (readableEntries.length) return readableEntries.join(' · ').slice(0, 140);
+  const visibleCount = Object.keys(details).filter((key) => !HIDDEN_DETAIL_KEY.test(key) && !key.startsWith('_')).length;
+  return visibleCount ? `${visibleCount} additional detail${visibleCount === 1 ? '' : 's'}` : 'Sensitive details hidden';
+}
+
+function formatAuditTimestamp(value, timezone) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Unknown time';
+  try {
+    return new Intl.DateTimeFormat('en-IN', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+      timeZoneName: 'short',
+      timeZone: timezone || tenantTimezone() || 'UTC',
+    }).format(date);
+  } catch {
+    return date.toISOString();
+  }
+}
+
 function labelFor(key) {
   if (DETAIL_LABELS[key]) return DETAIL_LABELS[key];
   return key
@@ -123,6 +311,21 @@ function labelFor(key) {
 
 function isPlainObject(v) {
   return v && typeof v === 'object' && !Array.isArray(v);
+}
+
+function stripInternalAuditDetails(value) {
+  if (Array.isArray(value)) return value.map(stripInternalAuditDetails);
+  if (!isPlainObject(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !/^jti$/i.test(key))
+      .map(([key, child]) => [key, stripInternalAuditDetails(child)]),
+  );
+}
+
+function searchableDetails(raw) {
+  const parsed = parseDetails(raw);
+  return parsed == null ? '' : JSON.stringify(stripInternalAuditDetails(parsed)).toLowerCase();
 }
 
 // ── Entity-name resolver for `recordIds` chips ─────────────────────
@@ -147,7 +350,7 @@ const ENTITY_LOOKUP = {
   Contact:  { endpoint: '/api/contacts',           nameField: 'name', emailField: 'email' },
 };
 
-// Module-level cache: entity → Promise<Map<id, { name, email? }>>.
+// Module-level cache: tenant/user/entity → Promise<Map<id, { name, email? }>>.
 // Storing the in-flight Promise (not the resolved Map) lets concurrent
 // callers de-dupe to a single network fetch.
 const _entityNameCache = new Map();
@@ -156,9 +359,10 @@ export function __clearEntityCacheForTests() {
   _entityNameCache.clear();
 }
 
-async function loadEntityNames(entity) {
+async function loadEntityNames(entity, cacheScope) {
   if (!entity || !ENTITY_LOOKUP[entity]) return null;
-  if (_entityNameCache.has(entity)) return _entityNameCache.get(entity);
+  const cacheKey = `${cacheScope}:${entity}`;
+  if (_entityNameCache.has(cacheKey)) return _entityNameCache.get(cacheKey);
   const { endpoint, nameField, emailField } = ENTITY_LOOKUP[entity];
   const promise = (async () => {
     try {
@@ -183,11 +387,11 @@ async function loadEntityNames(entity) {
     } catch {
       // Lookup failed — clear the cache so a subsequent open can retry,
       // then return null so the caller falls back to bare ID chips.
-      _entityNameCache.delete(entity);
+      _entityNameCache.delete(cacheKey);
       return null;
     }
   })();
-  _entityNameCache.set(entity, promise);
+  _entityNameCache.set(cacheKey, promise);
   return promise;
 }
 
@@ -197,7 +401,7 @@ async function loadEntityNames(entity) {
 const EntityContext = React.createContext(null);
 
 function RecordIdChips({ ids }) {
-  const entity = useContext(EntityContext);
+  const { entity, cacheScope } = useContext(EntityContext) || {};
   const resolvable = entity && ENTITY_LOOKUP[entity];
   const [nameMap, setNameMap] = useState(null);
   const [loading, setLoading] = useState(Boolean(resolvable));
@@ -210,14 +414,14 @@ function RecordIdChips({ ids }) {
     }
     let cancelled = false;
     setLoading(true);
-    loadEntityNames(entity).then((result) => {
+    loadEntityNames(entity, cacheScope).then((result) => {
       if (!cancelled) {
         setNameMap(result);
         setLoading(false);
       }
     });
     return () => { cancelled = true; };
-  }, [entity, resolvable]);
+  }, [entity, cacheScope, resolvable]);
 
   return (
     <div
@@ -270,9 +474,11 @@ function RecordIdChips({ ids }) {
 
 // Render a single value cell. Arrays become inline chips; objects with a
 // {from, to} shape (Prisma-diff style) become "old → new"; nested
-// objects fall back to a compact inline JSON serialization at one level
-// deep.
+// objects are rendered as compact, labeled rows.
 function renderValue(key, value) {
+  if (HIDDEN_DETAIL_KEY.test(String(key))) {
+    return <span style={{ color: 'var(--text-secondary)', fontStyle: 'italic' }}>Hidden for privacy</span>;
+  }
   if (value === null || value === undefined) {
     return <span style={{ color: 'var(--text-muted, #6b7280)' }}>—</span>;
   }
@@ -338,19 +544,7 @@ function renderValue(key, value) {
   }
   // Special-case scope enum.
   if (key === 'scope' && typeof value === 'string' && SCOPE_LABELS[value]) {
-    return (
-      <span>
-        {SCOPE_LABELS[value]}
-        <span style={{
-          marginLeft: '0.5rem',
-          color: 'var(--text-secondary)',
-          fontSize: '0.72rem',
-          fontFamily: 'monospace',
-        }}>
-          ({value})
-        </span>
-      </span>
-    );
+    return SCOPE_LABELS[value];
   }
   return formatScalar(value);
 }
@@ -374,9 +568,12 @@ function formatScalar(v) {
 // Render an object as a 2-column key/value layout. `compact` shrinks the
 // row spacing so nested object children read as a sub-block.
 function renderObjectAsRows(obj, { compact = false } = {}) {
-  const keys = Object.keys(obj);
+  if (!isPlainObject(obj)) {
+    return <span style={{ color: 'var(--text-primary)' }}>{formatScalar(obj)}</span>;
+  }
+  const keys = Object.keys(obj).filter((key) => !key.startsWith('_') && !/^jti$/i.test(key));
   if (keys.length === 0) {
-    return <span style={{ color: 'var(--text-muted, #6b7280)' }}>(empty)</span>;
+    return <span style={{ color: 'var(--text-muted, #6b7280)' }}>No additional details were recorded.</span>;
   }
   return (
     <div style={{
@@ -405,93 +602,53 @@ function renderObjectAsRows(obj, { compact = false } = {}) {
 }
 
 // Top-level details renderer used inside the expanded audit row. Returns
-// JSX (NOT a string) so the caller renders it as a real layout instead of
-// dumping the JSON. Falls back to the raw blob when the details payload
-// can't be parsed (e.g. legacy unstructured "plain string" details).
+// labeled JSX rows instead of a JSON dump. Legacy unstructured text is
+// presented as a description field.
 //
 // `entity` is the audit row's entity field (e.g. "User", "Patient"). It's
 // passed down via EntityContext so the recordIds chip renderer can join
 // the numeric IDs against the matching list endpoint and surface names
 // instead of bare numbers. Optional — if absent or unresolvable, IDs
 // render as `#N`.
-function DetailsView({ raw, entity }) {
-  const [showJson, setShowJson] = useState(false);
-  if (!raw) {
-    return <span style={{ color: 'var(--text-muted, #6b7280)' }}>(no details)</span>;
-  }
-  let parsed = null;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    // Not JSON — surface the raw note inline.
-    return (
-      <pre style={{
-        margin: 0,
-        whiteSpace: 'pre-wrap',
-        wordBreak: 'break-word',
-        color: 'var(--text-secondary)',
-        fontSize: '0.82rem',
-      }}>
-        {raw}
-      </pre>
-    );
+function DetailsView({ raw, entity, cacheScope }) {
+  const parsed = parseDetails(raw);
+  if (!parsed) {
+    return <span style={{ color: 'var(--text-muted, #6b7280)' }}>No additional details were recorded.</span>;
   }
   // Primitive / array-at-top JSON — render generically.
   if (!isPlainObject(parsed)) {
     return (
-      <EntityContext.Provider value={entity || null}>
+      <EntityContext.Provider value={{ entity, cacheScope }}>
         <div style={{ fontSize: '0.82rem' }}>{renderValue('details', parsed)}</div>
       </EntityContext.Provider>
     );
   }
   return (
-    <EntityContext.Provider value={entity || null}>
-    <div>
+    <EntityContext.Provider value={{ entity, cacheScope }}>
+    <div className="audit-detail-fields">
       {renderObjectAsRows(parsed)}
-      <button
-        type="button"
-        onClick={() => setShowJson((s) => !s)}
-        style={{
-          marginTop: '0.85rem',
-          background: 'transparent',
-          border: '1px solid var(--border-color)',
-          borderRadius: 6,
-          padding: '0.3rem 0.65rem',
-          fontSize: '0.7rem',
-          letterSpacing: '0.03em',
-          color: 'var(--text-secondary)',
-          cursor: 'pointer',
-        }}
-      >
-        {showJson ? 'Hide raw JSON' : 'Show raw JSON'}
-      </button>
-      {showJson && (
-        <pre style={{
-          marginTop: '0.5rem',
-          background: 'var(--input-bg)',
-          border: '1px solid var(--border-color)',
-          borderRadius: 8,
-          padding: '0.85rem',
-          fontSize: '0.74rem',
-          color: 'var(--text-secondary)',
-          overflowX: 'auto',
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-        }}>
-          {JSON.stringify(parsed, null, 2)}
-        </pre>
-      )}
     </div>
     </EntityContext.Provider>
   );
 }
 
-export default function AuditLog() {
+export default function AuditLogPage() {
+  const { user, tenant } = useContext(AuthContext) || {};
+  const cacheScope = [
+    tenant?.id ?? user?.tenantId ?? 'unknown-tenant',
+    tenant?.vertical ?? user?.tenant?.vertical ?? 'unknown-vertical',
+    user?.id ?? user?.userId ?? 'unknown-user',
+    user?.role ?? 'unknown-role',
+  ].join(':');
+
+  // A tenant switch must remount the page so its prior tenant's rows, stats,
+  // expanded details, and cached name lookups disappear before new data loads.
+  return <AuditLog key={cacheScope} cacheScope={cacheScope} />;
+}
+
+function AuditLog({ cacheScope }) {
   const notify = useNotify();
-  const { user } = useContext(AuthContext) || {};
-  const isAdmin = user?.role === 'ADMIN';
   const [logs, setLogs] = useState([]);
-  const [stats, setStats] = useState(null);
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
   const [total, setTotal] = useState(0);
@@ -501,103 +658,58 @@ export default function AuditLog() {
   const [action, setAction] = useState('');
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
+  const [viewerTimezone, setViewerTimezone] = useState(
+    () => tenantTimezone() || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+  );
+  const viewerTimezoneRef = useRef(viewerTimezone);
+  viewerTimezoneRef.current = viewerTimezone;
   const [search, setSearch] = useState('');
+  const [activeFilters, setActiveFilters] = useState([]);
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
+  const filterMenuRef = useRef(null);
 
   const [expanded, setExpanded] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  // #558 — Audit chain integrity. integrity = {
-  //   chainLength,    // rows walked (strict semantics: counts the broken row)
-  //   totalRows,      // total audit rows for this tenant
-  //   unhashedRows,   // rows with null hash (need backfill)
-  //   brokenAt,       // id of first row that fails verification, or null
-  //   reason,         // human-readable explanation of the break
-  //   integrityVerified, lastVerifiedAt,
-  // } once /api/audit/verify has run. Auto-verify on mount for admins so the
-  // chip shows the current state without requiring the operator to click.
-  const [integrity, setIntegrity] = useState(null);
-  const [verifying, setVerifying] = useState(false);
-  const [verificationError, setVerificationError] = useState(null);
-  const [backfilling, setBackfilling] = useState(false);
+  useEffect(() => {
+    if (!filterMenuOpen) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (!filterMenuRef.current?.contains(event.target)) setFilterMenuOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') setFilterMenuOpen(false);
+    };
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('mousedown', closeOnOutsideClick);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [filterMenuOpen]);
 
-  const verifyChain = useCallback(async () => {
-    if (!isAdmin) return;
-    setVerifying(true);
-    setVerificationError(null);
-    try {
-      const data = await fetchApi('/api/audit/verify', { silent: true });
-      setIntegrity(data);
-    } catch (err) {
-      console.error('[AuditLog] verify failed', err);
-      setIntegrity(null);
-      setVerificationError(
-        err?.status >= 500
-          ? 'Audit-chain verification is temporarily unavailable. Please try again.'
-          : 'Audit-chain verification failed. Please try again.'
-      );
-      notify.error(
-        err?.status >= 500
-          ? 'Audit-chain verification is temporarily unavailable. Please try again.'
-          : 'Audit-chain verification failed. Please try again.'
-      );
-    } finally {
-      setVerifying(false);
+  const addFilter = (filterId) => {
+    setActiveFilters((current) => current.includes(filterId) ? current : [...current, filterId]);
+    setFilterMenuOpen(false);
+  };
+
+  const removeFilter = (filterId) => {
+    setActiveFilters((current) => current.filter((id) => id !== filterId));
+    if (filterId === 'entity') setEntity('');
+    if (filterId === 'action') setAction('');
+    if (filterId === 'dateTime') {
+      setFrom('');
+      setTo('');
     }
-  }, [isAdmin, notify]);
+  };
 
-  // Run the backfill endpoint then immediately re-verify so the chip flips
-  // to green if everything got chained successfully. 409 conflict means an
-  // already-hashed row's content doesn't match its recomputation — that's
-  // suspected tampering, surface the row id so ops can investigate.
-  const runBackfill = useCallback(async () => {
-    if (!isAdmin) return;
-    const ok = await notify.confirm({
-      title: 'Repair audit chain',
-      message:
-        'Re-stamp the link/hash on any row that has the wrong anchor. ' +
-        'Row content is never modified. If a row was actually tampered with, the repair will ' +
-        'abort and show the affected row ID. Continue?',
-      confirmText: 'Repair',
-    });
-    if (!ok) return;
-    setBackfilling(true);
-    try {
-      const data = await fetchApi('/api/audit/backfill', { method: 'POST' });
-      notify.success(
-        `Chain repair complete — re-linked ${data.updatedRows} ${data.updatedRows === 1 ? 'row' : 'rows'}` +
-        (data.skippedRows ? `, ${data.skippedRows} already valid.` : '.')
-      );
-      await verifyChain();
-    } catch (err) {
-      console.error('[AuditLog] backfill failed', err);
-      // fetchApi attaches the parsed error body to err.data (see utils/api.js).
-      // 409 → body.conflictRowId is populated; surface the row id so ops can
-      // open the incident. Other failures get a generic toast — fetchApi
-      // already raised one for the user.
-      const body = err?.data;
-      if (body?.conflictRowId != null) {
-        notify.error(
-          `Repair aborted: row #${body.conflictRowId} appears to have been tampered with ` +
-          `(its content doesn't match its stored hash). Please investigate this row before retrying.`
-        );
-      }
-    } finally {
-      setBackfilling(false);
-    }
-  }, [isAdmin, notify, verifyChain]);
-
-  useEffect(() => { verifyChain(); }, [verifyChain]);
-
-  const loadStats = useCallback(async () => {
-    try {
-      const s = await fetchApi('/api/audit-viewer/stats');
-      setStats(s);
-    } catch (err) {
-      console.error('[AuditLog] stats failed', err);
-    }
-  }, []);
-
-  useEffect(() => { loadStats(); }, [loadStats]);
+  const clearAllFilters = () => {
+    setEntity('');
+    setAction('');
+    setFrom('');
+    setTo('');
+    setSearch('');
+    setActiveFilters([]);
+  };
 
   // Reset to page 1 whenever filters change
   useEffect(() => { setPage(1); }, [entity, action, from, to]);
@@ -614,11 +726,15 @@ export default function AuditLog() {
       params.set('limit', limit);
       if (entity) params.set('entity', entity);
       if (action) params.set('action', action);
-      if (from) params.set('from', from);
-      if (to) params.set('to', to);
+      if (from) params.set('from', toApiDateTime(from, viewerTimezoneRef.current));
+      if (to) params.set('to', toApiDateTime(to, viewerTimezoneRef.current, true));
       try {
         const data = await fetchApi(`/api/audit-viewer?${params.toString()}`);
         if (cancelled) return;
+        if (data?.viewerTimezone) {
+          viewerTimezoneRef.current = data.viewerTimezone;
+          setViewerTimezone(data.viewerTimezone);
+        }
         setLogs(Array.isArray(data?.logs) ? data.logs : []);
         setPages(data?.pages || 1);
         setTotal(data?.total || 0);
@@ -638,8 +754,8 @@ export default function AuditLog() {
     const params = new URLSearchParams();
     if (entity) params.set('entity', entity);
     if (action) params.set('action', action);
-    if (from) params.set('from', from);
-    if (to) params.set('to', to);
+    if (from) params.set('from', toApiDateTime(from, viewerTimezone));
+    if (to) params.set('to', toApiDateTime(to, viewerTimezone, true));
     const token = getAuthToken();
     fetch(`/api/audit-viewer/export.csv?${params.toString()}`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -670,8 +786,10 @@ export default function AuditLog() {
         (l.user?.name || '').toLowerCase().includes(q) ||
         (l.user?.email || '').toLowerCase().includes(q) ||
         (l.entity || '').toLowerCase().includes(q) ||
+        activitySummary(l).toLowerCase().includes(q) ||
+        detailsPreview(l.details, l).toLowerCase().includes(q) ||
         String(l.entityId || '').includes(q) ||
-        (l.details || '').toLowerCase().includes(q)
+        (!hasSensitiveAuditDetails(l) && searchableDetails(l.details).includes(q))
       );
     });
   }, [logs, search]);
@@ -700,7 +818,7 @@ export default function AuditLog() {
             <ScrollText size={26} color="var(--accent-color)" /> Audit Log
           </h1>
           <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem' }}>
-            Tenant-wide change history. Admin/Manager only.
+            Tenant-wide activity history. Admin only.
           </p>
         </div>
         <button
@@ -712,256 +830,128 @@ export default function AuditLog() {
         </button>
       </header>
 
-      {/* Stats row */}
-      <div className="travel-audit-page__stats" style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
-        <StatCard label="Total events (30d)" value={stats?.total ?? 0} color="var(--accent-color)" />
-        <StatCard label="CREATEs" value={stats?.byAction?.CREATE ?? 0} color={ACTION_COLOR.CREATE} />
-        <StatCard label="UPDATEs" value={stats?.byAction?.UPDATE ?? 0} color={ACTION_COLOR.UPDATE} />
-        <StatCard label="DELETEs" value={stats?.byAction?.DELETE ?? 0} color={ACTION_COLOR.DELETE} />
-      </div>
-
-      {/* Filters */}
-      <div className="card" style={{ padding: '1rem 1.25rem', marginBottom: '1.25rem' }}>
-        <div className="travel-audit-page__filters" style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-            <Filter size={16} /> Filter
-          </div>
-          <select value={entity} onChange={e => setEntity(e.target.value)} style={inputStyle}>
-            <option value="">All entities</option>
-            {ENTITY_OPTIONS.map(e => <option key={e} value={e}>{e}</option>)}
-          </select>
-          <select value={action} onChange={e => setAction(e.target.value)} style={inputStyle}>
-            <option value="">All actions</option>
-            <option value="CREATE">CREATE</option>
-            <option value="UPDATE">UPDATE</option>
-            <option value="DELETE">DELETE</option>
-            <option value="HARD_DELETE">HARD_DELETE</option>
-            <option value="SOFT_DELETE">SOFT_DELETE</option>
-          </select>
-          <input
-            type="date"
-            value={from}
-            onChange={e => setFrom(e.target.value)}
-            style={inputStyle}
-            title="From"
-          />
-          <input
-            type="date"
-            value={to}
-            onChange={e => setTo(e.target.value)}
-            style={inputStyle}
-            title="To"
-          />
-          <input
-            type="text"
-            placeholder="Search user, entity, or details..."
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            style={{ ...inputStyle, flex: 1, minWidth: 220 }}
-          />
-          {(entity || action || from || to || search) && (
-            <button
-              onClick={() => { setEntity(''); setAction(''); setFrom(''); setTo(''); setSearch(''); }}
-              className="btn-secondary"
-              style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem' }}
-            >
-              Clear
+      {/* Keep search at the left; optional filters are added on demand. */}
+      <div className="card audit-log-toolbar">
+        <div className="audit-log-toolbar__main">
+          <label className="audit-log-search">
+            <Search size={17} aria-hidden="true" />
+            <input
+              type="search"
+              placeholder="Search user, entity, or details..."
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              aria-label="Search audit logs"
+            />
+          </label>
+          {(activeFilters.length > 0 || search) && (
+            <button type="button" className="audit-filter-clear-button" onClick={clearAllFilters}>
+              Clear all
             </button>
           )}
+          <div className="audit-filter-picker" ref={filterMenuRef}>
+            <button
+              type="button"
+              className="audit-filter-add-button"
+              onClick={() => setFilterMenuOpen((open) => !open)}
+              aria-expanded={filterMenuOpen}
+              aria-haspopup="menu"
+            >
+              <Filter size={16} />
+              <span>Add filter</span>
+              {activeFilters.length > 0 && <span className="audit-filter-count">{activeFilters.length}</span>}
+            </button>
+            {filterMenuOpen && (
+              <div className="audit-filter-menu" role="menu" aria-label="Choose a filter to add">
+                <div className="audit-filter-menu__title">Add a filter</div>
+                {FILTER_OPTIONS.map((option) => {
+                  const isAdded = activeFilters.includes(option.id);
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      role="menuitem"
+                      disabled={isAdded}
+                      className={isAdded ? 'is-added' : ''}
+                      onClick={() => addFilter(option.id)}
+                    >
+                      <span className="audit-filter-menu__copy">
+                        <strong>{option.label}</strong>
+                        <small>{option.description}</small>
+                      </span>
+                      {isAdded && <Check size={16} aria-label="Added" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* #558 — Hash-chain integrity chip + Verify button. ADMIN-only:
-            verifying walks the entire audit chain and recomputes hashes.
-            Chip is green when every row's stored hash matches the
-            recomputed sha256, red when a row was tampered with, and
-            paired with a yellow "Backfill required" banner when one or
-            more rows are unchained (null hash) — typically right after
-            the v3.7.x hash-chain code first ships against a tenant
-            whose audit history pre-dates the chain. */}
-        {isAdmin && (
-          <div
-            data-testid="integrity-row"
-            style={{
-              display: 'flex',
-              gap: '0.75rem',
-              alignItems: 'center',
-              flexWrap: 'wrap',
-              marginTop: '0.85rem',
-              paddingTop: '0.85rem',
-              borderTop: '1px solid var(--border-color)',
-              fontSize: '0.85rem',
-            }}
-          >
-            {integrity?.integrityVerified ? (
-              <span
-                data-testid="integrity-chip-ok"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                  padding: '0.3rem 0.7rem',
-                  borderRadius: 999,
-                  background: 'rgba(16, 185, 129, 0.12)',
-                  color: '#10b981',
-                  border: '1px solid rgba(16, 185, 129, 0.4)',
-                  fontWeight: 600,
-                }}
-              >
-                <ShieldCheck size={14} />
-                {`Integrity verified at ${new Date(integrity.lastVerifiedAt).toLocaleTimeString('en-IN', { timeZone: tenantTimezone() || 'Asia/Kolkata' })}`}
-                <span style={{ color: 'var(--text-secondary)', fontWeight: 400, fontSize: '0.78rem' }}>
-                  ({integrity.chainLength} rows)
-                </span>
-              </span>
-            ) : verificationError ? (
-              <span
-                data-testid="integrity-chip-error"
-                style={{
-                  display: 'inline-flex', alignItems: 'center', gap: '0.4rem',
-                  padding: '0.3rem 0.7rem', borderRadius: 999,
-                  background: 'rgba(239, 68, 68, 0.12)', color: '#ef4444',
-                  border: '1px solid rgba(239, 68, 68, 0.4)', fontWeight: 600,
-                }}
-              >
-                <ShieldAlert size={14} /> Verification unavailable
-              </span>
-            ) : integrity && integrity.unhashedRows > 0 && integrity.reason && /null hash/i.test(integrity.reason) ? (
-              // First break is a null hash → operator just needs to run
-              // backfill, not call security. Yellow chip + dedicated banner
-              // below take care of the call to action.
-              <span
-                data-testid="integrity-chip-needs-backfill"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                  padding: '0.3rem 0.7rem',
-                  borderRadius: 999,
-                  background: 'rgba(234, 179, 8, 0.12)',
-                  color: '#eab308',
-                  border: '1px solid rgba(234, 179, 8, 0.4)',
-                  fontWeight: 600,
-                }}
-              >
-                <ShieldQuestion size={14} />
-                Backfill required
-                <span style={{ color: 'var(--text-secondary)', fontWeight: 400, fontSize: '0.78rem' }}>
-                  ({integrity.unhashedRows} of {integrity.totalRows} rows unchained)
-                </span>
-              </span>
-            ) : integrity ? (
-              <span
-                data-testid="integrity-chip-broken"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '0.4rem',
-                  padding: '0.3rem 0.7rem',
-                  borderRadius: 999,
-                  background: 'rgba(239, 68, 68, 0.12)',
-                  color: '#ef4444',
-                  border: '1px solid rgba(239, 68, 68, 0.4)',
-                  fontWeight: 600,
-                }}
-              >
-                <ShieldAlert size={14} />
-                Chain anomaly detected
-                {integrity.brokenAt != null && (
-                  <span style={{ color: 'var(--text-secondary)', fontWeight: 400, fontSize: '0.78rem' }}>
-                    (row #{integrity.brokenAt})
-                  </span>
-                )}
-              </span>
-            ) : (
-              <span style={{ color: 'var(--text-secondary)' }}>Verifying chain...</span>
+        {activeFilters.length > 0 && (
+          <div className="audit-filter-controls" aria-label="Active filters">
+            {activeFilters.includes('entity') && (
+              <div className="audit-filter-control">
+                <label htmlFor="audit-entity-filter">Entity</label>
+                <select id="audit-entity-filter" value={entity} onChange={e => setEntity(e.target.value)} style={inputStyle}>
+                  <option value="">All entities</option>
+                  {ENTITY_OPTIONS.map(e => <option key={e} value={e}>{e}</option>)}
+                </select>
+                <button type="button" onClick={() => removeFilter('entity')} aria-label="Remove entity filter">
+                  <X size={15} />
+                </button>
+              </div>
             )}
-            <button
-              data-testid="verify-chain-btn"
-              onClick={verifyChain}
-              disabled={verifying}
-              className="btn-secondary"
-              style={{ fontSize: '0.8rem', padding: '0.4rem 0.8rem', opacity: verifying ? 0.5 : 1 }}
-            >
-              {verifying ? 'Verifying...' : 'Verify chain'}
-            </button>
+            {activeFilters.includes('action') && (
+              <div className="audit-filter-control">
+                <label htmlFor="audit-action-filter">Action</label>
+                <select id="audit-action-filter" value={action} onChange={e => setAction(e.target.value)} style={inputStyle}>
+                  <option value="">All actions</option>
+                  <option value="CREATE">Created</option>
+                  <option value="UPDATE">Updated</option>
+                  <option value="DELETE">Deleted</option>
+                  <option value="HARD_DELETE">Permanently deleted</option>
+                  <option value="SOFT_DELETE">Archived</option>
+                </select>
+                <button type="button" onClick={() => removeFilter('action')} aria-label="Remove action filter">
+                  <X size={15} />
+                </button>
+              </div>
+            )}
+            {activeFilters.includes('dateTime') && (
+              <div className="audit-filter-control audit-filter-control--range">
+                <div className="audit-filter-timezone">Time zone: <strong>{viewerTimezone}</strong></div>
+                <div className="audit-filter-range-field">
+                  <label htmlFor="audit-from-filter">From</label>
+                  <input
+                    id="audit-from-filter"
+                    type="datetime-local"
+                    value={from}
+                    max={to || undefined}
+                    onChange={e => setFrom(e.target.value)}
+                    style={inputStyle}
+                    aria-label="From date and time"
+                  />
+                </div>
+                <div className="audit-filter-range-field">
+                  <label htmlFor="audit-to-filter">To</label>
+                  <input
+                    id="audit-to-filter"
+                    type="datetime-local"
+                    value={to}
+                    min={from || undefined}
+                    onChange={e => setTo(e.target.value)}
+                    style={inputStyle}
+                    aria-label="To date and time"
+                  />
+                </div>
+                <button type="button" onClick={() => removeFilter('dateTime')} aria-label="Remove date and time filter">
+                  <X size={15} />
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
-
-      {/* Repair banner — shown for any broken chain an admin can see.
-          Two flavours of break:
-            1. Unhashed rows (legacy / pre-tamper-evidence rows that
-               were never chained). Backfill writes their hash + link.
-            2. prevHash mismatch where the row's CONTENT recomputes
-               correctly under its STORED prevHash — a "forked anchor"
-               race (writeAudit raced against a still-unbacklfilled tail
-               or two writers wrote in the same millisecond). Backfill
-               re-stamps the anchor + hash for these rows so the chain
-               re-validates.
-          Backfill is idempotent and safe in both cases: if a row's
-          content has been tampered with, the endpoint 409s with the
-          conflict row id rather than silently overwriting. That 409 is
-          the ONLY signal that warrants escalation. The toast in
-          runBackfill surfaces the row id when this happens. */}
-      {isAdmin && integrity && !integrity.integrityVerified && integrity.reason && (
-        <div
-          data-testid="integrity-backfill-banner"
-          className="card"
-          style={{
-            padding: '0.85rem 1.25rem',
-            marginBottom: '1.25rem',
-            background: 'rgba(234, 179, 8, 0.06)',
-            border: '1px solid rgba(234, 179, 8, 0.4)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.85rem',
-            flexWrap: 'wrap',
-          }}
-        >
-          <ShieldQuestion size={18} color="#eab308" />
-          <div style={{ flex: 1, minWidth: 240 }}>
-            <div style={{ fontWeight: 600, color: '#eab308' }}>
-              {integrity.unhashedRows > 0
-                ? `Repair needed — ${integrity.unhashedRows} ${integrity.unhashedRows === 1 ? 'row is' : 'rows are'} unchained`
-                : `Repair needed — chain link broken at row #${integrity.brokenAt}`}
-            </div>
-            <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-              {integrity.unhashedRows > 0 ? (
-                <>
-                  Some audit rows lack a hash/prev-hash pair — usually rows
-                  written before tamper-evidence was turned on. Run the repair
-                  to chain them. The operation is idempotent and writes nothing
-                  if every row already has a valid hash.
-                </>
-              ) : (
-                <>
-                  An audit row's link to its predecessor doesn't match — almost
-                  always a write-race where two audit writers stamped against a
-                  stale tail. The repair tool re-stamps the anchor for any row
-                  whose content recomputes correctly; if a row was actually
-                  tampered with, the repair aborts and surfaces the row ID so
-                  you can investigate (your data stays untouched).
-                </>
-              )}
-            </div>
-          </div>
-          <button
-            data-testid="run-backfill-btn"
-            onClick={runBackfill}
-            disabled={backfilling}
-            className="btn-primary"
-            style={{
-              fontSize: '0.8rem',
-              padding: '0.5rem 1rem',
-              background: '#eab308',
-              borderColor: '#eab308',
-              opacity: backfilling ? 0.5 : 1,
-            }}
-          >
-            {backfilling ? 'Repairing…' : 'Repair chain'}
-          </button>
-        </div>
-      )}
 
       {/* Table */}
       <div className="card audit-log-table-card" style={{ padding: 0, overflow: 'hidden' }}>
@@ -971,26 +961,24 @@ export default function AuditLog() {
               <col className="audit-log-expand-column" />
               <col className="audit-log-timestamp-column" />
               <col className="audit-log-user-column" />
-              <col className="audit-log-action-column" />
-              <col className="audit-log-entity-column" />
-              <col className="audit-log-id-column" />
+              <col className="audit-log-activity-column" />
+              <col className="audit-log-details-column" />
             </colgroup>
             <thead>
               <tr style={{ background: 'rgba(255,255,255,0.03)' }}>
                 <th style={thStyle}></th>
-                <th style={thStyle}>Timestamp</th>
+                <th style={thStyle}>Date &amp; time</th>
                 <th style={thStyle}>User</th>
-                <th style={thStyle}>Action</th>
-                <th style={thStyle}>Entity</th>
-                <th style={thStyle}>Entity ID</th>
+                <th style={thStyle}>Activity</th>
+                <th style={thStyle}>Details</th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading...</td></tr>
+                <tr><td colSpan={5} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading...</td></tr>
               )}
               {!loading && filteredLogs.length === 0 && (
-                <tr><td colSpan={6} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No audit events match the current filters.</td></tr>
+                <tr><td colSpan={5} style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No audit events match the current filters.</td></tr>
               )}
               {!loading && filteredLogs.map(log => {
                 const isOpen = expanded === log.id;
@@ -998,6 +986,8 @@ export default function AuditLog() {
                   <React.Fragment key={log.id}>
                     <tr
                       onClick={() => setExpanded(isOpen ? null : log.id)}
+                      aria-expanded={isOpen}
+                      aria-label={`${activitySummary(log)} by ${log.user?.name || 'System'}`}
                       style={{
                         cursor: 'pointer',
                         borderTop: '1px solid var(--border-color)',
@@ -1015,14 +1005,7 @@ export default function AuditLog() {
                         />
                       </td>
                       <td className="audit-log-timestamp" style={{ ...tdStyle, color: 'var(--text-secondary)' }}>
-                        {/* #387: forensic timing must be unambiguous. Render
-                            in IST with an explicit timezone label so a row
-                            reads "29/04/2026, 14:30:00 IST" rather than a
-                            naive local-time string. */}
-                        {new Date(log.createdAt).toLocaleString('en-IN', {
-                          timeZone: tenantTimezone() || 'Asia/Kolkata',
-                          timeZoneName: 'short',
-                        })}
+                        {formatAuditTimestamp(log.createdAt, log.viewerTimezone)}
                       </td>
                       <td style={tdStyle}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -1035,61 +1018,21 @@ export default function AuditLog() {
                           </div>
                         </div>
                       </td>
-                      <td style={tdStyle}><ActionBadge action={log.action} /></td>
-                      <td style={tdStyle}>{log.entity}</td>
-                      <td style={{ ...tdStyle, fontFamily: 'monospace', color: 'var(--text-secondary)' }}>
-                        {log.entityId ?? '—'}
+                      <td style={tdStyle}>
+                        <div className="audit-log-activity">
+                          <ActionBadge action={log.action} />
+                          <span>{activitySummary(log)}</span>
+                        </div>
+                      </td>
+                      <td className="audit-log-summary" style={tdStyle}>
+                        {detailsPreview(log.details, log)}
                       </td>
                     </tr>
                     {isOpen && (
-                      <tr style={{ background: 'rgba(15,23,42,0.4)' }}>
+                      <tr style={{ background: 'rgba(15,23,42,0.04)' }}>
                         <td></td>
-                        <td colSpan={5} style={{ padding: '1rem 1.25rem 1.5rem' }}>
-                          {/* #558 — Display truncated hash + prevHash so an
-                              operator can spot-check chain continuity in the
-                              UI without dropping to the verify endpoint. The
-                              full 64-char hex is rarely useful on screen; the
-                              first 12 chars (48 bits) are plenty for a
-                              human-eye continuity check. */}
-                          {(log.hash || log.prevHash) && (
-                            <div style={{
-                              display: 'flex',
-                              gap: '1.25rem',
-                              fontFamily: 'monospace',
-                              fontSize: '0.72rem',
-                              color: 'var(--text-secondary)',
-                              marginBottom: '0.85rem',
-                            }}>
-                              <span data-testid="row-hash">
-                                hash: <span style={{ color: 'var(--text-primary)' }}>
-                                  {log.hash ? `${log.hash.slice(0, 12)}…` : '(unchained)'}
-                                </span>
-                              </span>
-                              <span data-testid="row-prevhash">
-                                prev: <span style={{ color: 'var(--text-primary)' }}>
-                                  {log.prevHash
-                                    ? log.prevHash.startsWith('GENESIS_')
-                                      ? log.prevHash
-                                      : `${log.prevHash.slice(0, 12)}…`
-                                    : '(unchained)'}
-                                </span>
-                              </span>
-                            </div>
-                          )}
-                          <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase', marginBottom: '0.5rem', letterSpacing: '0.04em' }}>
-                            Details
-                          </div>
-                          <div style={{
-                            background: 'var(--input-bg)',
-                            border: '1px solid var(--border-color)',
-                            borderRadius: 8,
-                            padding: '1rem',
-                          }}>
-                            {/* v3.7.17 — pass log.entity so RecordIdChips can
-                                resolve numeric IDs to display names via the
-                                matching list endpoint (ENTITY_LOOKUP). */}
-                            <DetailsView raw={log.details} entity={log.entity} />
-                          </div>
+                        <td colSpan={4} style={{ padding: '1rem 1.25rem 1.5rem' }}>
+                          <ActivityOverview log={log} cacheScope={cacheScope} />
                         </td>
                       </tr>
                     )}

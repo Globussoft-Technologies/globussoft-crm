@@ -103,7 +103,14 @@ describe("TMC teacher tour reports", () => {
     expect(response.body.trips).toHaveLength(1);
     expect(response.body.trips[0]).toMatchObject({ id: 7, destination: "Mysore", review: null, reviewSubmitted: false });
     expect(prisma.tmcTrip.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { tenantId: 1, teacherContactId: 55, status: "completed" },
+      where: {
+        tenantId: 1,
+        OR: [
+          { teacherContactId: 55 },
+          { teacherAssignments: { some: { tenantId: 1, teacherContactId: 55 } } },
+        ],
+        status: "completed",
+      },
     }));
   });
 

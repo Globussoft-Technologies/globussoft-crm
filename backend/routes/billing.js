@@ -54,6 +54,8 @@ const INVOICE_SETTING_KEYS = [
   "invoice.brandName",
   "invoice.brandColor",
   "invoice.themeColor",
+  "invoice.logoUrl",
+  "invoice.logo",
   "invoice.tagline",
   "invoice.companyAddress",
   "invoice.address",
@@ -65,6 +67,8 @@ const INVOICE_SETTING_KEYS = [
   "invoice.notes",
   "branding.name",
   "branding.color",
+  "branding.logoUrl",
+  "branding.logo",
   "branding.primaryColor",
   "branding.themeColor",
   "branding.tagline",
@@ -74,6 +78,7 @@ const INVOICE_SETTING_KEYS = [
   "branding.website",
   "branding.invoiceNotes",
   "company.name",
+  "company.logoUrl",
   "company.address",
   "company.phone",
   "company.email",
@@ -138,12 +143,26 @@ async function loadInvoiceBrandContext(tenantId, tenant) {
     // The tenant branding still renders when a clinic location is unavailable.
   }
   let logoBuffer = null;
-  try {
-    logoBuffer = await pdfRenderer.resolveProfessionalInvoiceLogo(
-      tenant?.logoUrl,
-    );
-  } catch (_e) {
-    // Logo loading is fail-soft; text and tenant colors remain available.
+  const logoSettingKeys = new Set([
+    "invoice.logoUrl",
+    "invoice.logo",
+    "branding.logoUrl",
+    "branding.logo",
+    "company.logoUrl",
+  ]);
+  const logoCandidates = [
+    tenant?.logoUrl,
+    ...settings
+      .filter((row) => logoSettingKeys.has(row?.key))
+      .map((row) => row.value),
+  ].filter((value, index, values) => value && values.indexOf(value) === index);
+  for (const logoUrl of logoCandidates) {
+    try {
+      logoBuffer = await pdfRenderer.resolveProfessionalInvoiceLogo(logoUrl);
+      if (logoBuffer) break;
+    } catch (_e) {
+      // Try another tenant-scoped branding setting before using text only.
+    }
   }
   // Match the Generic CRM shell exactly: a tenant-uploaded logo wins; when it
   // is absent, use the same default brand icon shown in the sidebar. Wellness
@@ -3649,6 +3668,8 @@ router.get("/:id/pdf", verifyToken, async (req, res) => {
               visit: {
                 select: {
                   visitDate: true,
+                  amountCharged: true,
+                  couponBreakdown: true,
                   service: { select: { name: true } },
                 },
               },

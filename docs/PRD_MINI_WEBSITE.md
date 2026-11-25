@@ -7,7 +7,7 @@
 **Sibling PRDs:** `PRD_PURCHASE_ORDERS.md` (tick #187, cluster D8) · `PRD_PAYMENT_GATEWAY_CONFIG.md` (tick #188, D9) · `PRD_IMPORT_EXPORT_JOBS.md` (tick #189, D10) · `PRD_INTEGRATIONS_HUB.md` (tick #190, D11) · `PRD_TAG_MASTER.md` (tick #191, D12) · `PRD_AI_CHAT_HISTORY.md` (tick #192, D13) · `PRD_CUSTOMER_SEGMENTS.md` (tick #193, D14) · `PRD_STAFF_DETAIL.md` (tick #194, D15) · `PRD_WALLET_TOPUP.md` (tick #195, D16) · `PRD_POS_NEW_SALE.md` (tick #196, D17) · `PRD_POS_POLYMORPHIC_INVOICE.md` (tick #197, D18).
 **Related (but distinct):** `PRD_TRAVEL_PER_SUBBRAND_BRANDING.md` — that PRD scopes per-sub-brand theme for the operator's INTERNAL app (TMC / RFU / Travel Stall / Visa Sure each renders the operator dashboard with their own brand colors); THIS PRD scopes the CUSTOMER-FACING public mini-website that walk-in patients land on when an operator shares the booking link. Different audience (operator-staff vs end-customer), different render layer (in-app vs public-no-auth), different data model (User.themePreference vs MiniWebsiteConfig). No direct dependency; both PRDs can ship independently.
 **Cluster:** MANUAL_CODING_BACKLOG.md cluster D (wellness operational session) — proposing **D19**; see §10.
-**Cred dependency:** none external — pure schema + routes + admin-page + public-render work. Re-uses existing photo-upload pattern at `routes/wellness.js` + existing slug-render pattern at `routes/booking_pages.js:355` + existing audit-hash-chain.
+**Cred dependency:** none external — pure schema + routes + admin-page + public-render work. Re-uses existing photo-upload pattern at `routes/wellness.js` + existing slug-render pattern at `routes/booking_pages.js:355` + existing audit log.
 
 ---
 
@@ -86,7 +86,7 @@ Zylu Manage → Mini Website:
 - `backend/routes/booking_pages.js:355-403` — existing `/public/:slug` public-read endpoint (returns BookingPage + active Services list; reads the Wave-7D fields)
 - `backend/routes/wellness.js` — existing photo-upload pattern + Multer config + image-resize via `sharp` (re-used for the multi-size logo/hero generation per FR-3.5)
 - `backend/services/pdfRenderer.js` — existing PDFKit infrastructure (not directly used here but referenced for the existing "server-side rendering" precedent; the public mini-website renders via server-side HTML rendering OR React-SSR per FR-3.3)
-- `backend/lib/audit.js` `writeAudit()` — existing tamper-evident chain; new `MINI_WEBSITE_*` event family flows through unchanged
+- `backend/lib/audit.js` `writeAudit()` — records the new `MINI_WEBSITE_*` event family in the tenant audit log
 - `backend/lib/notificationService.js` — existing notification surface; out-of-scope for v1 (Phase 2: notify operator when their mini-website is viewed >N times/day, per Q10)
 - `frontend/src/pages/BookingPages.jsx` — existing 856-LOC admin page that today hosts the mini-website sub-modal; sunset (or simplified to booking-CRUD-only) once the dedicated editor lands
 - `frontend/src/pages/wellness/PublicBooking.jsx` — existing public-booking flow at `/book/:slug` (per CLAUDE.md wellness route list); related render layer
@@ -348,7 +348,7 @@ On first save (POST /mini-website):
 - **Cache invalidation on publish** — POST /publish invalidates the 5-min cache for that slug; PUT updates while published=false do NOT trigger cache invalidation (draft state).
 - **Idempotency on POST endpoints** — `Idempotency-Key` header per `lib/idempotency.js`; cache TTL = 24h.
 - **Custom CSS sanitization** — `sanitizeHtml` strips `<script>` + `<iframe>` + `<style>` + `<link>` + JavaScript URL refs; only CSS rules allowed; preview-before-save UX shows the operator the sanitized version (per Q7).
-- **Audit log durability** — `MINI_WEBSITE_*` events flow through `writeAudit()`; participate in the tamper-evident hash-chain; `/api/audit/verify` accepts the new vocab without code change.
+- **Audit log durability** — `MINI_WEBSITE_*` events flow through `writeAudit()` and appear in the tenant audit log.
 - **Storage growth** — each mini-website with full uploads = ~2 MB (logo 3 sizes + hero 3 sizes); 100 tenants × 3 locations = 600 mini-websites × 2 MB = ~1.2 GB on disk. Acceptable for the demo box; flag S3-migration trigger at 10 GB.
 
 ---
@@ -489,7 +489,7 @@ If Google Fonts integration is opted into per DD-5.3 path (c) — no creds, but 
 
 - **Q9: Per-mini-website analytics — out (just rely on the existing WebVisitor + Touchpoint models) OR build a dedicated MiniWebsiteAnalytics surface?** Per-mini-website view counts + click-through-rate to the booking flow. Today's WebVisitor model captures visitor sessions; query overhead is non-trivial. Recommend out for v1 (rely on WebVisitor); Phase 2 — dedicated dashboard.
 
-- **Q10: View-event audit sampling — 1% sampling (current proposal in FR-3.8) vs full audit vs no audit?** A popular tenant could see 10K mini-website views per day → 10K audit rows per day per tenant → significant audit-table bloat. 1% sampling = 100 rows per day → manageable. Confirm 1% (or pick a different sampling rate). Phase 2 — telemetry that doesn't ride on the audit hash-chain (separate `MiniWebsiteView` model) is the cleaner shape.
+- **Q10: View-event audit sampling — 1% sampling (current proposal in FR-3.8) vs full audit vs no audit?** A popular tenant could see 10K mini-website views per day → 10K audit rows per day per tenant → significant audit-table bloat. 1% sampling = 100 rows per day → manageable. Confirm 1% (or pick a different sampling rate). Phase 2 — separate telemetry in a `MiniWebsiteView` model remains the cleaner shape.
 
 - **Q11: Color contrast accessibility check — auto-validate the operator's color picks against WCAG AA contrast standards?** When operator picks a primary color, validate that the text-on-primary contrast ratio is ≥4.5 (WCAG AA). Block save if not + show a warning + suggest a darker/lighter alternative. Adds ~30 LOC for the contrast-check helper. Recommend YES for v1 (small effort; significant accessibility win); the wellness vertical's customers include older patients with limited vision.
 
@@ -570,7 +570,7 @@ Slices 1 + 2 + 3 must ship in order (each depends on the prior). Slice 4 + 5 can
 
 **Cross-PRD coordination check:** Before implementation starts, confirm:
 
-- `routes/audit.js` `/verify` endpoint accepts the `MINI_WEBSITE_*` event family without code change (entity = `MINI_WEBSITE` per FR-3.8).
+- `writeAudit()` records the `MINI_WEBSITE_*` event family in the tenant audit log.
 - `backend/lib/imageResizer.js` is a clean extraction from existing wellness photo-upload pattern — single helper consumed by both mini-website upload AND the existing wellness PatientPhoto upload (refactor opportunity).
 - `backend/scripts/migrate-bookingpage-to-mini-website.js` is idempotent — re-runnable without duplicate `MiniWebsiteConfig` rows; `@@unique([bookingPageId])` enforces it.
 - `frontend/src/pages/BookingPages.jsx` — the Wave-7D mini-website sub-modal is SIMPLIFIED (or removed) once the dedicated editor lands; the BookingPages list page returns to booking-flow-CRUD-only.

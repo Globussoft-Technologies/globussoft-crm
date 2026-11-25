@@ -10,6 +10,7 @@ function buildTransactionMock() {
   const tx = {
     contact: { deleteMany: vi.fn().mockResolvedValue({ count: 1 }) },
     tmcParentTrip: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+    tmcTripTeacherAssignment: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
     tmcTrip: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
     transportPerson: { findMany: vi.fn().mockResolvedValue([]), update: vi.fn() },
     plotBroker: { findMany: vi.fn().mockResolvedValue([]), update: vi.fn() },
@@ -49,6 +50,9 @@ describe("contactHardDelete", () => {
     expect(tx.tmcTrip.updateMany).toHaveBeenCalledExactlyOnceWith({
       where: { teacherContactId: inBatch },
       data: { teacherContactId: null },
+    });
+    expect(tx.tmcTripTeacherAssignment.deleteMany).toHaveBeenCalledExactlyOnceWith({
+      where: { teacherContactId: inBatch },
     });
     expect(tx.webFormSubmission.updateMany).toHaveBeenCalledExactlyOnceWith({
       where: { contactId: inBatch, scope: "generic" },

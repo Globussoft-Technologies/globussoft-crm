@@ -57,9 +57,9 @@ Procurement runs informally today: operators email vendors directly, vendors ema
 
 1. **Wellness clinic re-stock workflow.** Receptionist sees `Patient` waiting-room queue includes 3 patients with prescribed treatments requiring `Hyaluronic Acid Filler` (10 vials), but `Product.stockOnHand = 4`. Receptionist drafts a PO to vendor "Aesthetic Supplies Co" with line items: 20 vials of Filler-A @ ₹4,500/vial + 10 vials of Lidocaine @ ₹350/vial. Total ₹93,500. Operator submits → approval flow fires (₹93.5K exceeds the wellness tenant's per-PO auto-approve threshold of ₹25K) → clinic manager (MANAGER role) approves → PO moves to APPROVED → operator emails the PO PDF to vendor → vendor acknowledges with expected delivery 5 days out → state transitions to ACKNOWLEDGED. Five days later, stock arrives → operator marks receipt → `InventoryReceipt` rows auto-created → `Product.stockOnHand` increments → vendor sends invoice referencing PO-2026-0042 → finance posts payment → PO state CLOSED.
 
-2. **Travel advance commitment for group rates.** TMC ops books a 40-student school trip to Goa for Dec 2026. Hotel "Resort Rio" offers ₹4,200/night/room for advance booking (vs ₹6,500 rack rate) but requires 30% deposit by Aug 31 and final pax count locked by Nov 30. Ops drafts PO with line items: 20 rooms × 5 nights × ₹4,200 = ₹420,000 base + ₹126,000 deposit obligation now. **PO REVISION FLOW:** When pax count revises Oct 15 (40 → 36 students, 18 rooms not 20), operator creates PO v2 with revised line items. Approval flow on v2 only if delta >threshold. v1 retained in audit chain; v2 becomes the operative version. Final pax + actual delivery at trip-start triggers v3 (true-up) if needed.
+2. **Travel advance commitment for group rates.** TMC ops books a 40-student school trip to Goa for Dec 2026. Hotel "Resort Rio" offers ₹4,200/night/room for advance booking (vs ₹6,500 rack rate) but requires 30% deposit by Aug 31 and final pax count locked by Nov 30. Ops drafts PO with line items: 20 rooms × 5 nights × ₹4,200 = ₹420,000 base + ₹126,000 deposit obligation now. **PO REVISION FLOW:** When pax count revises Oct 15 (40 → 36 students, 18 rooms not 20), operator creates PO v2 with revised line items. Approval flow on v2 only if delta >threshold. v1 retained in audit log; v2 becomes the operative version. Final pax + actual delivery at trip-start triggers v3 (true-up) if needed.
 
-3. **Approval gate on high-value PO.** Travel agency books a 250-passenger Umrah package with consolidator "Saudi Air Tours" — net cost ₹3.2 Cr. Operator drafts PO; per tenant config, anything over ₹50L requires OWNER (admin) role approval (single-step), and >₹2 Cr requires OWNER + a second co-signer (two-step). Both approvers receive notifications + email; PO blocked from SENT state until both APPROVE. Audit chain captures both approver `userId`s + `at` timestamps + free-text `reason` per approver.
+3. **Approval gate on high-value PO.** Travel agency books a 250-passenger Umrah package with consolidator "Saudi Air Tours" — net cost ₹3.2 Cr. Operator drafts PO; per tenant config, anything over ₹50L requires OWNER (admin) role approval (single-step), and >₹2 Cr requires OWNER + a second co-signer (two-step). Both approvers receive notifications + email; PO blocked from SENT state until both APPROVE. audit log captures both approver `userId`s + `at` timestamps + free-text `reason` per approver.
 
 4. **Multi-vendor PO consolidation dashboard.** Family-holiday Trip #TRP-2026-1043 references 6 distinct suppliers across the booking lifecycle: 1 airline (round-trip), 2 hotels (Goa + Dubai), 1 ground-transport vendor, 1 activities aggregator, 1 visa-processing vendor. Trip-detail page shows a "Purchase Orders" tab listing 6 POs across all suppliers — each row carries `PO number / Supplier / State / Total / Aged-days / Action button`. Operator can click into each PO; consolidated view shows total trip commitment + total invoiced + total paid + outstanding. Per-trip rollup feeds the trip-margin computation.
 
@@ -120,7 +120,7 @@ Transitions are role-gated:
 - Any → CANCELLED: MANAGER+ (with mandatory `reason`)
 - PARTIALLY_RECEIVED → CANCELLED is allowed but generates a partial-cancel obligation; goods already received are NOT reversed (those are real inventory)
 
-State changes write to the audit chain (see FR-3.7).
+State changes write to the audit log (see FR-3.7).
 
 ### FR-3.3 Approval workflow
 
@@ -132,9 +132,9 @@ State changes write to the audit chain (see FR-3.7).
 
 ### FR-3.4 Revision tracking
 
-- **FR-3.4.a PO revisions are first-class.** When operator clicks "Revise" on an APPROVED+ PO, a new revision row is created (PO-2026-0042-v2) linked to the parent PO-2026-0042-v1 via `parentPoId` FK. v1 retained in audit chain immutable; v2 becomes the operative version.
+- **FR-3.4.a PO revisions are first-class.** When operator clicks "Revise" on an APPROVED+ PO, a new revision row is created (PO-2026-0042-v2) linked to the parent PO-2026-0042-v1 via `parentPoId` FK. v1 retained in audit log immutable; v2 becomes the operative version.
 - **FR-3.4.b Diff view.** PO detail page exposes a "Revision history" tab; each revision shows side-by-side diff vs the prior version (line-item additions / removals / qty changes / unit-cost changes / total delta). UI mirrors the audit-log diff pattern.
-- **FR-3.4.c Revision approval re-trigger.** Revisions that increase the total by >threshold (configurable; default 5%) re-trigger the approval flow against the NEW total. Revisions that DECREASE the total or that adjust line items below threshold flow through without re-approval but DO write to the audit chain.
+- **FR-3.4.c Revision approval re-trigger.** Revisions that increase the total by >threshold (configurable; default 5%) re-trigger the approval flow against the NEW total. Revisions that DECREASE the total or that adjust line items below threshold flow through without re-approval but DO write to the audit log.
 - **FR-3.4.d Retention.** All revisions retained in DB indefinitely (audit-grade). OQ-9.7 covers retention policy in case of large-volume tenant — purge >10-revisions or >7-years out is the candidate alternative.
 
 ### FR-3.5 Linkage to existing models
@@ -148,13 +148,13 @@ State changes write to the audit chain (see FR-3.7).
 ### FR-3.6 PO PDF + dispatch
 
 - **FR-3.6.a PDF template.** New `generatePurchaseOrderPdf(po)` function in `backend/services/pdfRenderer.js` (sibling to existing `generateTravelQuotePdf` at line 1438 + `renderTravelStallPersonalisedPdf` at line 1115). Shape: tenant logo + tenant address + tenant GSTIN at top; vendor/supplier address block + GSTIN at right; PO number + date + expected delivery + terms at top-right; line items table with cols `# / Description / HSN/SAC / Qty / Unit / Unit-Cost / Tax-% / Line-Total`; subtotal + tax-by-rate breakdown + grand total below; payment terms + notes + cancellation policy at bottom; tenant signatory block at bottom-right.
-- **FR-3.6.b Email dispatch.** "Send to vendor" button POSTs to `/api/purchase-orders/:id/send` → marks SENT → emails the PO PDF to the vendor's primary email; CC's the requestor; logs the dispatch event in the audit chain. Tenant outbound-email config (Mailgun / Nodemailer) drives the actual send; no new infra needed.
+- **FR-3.6.b Email dispatch.** "Send to vendor" button POSTs to `/api/purchase-orders/:id/send` → marks SENT → emails the PO PDF to the vendor's primary email; CC's the requestor; logs the dispatch event in the audit log. Tenant outbound-email config (Mailgun / Nodemailer) drives the actual send; no new infra needed.
 - **FR-3.6.c WhatsApp dispatch (optional).** Tenants with WhatsApp Cloud API configured (`WhatsAppConfig` model) can dispatch the PDF via WhatsApp instead of (or in addition to) email — operator picks dispatch channel at "Send" time. Reuses existing `routes/whatsapp.js` send-document path.
 - **FR-3.6.d Vendor portal acknowledgment (Phase 2).** Out of scope for v1; flagged in §7 as Phase 2 — let vendors click a one-time signed link in the PDF email to acknowledge receipt without needing CRM login.
 
 ### FR-3.7 Audit log integration
 
-Audit chain entries (via `backend/lib/audit.js` `writeAudit(entity, action, entityId, userId, tenantId, details)`):
+audit log entries (via `backend/lib/audit.js` `writeAudit(entity, action, entityId, userId, tenantId, details)`):
 
 - `PURCHASE_ORDER` + `CREATED` — on PO creation; details = `{ purpose, total, currency, vendorId|travelSupplierId, subjectType, subjectId, lineCount }`
 - `PURCHASE_ORDER` + `SUBMITTED` — on DRAFT → PENDING_APPROVAL
@@ -170,20 +170,20 @@ Audit chain entries (via `backend/lib/audit.js` `writeAudit(entity, action, enti
 - `PURCHASE_ORDER` + `REVISED` — on revision creation; details = `{ parentVersion, newVersion, deltaTotal, lineDeltas }`
 - `PURCHASE_ORDER` + `CLOSED` — on CLOSED transition
 
-The chain inherits the existing hash-chain immutability (sibling to wellness-clinical PHI audit). The /verify endpoint at `routes/audit.js` works against PO entries with zero code changes.
+Purchase-order transitions are recorded in the tenant audit log through `writeAudit()`.
 
 ---
 
 ## §4 Non-functional
 
 - **Per-tenant scoping.** Every PO row carries `tenantId` (default 1, FK to `Tenant`). Every route handler scopes by `req.user.tenantId`. Cross-tenant access impossible (mirrors all other routes' tenantWhere pattern).
-- **Audit immutability.** Per CRM convention, PO state changes write to the existing tamper-evident audit chain in `routes/audit.js` + `lib/audit.js`. Hash-chain integrity preserved across PO entries.
+- **Audit history.** PO state changes write to the tenant audit log through `lib/audit.js`.
 - **PDF rendering performance.** <2s for a 30-line PO via pdfkit/pdf-lib (mirrors `generateTravelQuotePdf` shape — tick #173). Test pinned at `e2e/tests/purchase-orders-pdf.spec.js` (Phase 2 follow-up).
 - **PO list page performance.** Tenant with up to 5,000 historical POs paginates to first-page-load <1s with default 25-row pagination. Filters (status / vendor / supplier / date-range / total-range) execute against database indexes; full-text search on PO notes is NOT in v1 scope.
 - **Approval-notification latency.** On PENDING_APPROVAL transition, approver notification dispatched within 60s (existing notification dispatcher's polling cadence).
 - **Email/WhatsApp dispatch reliability.** Failed sends retry per `backend/lib/webhookDelivery.js` retry pattern (3 attempts, exponential backoff). Failure surfaces in PO detail page as "Send failed; retry" with operator override.
 - **Multi-currency.** Original-currency total + FX-rate-snapshot + tenant-base-currency total all stored at PO row. Historical reports compute against original-currency totals (stable); aggregate dashboards optionally convert to tenant base.
-- **Audit retention.** PO + line-item rows + revision rows + audit chain entries retained 7 years per Indian GST/IT statutory retention (mirrors `PRD_TRAVEL_SUPPLIER_MASTER.md` §4 retention rule). After 7 years, optionally purge to cold storage; no auto-purge in v1.
+- **Audit retention.** PO + line-item rows + revision rows + audit log entries retained 7 years per Indian GST/IT statutory retention (mirrors `PRD_TRAVEL_SUPPLIER_MASTER.md` §4 retention rule). After 7 years, optionally purge to cold storage; no auto-purge in v1.
 
 ---
 
@@ -214,11 +214,11 @@ The chain inherits the existing hash-chain immutability (sibling to wellness-cli
 ## §6 Acceptance criteria
 
 - **AC-6.1** Operator creates a PO (INVENTORY purpose) from `/wellness/inventory/low-stock` → picks vendor → adjusts line items → submits → if total ≤₹25K threshold, auto-APPROVED; if >₹25K, PENDING_APPROVAL with notification dispatched to MANAGER role.
-- **AC-6.2** Approver clicks "Approve" → state transitions to APPROVED → audit-chain row written with `approvedBy / at / reason` populated → requestor notified.
+- **AC-6.2** Approver clicks "Approve" → state transitions to APPROVED → audit log row written with `approvedBy / at / reason` populated → requestor notified.
 - **AC-6.3** Operator clicks "Send" → PO PDF rendered → emailed to vendor's primary email → state transitions SENT → audit row written with dispatch-channel + recipient.
 - **AC-6.4** Vendor delivers goods → operator marks per-line receipt quantities → state transitions PARTIALLY_RECEIVED (if any line under-delivered) or DELIVERED (if all full) → `InventoryReceipt` rows auto-created per line → `Product.stockOnHand` incremented atomically.
-- **AC-6.5** PO transitions to INVOICED on supplier invoice upload + match (TRAVEL) or finance-marks-invoiced (INVENTORY) → PAID on payment-posted with reference → CLOSED auto-fires on PAID transition (default config) → all audit chain entries integrity-verified via `/api/audit/verify`.
-- **AC-6.6** Operator opens "Revise" on APPROVED PO → modifies line items → PO v2 created → if delta total >5% increase, re-triggers approval flow → audit chain shows v1 + v2 + diff metadata.
+- **AC-6.5** PO transitions to INVOICED on supplier invoice upload + match (TRAVEL) or finance-marks-invoiced (INVENTORY) → PAID on payment-posted with reference → CLOSED auto-fires on PAID transition (default config) → corresponding audit events are visible in the tenant audit log.
+- **AC-6.6** Operator opens "Revise" on APPROVED PO → modifies line items → PO v2 created → if delta total >5% increase, re-triggers approval flow → audit log shows v1 + v2 + diff metadata.
 - **AC-6.7** Operator clicks "Cancel" on a SENT PO with mandatory reason → state transitions to CANCELLED → audit row written → if PO was ACKNOWLEDGED with stored cancel-fee, auto-creates a Payable row for the fee (TRAVEL) or notes the obligation (INVENTORY).
 - **AC-6.8** Travel-side: operator opens `/travel/trips/:id` → "Purchase Orders" tab lists all POs linked to the trip → drill-in to per-PO detail → consolidated trip-level total-committed + total-invoiced + total-paid + outstanding visible.
 - **AC-6.9** Tenant admin opens `/settings/purchase-orders` → configures approval threshold ladder (JSON editor or guided form) → saves → new POs evaluate against the new ladder.
@@ -248,7 +248,7 @@ The chain inherits the existing hash-chain immutability (sibling to wellness-cli
 - **`ApprovalRequest` model** ([backend/prisma/schema.prisma:1987](../backend/prisma/schema.prisma#L1987)) — Used directly with `entity = 'PurchaseOrder'`. No model changes for v1 (DD-5.2 defers multi-approver).
 - **`Product` model** — `stockOnHand` auto-increment on receipt-create. Existing model; no changes.
 - **`Tenant` model** — new `poApprovalConfigJson` field added (DD-5.6). ADDITIVE schema migration.
-- **`backend/lib/audit.js` `writeAudit()`** ([backend/lib/audit.js:99](../backend/lib/audit.js#L99)) — Audit-chain integration. No changes; new entity values written transparently.
+- **`backend/lib/audit.js` `writeAudit()`** ([backend/lib/audit.js:99](../backend/lib/audit.js#L99)) — audit log integration. No changes; new entity values written transparently.
 - **`backend/services/pdfRenderer.js`** ([backend/services/pdfRenderer.js](../backend/services/pdfRenderer.js)) — New `generatePurchaseOrderPdf(po)` function (sibling to `generateTravelQuotePdf` at line 1438 + `renderTravelStallPersonalisedPdf` at line 1115). Mirrors travel-quote PDF shape.
 - **`backend/routes/approvals.js`** — Generic approval ledger. Used as-is; PO is just a new `entity` value.
 - **Email infrastructure** (`backend/lib/email.js` + Mailgun/Nodemailer routes) — Existing; PO dispatch reuses.
@@ -267,7 +267,7 @@ The chain inherits the existing hash-chain immutability (sibling to wellness-cli
 - **OQ-9.4 PO numbering format — `PO-{YYYY}-{####}` vs per-sub-brand prefixed (`TMC-PO-{YYYY}-{####}`)?** Sub-brand visible separately on the PO row already; including in the number adds clarity for ops emailing vendors but adds tenant config burden. Suggest: tenant-configurable boolean `usesSubBrandPoPrefix` (default false). Decided during product call.
 - **OQ-9.5 Currency — single PO must be single-currency, or multi-line multi-currency allowed?** Per DD-5.4 recommendation, single-currency-per-PO for v1. Multi-line multi-currency is Phase 2.
 - **OQ-9.6 Cancellation policy capture — free-form text or structured (cancel-fee% + cancel-by-date)?** Structured fields enable auto-Payable creation on late cancellation. Free-form text is faster to ship but blocks the auto-fee surface. **Recommendation: structured fields `cancellationFeePct: Float?` + `cancellationDeadlineDate: DateTime?` + `cancellationNotes: String?` on PurchaseOrder.** Decided during product call.
-- **OQ-9.7 Revision retention — keep all versions in DB, or only latest + audit-log diff?** All versions retained today per FR-3.4.d. At scale (10+ revisions per PO over multiple years), DB-row count grows. Alternative: keep only latest in `PurchaseOrder` table + write each revision delta to audit-chain only. Trade-off: query speed vs storage. Decided per tenant volume after first year of production data.
+- **OQ-9.7 Revision retention — keep all versions in DB, or only latest + audit-log diff?** All versions retained today per FR-3.4.d. At scale (10+ revisions per PO over multiple years), DB-row count grows. Alternative: keep only latest in `PurchaseOrder` table + write each revision delta to audit log only. Trade-off: query speed vs storage. Decided per tenant volume after first year of production data.
 - **OQ-9.8 PO templates per supplier category (hotel vs flight vs visa)?** Out of v1 per §7. Re-evaluate after Phase 1 ship + 6 months of operator feedback.
 - **OQ-9.9 Approval expiry policy — auto-cancel at 14 days, or auto-escalate forever?** Per FR-3.3.e — escalate at 7 days, auto-cancel at 14. Decided per tenant ops cadence.
 - **OQ-9.10 Should this PRD include receipts auto-link (FR-3.5.d) in v1, or defer to Phase 2?** Auto-linking on goods-receipt is the "PO → Receipt → Stock Update" linkage the issue explicitly calls out. Recommend SHIP IN V1 to deliver the issue's core ask; the linkage is small (one new FK column + one auto-create call). Decided during product call.

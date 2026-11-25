@@ -445,14 +445,14 @@ describe('GET /api/v1/flyers/public/:slug — public render', () => {
     expect(call[4]).toBe(1); // tenantId
     expect(call[5].format).toBe('pdf-a4');
     expect(call[5].engine).toBe('pdfkit');
-    // actorType opt for the audit chain — fail-soft (we asserted the opts arg
+    // actorType opt for the audit row — fail-soft (we asserted the opts arg
     // landed by checking the 7th positional).
     expect(call[6]).toEqual(expect.objectContaining({ actorType: 'public' }));
   });
 
   test('audit failure does not block bytes — render still returns 200', async () => {
     prisma.travelFlyerTemplate.findFirst.mockResolvedValue(makeTemplate());
-    writeAuditMock.mockRejectedValueOnce(new Error('audit chain offline'));
+    writeAuditMock.mockRejectedValueOnce(new Error('audit logger offline'));
     const token = mintShareToken({ flyerId: 42, tenantId: 1 });
     const res = await request(makeApp())
       .get(`/api/v1/flyers/public/summer-umrah-2026?t=${encodeURIComponent(token)}&format=pdf-a4`);

@@ -18072,7 +18072,7 @@ router.post(
 //   * Flipping TO `expired` (computed from expiresAt; an admin who
 //     wants to retire a card uses `cancelled`).
 //
-// Audited like every other GiftCard mutation so a tamper trail exists.
+// Audited like every other GiftCard mutation so the change is recorded.
 router.patch(
   "/giftcards/:id",
   verifyRole(["ADMIN", "MANAGER"]),

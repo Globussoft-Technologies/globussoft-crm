@@ -14,9 +14,34 @@
 // to recover ASCII text our renderers emit.
 import { describe, test, expect, vi } from 'vitest';
 import zlib from 'node:zlib';
+import { Readable } from 'node:stream';
+import { createRequire } from 'node:module';
 import pdfR from '../../services/pdfRenderer.js';
 
 const { renderPrescriptionPdf, renderConsentPdf, renderBrandedInvoicePdf, renderProfessionalInvoicePdf, renderGenericPlotInvoicePdf, renderProfessionalWellnessInvoicePdf, fitReferenceInvoiceMetadataFont, resolveProfessionalInvoiceLogo, renderPatientSummaryPdf, scrubZyluText, scrubZyluSource, parsePhotoUrls } = pdfR;
+const requireCJS = createRequire(import.meta.url);
+const storageEnvKeys = [
+  'OCI_ACCESS_KEY_ID',
+  'OCI_SECRET_ACCESS_KEY',
+  'OCI_REGION',
+  'OCI_BUCKET_NAME',
+  'OCI_NAMESPACE',
+  'OCI_ENDPOINT_URL',
+];
+const previousStorageEnv = Object.fromEntries(storageEnvKeys.map((key) => [key, process.env[key]]));
+Object.assign(process.env, {
+  OCI_ACCESS_KEY_ID: 'test-access-key',
+  OCI_SECRET_ACCESS_KEY: 'test-secret-key',
+  OCI_REGION: 'ap-mumbai-1',
+  OCI_BUCKET_NAME: 'test-bucket',
+  OCI_NAMESPACE: 'test-namespace',
+  OCI_ENDPOINT_URL: '',
+});
+const objectStorage = requireCJS('../../services/s3Service.js');
+for (const [key, value] of Object.entries(previousStorageEnv)) {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -1232,7 +1257,7 @@ describe('renderProfessionalWellnessInvoicePdf', () => {
     expect((buf.toString('latin1').match(/\/Type\s+\/Page\b/g) || []).length).toBe(1);
     expect(text).toContain('Dr Enhanced Wellness');
     expect(text).toContain('Care that feels personal');
-    expect(text).toContain('ENTERPRISE INVOICE');
+    expect(text).toContain('INVOICE');
     expect(text).toContain('Duke Patient');
     expect(text).toContain('+918850236910');
     expect(text).toContain('duke@example.com');
@@ -1243,15 +1268,150 @@ describe('renderProfessionalWellnessInvoicePdf', () => {
     expect(text).toContain('Suprano Titanium');
     expect(normalizedText).toContain('Upper Lip');
     expect(text).toContain('Upper lip session');
-    expect(text).toContain('PAYMENT MODE');
-    expect(text).toContain('UPI');
-    expect(text).toContain('Tax (GST 0%)');
-    expect(text).toContain('Grand Total');
+    expect(normalizedText.toUpperCase()).toContain('PAYMENT MODE');
+    expect(normalizedText.toUpperCase()).toContain('UPI');
+    expect(text).not.toContain('Tax');
+    expect(text).not.toContain('Discount');
+    expect(text).toContain('Invoice Total');
     expect(text).toContain('Please retain this invoice');
     expect(text).toContain('For any queries, contact');
     expect(text).toContain('Thank you for choosing Dr Enhanced Wellness');
     expect(text).not.toContain('Invalid Date');
     expect(text).not.toContain('...');
+  });
+
+  test('renders mixed payment modes, transactions, discounts, and all wellness item types', async () => {
+    const buf = await renderProfessionalWellnessInvoicePdf(
+      {
+        invoiceNum: 'WLV-MIXED-01',
+        amount: 1400,
+        amountPaid: 1400,
+        balance: 0,
+        status: 'PAID',
+        paymentMode: 'combined',
+        customerName: 'Asha Customer',
+        notes: 'Please bring the membership card on your next visit.',
+        lineItems: [
+          { type: 'package', itemId: 41, name: 'Wellness Package', quantity: 1, unitPrice: 1000, amount: 1000, description: 'Six therapy sessions' },
+          { type: 'membership', itemId: 42, name: 'Gold Membership', quantity: 1, unitPrice: 300, amount: 300, validity: '12 months' },
+          { type: 'giftcard', itemId: 43, name: 'Birthday Gift Card', quantity: 1, unitPrice: 200, amount: 200, giftCardCode: 'GIFT-APRIL' },
+          { type: 'coupon', itemId: 44, name: 'Coupon SPRING10', code: 'SPRING10', quantity: 1, unitPrice: -100, amount: -100 },
+        ],
+        paymentBreakdown: [
+          { mode: 'cash', amount: 900 },
+          { mode: 'upi', amount: 500 },
+        ],
+        paymentDetails: [
+          { id: 501, paymentMode: 'cash', amount: 900, currency: 'INR', gateway: 'manual', gatewayId: 'CASH-501', status: 'SUCCESS', paidAt: '2026-10-23' },
+          { id: 502, paymentMode: 'upi', amount: 500, currency: 'INR', gateway: 'razorpay', gatewayId: 'pay_upi_502', status: 'SUCCESS', paidAt: '2026-10-23' },
+        ],
+      },
+      { name: 'Asha Customer' },
+      clinicFixture(),
+      {
+        tenant: { name: 'Enhanced Wellness', brandColor: '#265855', defaultCurrency: 'INR', locale: 'en-IN' },
+        settings: [
+          { key: 'invoice.brandName', value: 'Enhanced Wellness Clinic' },
+          { key: 'invoice.tagline', value: 'Care that feels personal' },
+        ],
+      },
+    );
+
+    const text = extractPdfText(buf);
+    const normalizedText = text.replace(/\s+/g, ' ');
+    expect(text).toContain('Enhanced Wellness Clinic');
+    expect(text).toContain('WLV-MIXED-01');
+    expect(text).toContain('Wellness Package');
+    expect(text).toContain('Six therapy sessions');
+    expect(text).toContain('Gold Membership');
+    expect(text).toContain('12 months');
+    expect(text).toContain('Birthday Gift Card');
+    expect(text).toContain('GIFT-APRIL');
+    expect(text).toContain('Coupon SPRING10');
+    expect(text).toContain('SPRING10');
+    expect(normalizedText.toUpperCase()).toContain('MIXED PAYMENT');
+    expect(text).toContain('Payment Modes');
+    expect(text).toContain('Payment Transactions');
+    expect(text).toContain('CASH-501');
+    expect(text).toContain('pay_upi_502');
+    expect(text).toContain('Amount Paid');
+    expect(text).not.toContain('Balance Due');
+    expect(text).toContain('Please bring the membership card');
+  });
+
+  test('shows the persisted total for one unpriced imported item and imported split payments', async () => {
+    const buf = await renderProfessionalWellnessInvoicePdf(
+      {
+        invoiceNum: 'INV-IMPORTED-37500',
+        amount: 37500,
+        amountPaid: 0,
+        balance: 0,
+        status: 'PAID',
+        paymentMode: 'combined',
+        importedPaymentSplit: { Cash: '30500', UPI: '7000' },
+        lineItemsJson: JSON.stringify([
+          { type: 'package', itemId: 9, name: 'Yasthika LHR', quantity: 1, unitPrice: null, amount: null },
+        ]),
+      },
+      { name: 'Varsha Khemka' },
+      clinicFixture(),
+      { tenant: { name: 'Enhanced Wellness', defaultCurrency: 'INR', locale: 'en-IN' } },
+    );
+
+    const text = extractPdfText(buf);
+    const normalizedText = text.replace(/\s+/g, ' ');
+    expect(text).toContain('Yasthika LHR');
+    expect(text).toContain('37,500.00');
+    expect(normalizedText).toMatch(/Original item price\s+unavailable/);
+    expect(text).not.toContain('Card');
+    expect(text).not.toContain('Online');
+    expect(text).not.toContain('Pay Later');
+    expect(text).not.toContain('Wallet');
+    expect(text).toContain('UPI');
+    expect(normalizedText).toMatch(/Amount Paid.{0,20}37,500\.00/);
+    expect(text).not.toContain('Balance Due');
+    expect(text).toContain('UNIT PRICE');
+  });
+
+  test('paginates long invoices and keeps later items and payments in the document', async () => {
+    const lineItems = Array.from({ length: 18 }, (_, index) => ({
+      type: index % 2 ? 'product' : 'service',
+      name: `Long invoice item ${index + 1}`,
+      description: `Detailed service description ${index + 1} with treatment instructions and care information.`,
+      quantity: 1,
+      unitPrice: 100,
+      amount: 100,
+    }));
+    const paymentDetails = Array.from({ length: 8 }, (_, index) => ({
+      id: 700 + index,
+      paymentMode: index % 2 ? 'upi' : 'cash',
+      amount: 100,
+      gateway: 'manual',
+      gatewayId: `TXN-LONG-${index + 1}`,
+      status: 'SUCCESS',
+      paidAt: '2026-10-23',
+    }));
+    const buf = await renderProfessionalWellnessInvoicePdf(
+      {
+        invoiceNum: 'WLV-MULTIPAGE',
+        amount: 1800,
+        amountPaid: 800,
+        balance: 1000,
+        status: 'UNPAID',
+        lineItems,
+        paymentDetails,
+      },
+      { name: 'Multi Page Customer' },
+      clinicFixture(),
+      { tenant: { name: 'Enhanced Wellness', defaultCurrency: 'INR', locale: 'en-IN' } },
+    );
+
+    const text = extractPdfText(buf);
+    expect((buf.toString('latin1').match(/\/Type\s+\/Page\b/g) || []).length).toBeGreaterThan(1);
+    expect(text).toContain('Invoice WLV-MULTIPAGE');
+    expect(text).toContain('Long invoice item 18');
+    expect(text).toContain('TXN-LONG-8');
+    expect(text).toContain('Page 1 of');
   });
 
   test('shrinks long invoice metadata values to one line so dates cannot overlap them', () => {
@@ -1276,13 +1436,70 @@ describe('renderProfessionalWellnessInvoicePdf', () => {
 });
 
 describe('resolveProfessionalInvoiceLogo', () => {
+  test('normalizes an uploaded SVG into a PDFKit-compatible PNG', async () => {
+    const fs = await import('node:fs/promises');
+    const path = await import('node:path');
+    const os = await import('node:os');
+    const sharp = requireCJS('sharp');
+    const logoPath = path.join(os.tmpdir(), `invoice-logo-${process.pid}-${Date.now()}.svg`);
+    const svg = Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240"><rect x="88" y="94" width="64" height="52" fill="#265855"/></svg>',
+    );
+    const tenantLogo = requireCJS('../../lib/tenantLogo.js');
+    const diskPathSpy = vi.spyOn(tenantLogo, 'localLogoDiskPath')
+      .mockReturnValue(logoPath);
+    await fs.writeFile(logoPath, svg);
+
+    try {
+      const normalized = await resolveProfessionalInvoiceLogo('/api/uploads/branding/tenant-1/logo.svg');
+      expect(normalized?.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+      const dimensions = await sharp(normalized).metadata();
+      expect(dimensions.width).toBeLessThan(100);
+      expect(dimensions.height).toBeLessThan(100);
+      const pdf = await renderProfessionalWellnessInvoicePdf(
+        { invoiceNum: 'INV-LOGO-01', amount: 0, status: 'PAID', lineItems: [] },
+        { name: 'Logo Test Customer' },
+        null,
+        { tenant: { name: 'Enhanced Wellness' }, logoBuffer: normalized },
+      );
+      expect(pdf.toString('latin1')).toContain('/Subtype /Image');
+    } finally {
+      diskPathSpy.mockRestore();
+      await fs.unlink(logoPath).catch(() => {});
+    }
+  });
+
+  test('reads a private configured object-storage logo with server credentials', async () => {
+    const logo = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    const objectSpy = vi.spyOn(objectStorage, 'getObjectStream')
+      .mockResolvedValue({ stream: Readable.from([logo]) });
+    const fetchSpy = vi.spyOn(pdfR, 'fetchLogoBuffer').mockResolvedValue(null);
+    const logoUrl = 'https://objectstorage.ap-mumbai-1.oraclecloud.com/n/test-namespace/b/test-bucket/o/branding/tenant-1/logo.png?version=2';
+
+    try {
+      const resolvedLogo = await resolveProfessionalInvoiceLogo(logoUrl);
+      expect(resolvedLogo?.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+      expect(objectStorage.extractKeyFromUrl('https://objectstorage.ap-mumbai-1.oraclecloud.com/n/test-namespace/b/test-bucket/o/branding/tenant-1/logo.png'))
+        .toBe('branding/tenant-1/logo.png');
+      expect(objectSpy).toHaveBeenCalledWith('branding/tenant-1/logo.png');
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      objectSpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
+
   test('uses the tenant-configured remote logo through the shared fetch seam', async () => {
     const logo = Buffer.from(
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==',
       'base64',
     );
     const fetchSpy = vi.spyOn(pdfR, 'fetchLogoBuffer').mockResolvedValue(logo);
-    await expect(resolveProfessionalInvoiceLogo('https://cdn.example.com/logo.png')).resolves.toBe(logo);
+    const resolvedLogo = await resolveProfessionalInvoiceLogo('https://cdn.example.com/logo.png');
+    expect(resolvedLogo?.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
     expect(fetchSpy).toHaveBeenCalledWith('https://cdn.example.com/logo.png');
     fetchSpy.mockRestore();
   });

@@ -80,7 +80,7 @@ prisma.revokedToken = prisma.revokedToken || {};
 prisma.revokedToken.findUnique = vi.fn().mockResolvedValue(null);
 
 // Spy on writeAudit so the suggest/approve/reject pins are testable
-// without exercising the real hash-chain writer. The router uses CJS
+// without exercising the real audit writer. The router uses CJS
 // `require('../lib/audit')`, which bypasses vitest's ESM module
 // interception — so we patch the audit module's exports object DIRECTLY
 // before requiring the router. This relies on Node's CJS module cache

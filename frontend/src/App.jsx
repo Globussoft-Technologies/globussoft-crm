@@ -348,6 +348,7 @@ const Zapier = lazy(() => import("./pages/Zapier"));
 // permission checks (usePermissions) rather than RoleGuard wrap so non-ADMIN
 // users granted `roles.read` through RBAC can also reach the page.
 const RolesAdmin = lazy(() => import("./pages/RolesAdmin"));
+const TmcTeacherManagement = lazy(() => import("./pages/travel/TmcTeacherManagement"));
 const MyPermissions = lazy(() => import("./pages/MyPermissions"));
 // Per-target user permission view at /staff/:userId/permissions. Reuses the
 // MyPermissions visual layout but is driven by a URL param and the
@@ -2986,6 +2987,14 @@ export default function App() {
                         roles.read so non-ADMIN admins with the RBAC grant can
                         still reach it. */}
                       <Route path="settings/roles" element={<RolesAdmin />} />
+                      <Route
+                        path="travel/tmc/teachers"
+                        element={<TravelOnly><TmcTeacherManagement /></TravelOnly>}
+                      />
+                      <Route
+                        path="travel/tmc/teachers/:teacherId"
+                        element={<TravelOnly><TmcTeacherManagement /></TravelOnly>}
+                      />
                       {/* G009  Multi-channel Lead Capture admin (FR-3.7). */}
                       <Route
                         path="settings/lead-capture"

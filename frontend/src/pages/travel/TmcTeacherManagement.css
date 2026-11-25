@@ -1,0 +1,891 @@
+.tmc-teacher-page {
+  --tmc-teacher-accent: var(--primary-color, var(--accent-color));
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  color: var(--text-primary);
+  padding-block: 1.5rem;
+}
+
+.tmc-teacher-page button,
+.tmc-teacher-page input,
+.tmc-teacher-page select {
+  font: inherit;
+}
+
+.tmc-teacher-page__heading,
+.tmc-teacher-page__directory-heading,
+.tmc-teacher-page__section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.tmc-teacher-page__heading h1,
+.tmc-teacher-page__profile-header h1 {
+  margin: 0;
+  font-size: 1.55rem;
+  font-weight: 750;
+}
+
+.tmc-teacher-page__heading p,
+.tmc-teacher-page__directory-heading p,
+.tmc-teacher-page__section-heading p {
+  margin: 0.35rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.tmc-teacher-page__registration,
+.tmc-teacher-page__directory,
+.tmc-teacher-page__profile-header,
+.tmc-teacher-page__detail-panel {
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-color);
+  box-shadow: 0 2px 8px rgba(20, 20, 35, 0.025);
+}
+
+.tmc-teacher-page__registration {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.85rem 1rem;
+}
+
+.tmc-teacher-page__icon-box,
+.tmc-teacher-page__field-icon {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: var(--subtle-bg-3);
+  color: var(--tmc-teacher-accent);
+}
+
+.tmc-teacher-page__registration-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tmc-teacher-page__registration-copy h2 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.tmc-teacher-page__registration-copy p {
+  overflow: hidden;
+  margin: 0.22rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tmc-teacher-page__registration-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.5rem;
+}
+
+.tmc-teacher-page__registration-actions button,
+.tmc-teacher-page__registration-actions a,
+.tmc-teacher-page__refresh,
+.tmc-teacher-page__profile-header > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  text-decoration: none;
+}
+
+.tmc-teacher-page__directory {
+  padding: 1rem;
+}
+
+.tmc-teacher-page__directory-heading {
+  margin-bottom: 0.85rem;
+}
+
+.tmc-teacher-page__directory-heading h2,
+.tmc-teacher-page__section-heading h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.tmc-teacher-page__directory-heading h2 span {
+  color: var(--text-secondary);
+}
+
+.tmc-teacher-page__directory-heading p {
+  font-size: 0.74rem;
+}
+
+.tmc-teacher-page__refresh {
+  flex: 0 0 auto;
+}
+
+.tmc-teacher-page__search {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: min(100%, 360px);
+  box-sizing: border-box;
+  margin-bottom: 0.85rem;
+  height: var(--travel-ui-control-height, 2.125rem);
+  padding: 0 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--text-secondary);
+}
+
+.tmc-teacher-page__sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.tmc-teacher-page__search input {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+}
+
+body[data-vertical="travel"] .travel-app-shell .travel-content-frame .tmc-teacher-page__search > input {
+  height: calc(var(--travel-ui-control-height, 2.125rem) - 2px) !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  padding: 0 !important;
+  line-height: 1.2 !important;
+}
+
+.tmc-teacher-page__search input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.82;
+}
+
+.tmc-teacher-page__search > button {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 1.2rem;
+  line-height: 1;
+}
+
+.tmc-teacher-page__table-scroll {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+}
+
+.tmc-teacher-page__infinite-list {
+  max-height: min(70vh, 700px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.tmc-teacher-page__infinite-sentinel {
+  width: 100%;
+  height: 1px;
+}
+
+.tmc-teacher-page__table {
+  width: 100%;
+  min-width: 780px;
+  border-collapse: collapse;
+  font-size: 0.77rem;
+}
+
+.tmc-teacher-page__table th {
+  padding: 0.7rem 0.75rem;
+  background: var(--subtle-bg-3);
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  font-weight: 750;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.tmc-teacher-page__table td {
+  padding: 0.65rem 0.75rem;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-primary);
+  vertical-align: middle;
+}
+
+.tmc-teacher-page__table td > small,
+.tmc-teacher-page__table td small,
+.tmc-teacher-page__teacher-name small,
+.tmc-teacher-page__student-summary small {
+  display: block;
+  margin-top: 0.18rem;
+  color: var(--text-secondary);
+  font-size: 0.69rem;
+  line-height: 1.4;
+}
+
+.tmc-teacher-page__teacher-link {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.tmc-teacher-page__teacher-link:hover strong,
+.tmc-teacher-page__view-link:hover {
+  color: var(--tmc-teacher-accent);
+}
+
+.tmc-teacher-page__avatar {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--subtle-bg-3);
+  color: var(--tmc-teacher-accent);
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.tmc-teacher-page__avatar--large {
+  width: 52px;
+  height: 52px;
+  font-size: 0.95rem;
+}
+
+.tmc-teacher-page__teacher-name {
+  display: grid;
+  min-width: 0;
+}
+
+.tmc-teacher-page__teacher-name strong {
+  overflow: hidden;
+  font-size: 0.8rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tmc-teacher-page__view-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  color: var(--tmc-teacher-accent);
+  font-size: 0.73rem;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.tmc-teacher-page__muted {
+  color: var(--text-secondary);
+}
+
+.tmc-teacher-page__pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.8rem;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+
+.tmc-teacher-page__pagination > div {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.tmc-teacher-page__pagination button {
+  display: grid;
+  place-items: center;
+  width: 31px;
+  height: 31px;
+  padding: 0;
+}
+
+.tmc-teacher-page__pagination button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.tmc-teacher-page__directory-footnote {
+  margin: 0.7rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+
+.tmc-teacher-page__empty {
+  display: grid;
+  justify-items: center;
+  gap: 0.45rem;
+  padding: 1.5rem 1rem;
+  border-radius: 9px;
+  background: var(--subtle-bg-3);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.tmc-teacher-page__empty--error {
+  border: 1px solid rgba(180, 35, 24, 0.18);
+  background: rgba(180, 35, 24, 0.06);
+  color: var(--danger-color, #8a271f);
+}
+
+.tmc-teacher-page__empty--error .tmc-teacher-page__text-button {
+  color: var(--danger-color, #8a271f);
+}
+
+.tmc-teacher-page__text-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--tmc-teacher-accent);
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.tmc-teacher-page__back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: fit-content;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  text-decoration: none;
+}
+
+.tmc-teacher-page__back-link:hover {
+  color: var(--tmc-teacher-accent);
+}
+
+.tmc-teacher-page__profile-header {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 1rem;
+}
+
+.tmc-teacher-page__profile-identity {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tmc-teacher-page__name-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.tmc-teacher-page__profile-header h1 {
+  overflow: hidden;
+  font-size: 1.2rem;
+  text-overflow: ellipsis;
+}
+
+.tmc-teacher-page__registered-badge {
+  display: inline-flex;
+  padding: 0.22rem 0.48rem;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.12);
+  color: #047857;
+  font-size: 0.66rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.tmc-teacher-page__contact-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.35rem;
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+}
+
+.tmc-teacher-page__contact-line span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.tmc-teacher-page__tabs {
+  display: flex;
+  gap: 0.25rem;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.tmc-teacher-page__tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  flex: 0 0 auto;
+  padding: 0.7rem 0.85rem;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.tmc-teacher-page__tabs button[aria-selected="true"] {
+  border-bottom-color: var(--tmc-teacher-accent);
+  color: var(--text-primary);
+}
+
+.tmc-teacher-page__tabs button span {
+  padding: 0.12rem 0.38rem;
+  border-radius: 999px;
+  background: var(--subtle-bg-3);
+  color: var(--text-secondary);
+  font-size: 0.67rem;
+}
+
+.tmc-teacher-page__detail-panel {
+  padding: 1rem;
+}
+
+.tmc-teacher-page__overview,
+.tmc-teacher-page__parents {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.tmc-teacher-page__overview-heading h2,
+.tmc-teacher-page__section-heading h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.tmc-teacher-page__overview-heading p,
+.tmc-teacher-page__section-heading p {
+  font-size: 0.74rem;
+}
+
+.tmc-teacher-page__profile-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.65rem;
+}
+
+.tmc-teacher-page__profile-field {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+  padding: 0.72rem;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: var(--bg-color);
+}
+
+.tmc-teacher-page__field-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+}
+
+.tmc-teacher-page__profile-field > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.15rem;
+}
+
+.tmc-teacher-page__profile-field > div > span {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+}
+
+.tmc-teacher-page__profile-field strong {
+  overflow-wrap: anywhere;
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.tmc-teacher-page__recent-trips {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.tmc-teacher-page__recent-trips > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.tmc-teacher-page__recent-trips h3,
+.tmc-teacher-page__section-heading h3 {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.tmc-teacher-page__recent-trips > div:first-child > a {
+  color: var(--tmc-teacher-accent);
+  font-size: 0.74rem;
+  text-decoration: none;
+}
+
+.tmc-teacher-page__recent-trips > div:first-child > button {
+  color: var(--tmc-teacher-accent);
+  font-size: 0.74rem;
+}
+
+.tmc-teacher-page__table.is-compact {
+  min-width: 650px;
+}
+
+.tmc-teacher-page__section-heading {
+  margin-bottom: 0.8rem;
+}
+
+.tmc-teacher-page__section-heading h3 {
+  font-size: 0.88rem;
+}
+
+.tmc-teacher-page__count {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--subtle-bg-3);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.tmc-teacher-page__trip-status {
+  display: inline-flex;
+  padding: 0.22rem 0.48rem;
+  border-radius: 999px;
+  background: var(--subtle-bg-3);
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.tmc-teacher-page__link-actions {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+
+.tmc-teacher-page__icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--bg-color);
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.tmc-teacher-page__icon-button:hover {
+  border-color: var(--tmc-teacher-accent);
+  color: var(--tmc-teacher-accent);
+}
+
+.tmc-teacher-page__trip-picker {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+
+.tmc-teacher-page__trip-select {
+  position: relative;
+  width: min(330px, 55vw);
+  min-width: 220px;
+  color: var(--text-primary);
+}
+
+.tmc-teacher-page__trip-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  width: 100%;
+  height: var(--travel-ui-control-height, 2.125rem);
+  padding: 0 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font-size: 0.74rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tmc-teacher-page__trip-select-trigger > span {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tmc-teacher-page__trip-select-trigger:focus-visible,
+.tmc-teacher-page__trip-select-option:focus-visible {
+  outline: 2px solid var(--tmc-teacher-accent);
+  outline-offset: 2px;
+}
+
+.tmc-teacher-page__trip-select-menu {
+  position: fixed;
+  z-index: 10000;
+  box-sizing: border-box;
+  min-width: min(260px, calc(100vw - 1rem));
+  padding: 0.45rem;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: var(--bg-color);
+  box-shadow: 0 10px 28px rgba(20, 20, 35, 0.16);
+}
+
+.tmc-teacher-page__trip-select-search {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  box-sizing: border-box;
+  height: var(--travel-ui-control-height, 2.125rem);
+  padding: 0 0.6rem;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  background: var(--input-bg);
+  color: var(--text-secondary);
+}
+
+.tmc-teacher-page__trip-select-search input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.74rem;
+}
+
+body[data-vertical="travel"] .tmc-teacher-page__trip-select-search > input {
+  height: calc(var(--travel-ui-control-height, 2.125rem) - 2px) !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  padding: 0 !important;
+  line-height: 1.2 !important;
+}
+
+.tmc-teacher-page__trip-select-search input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.82;
+}
+
+.tmc-teacher-page__trip-select-options {
+  display: grid;
+  max-height: var(--tmc-trip-select-options-height, 240px);
+  margin-top: 0.35rem;
+  overflow-y: auto;
+}
+
+.tmc-teacher-page__trip-select-option {
+  width: 100%;
+  padding: 0.48rem 0.55rem;
+  overflow: hidden;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 0.74rem;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tmc-teacher-page__trip-select-option:hover,
+.tmc-teacher-page__trip-select-option.is-selected {
+  background: var(--subtle-bg-3);
+  color: var(--tmc-teacher-accent);
+}
+
+.tmc-teacher-page__trip-select-empty {
+  padding: 0.55rem;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+}
+
+.tmc-teacher-page__selected-trip {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.7rem 0.8rem;
+  border-left: 3px solid var(--tmc-teacher-accent);
+  border-radius: 6px;
+  background: var(--subtle-bg-3);
+}
+
+.tmc-teacher-page__selected-trip strong {
+  font-size: 0.82rem;
+}
+
+.tmc-teacher-page__selected-trip span {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+
+.tmc-teacher-page__subsection-heading {
+  margin: 0.15rem 0 0;
+}
+
+.tmc-teacher-page__parent-table {
+  min-width: 850px;
+}
+
+.tmc-teacher-page__student-list {
+  display: grid;
+  gap: 0.55rem;
+  min-width: 230px;
+}
+
+.tmc-teacher-page__student-summary {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.5rem 0.55rem;
+  border-left: 2px solid var(--border-color);
+  background: color-mix(in srgb, var(--subtle-bg-3) 65%, transparent);
+}
+
+.tmc-teacher-page__student-summary strong {
+  font-size: 0.73rem;
+}
+
+.tmc-teacher-page__student-summary small {
+  margin-top: 0;
+  font-size: 0.65rem;
+}
+
+.tmc-teacher-page__unlinked-students {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color);
+}
+
+@media (max-width: 760px) {
+  .tmc-teacher-page {
+    padding-block: 1rem;
+  }
+
+  .tmc-teacher-page__registration {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .tmc-teacher-page__registration-copy {
+    flex-basis: calc(100% - 60px);
+  }
+
+  .tmc-teacher-page__registration-actions {
+    width: 100%;
+    margin-left: 46px;
+  }
+
+  .tmc-teacher-page__registration-actions > * {
+    flex: 1 1 0;
+  }
+
+  .tmc-teacher-page__profile-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .tmc-teacher-page__profile-identity {
+    flex-basis: calc(100% - 68px);
+  }
+
+  .tmc-teacher-page__profile-header > button {
+    margin-left: auto;
+  }
+
+  .tmc-teacher-page__section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .tmc-teacher-page__trip-picker {
+    align-items: flex-start;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .tmc-teacher-page__trip-select {
+    width: 100%;
+  }
+}
+
+@media (max-width: 560px) {
+  .tmc-teacher-page__directory-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .tmc-teacher-page__profile-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tmc-teacher-page__contact-line {
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .tmc-teacher-page__pagination {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

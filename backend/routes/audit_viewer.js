@@ -6,6 +6,12 @@ const { formatInTenantTZ } = require('../lib/datetime');
 // later-than lte` which matches nothing — operators saw an empty trail and
 // believed the audit log itself was empty.
 const { validateDateRange } = require('../lib/validateDateRange');
+const {
+  resolveAuditTenantScope,
+  auditTenantWhere,
+  loadTenantAuditActors,
+  attachTenantAuditActors,
+} = require('../lib/auditTenantScope');
 
 const prisma = require("../lib/prisma");
 
@@ -35,22 +41,28 @@ router.use(verifyToken, verifyRole(["ADMIN"]));
 //   3. 'UTC' as a final fallback
 //
 // We add `createdAtFormatted` ALONGSIDE the raw `createdAt` rather than
-// replacing it — the existing field stays for clients that do their own
-// formatting (the AuditLog.jsx frontend currently re-formats client-side
-// with hardcoded 'Asia/Kolkata'; this server-side field gives parity for
-// API consumers + CSV export and unblocks #387's TZ-label acceptance).
-async function resolveViewerTZ(req) {
+// replacing it — API consumers and CSV exports retain the raw timestamp,
+// while the Audit Log UI uses the resolved viewerTimezone for display.
+async function resolveViewerTZ(req, scope) {
   // Cache on req so /export.csv + /list don't double-fetch when both run.
   if (req._viewerTZ) return req._viewerTZ;
   let tz = "UTC";
   try {
-    const user = await prisma.user.findUnique({
-      where: { id: req.user.userId },
-      select: { timezone: true, tenant: { select: { vertical: true } } },
+    const user = await prisma.user.findFirst({
+      where: {
+        id: req.user.userId,
+        tenantId: scope.tenantId,
+        tenant: { is: { vertical: scope.vertical } },
+      },
+      select: { timezone: true, tenantId: true, tenant: { select: { vertical: true } } },
     });
-    if (user?.timezone && user.timezone !== "UTC") {
+    if (
+      Number(user?.tenantId) === scope.tenantId &&
+      user?.tenant?.vertical === scope.vertical &&
+      user?.timezone && user.timezone !== "UTC"
+    ) {
       tz = user.timezone;
-    } else if (user?.tenant?.vertical === "wellness") {
+    } else if (scope.vertical === "wellness") {
       tz = "Asia/Kolkata";
     }
   } catch (_e) {
@@ -64,16 +76,47 @@ function decorateRow(row, tz) {
   if (!row) return row;
   return {
     ...row,
+    ...(Object.prototype.hasOwnProperty.call(row, 'details')
+      ? { details: visibleAuditDetails(row.details) }
+      : {}),
     // '—' for null/Invalid; formatted 'YYYY-MM-DD HH:mm <TZ>' otherwise.
     createdAtFormatted: formatInTenantTZ(row.createdAt, tz),
     viewerTimezone: tz,
   };
 }
 
+function stripInternalAuditFields(value) {
+  if (Array.isArray(value)) return value.map(stripInternalAuditFields);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !/^jti$/i.test(key))
+      .map(([key, child]) => [key, stripInternalAuditFields(child)]),
+  );
+}
+
+function hasInternalAuditField(value) {
+  if (Array.isArray(value)) return value.some(hasInternalAuditField);
+  if (!value || typeof value !== 'object') return false;
+  return Object.entries(value).some(([key, child]) =>
+    /^jti$/i.test(key) || hasInternalAuditField(child),
+  );
+}
+
+function visibleAuditDetails(details) {
+  if (typeof details !== 'string') return stripInternalAuditFields(details);
+  try {
+    const parsed = JSON.parse(details);
+    return hasInternalAuditField(parsed) ? JSON.stringify(stripInternalAuditFields(parsed)) : details;
+  } catch (_err) {
+    return details;
+  }
+}
+
 // Build a Prisma `where` clause from query params, scoped to the caller's tenant.
-function buildWhere(req) {
+function buildWhere(req, scope) {
   const { entity, action, userId, from, to } = req.query;
-  const where = { tenantId: req.user.tenantId };
+  const where = auditTenantWhere(scope);
 
   if (entity) where.entity = entity;
   if (action) where.action = action;
@@ -102,20 +145,20 @@ router.get('/', async (req, res) => {
     const dv = validateDateRange({ from: req.query.from, to: req.query.to });
     if (dv.error) return res.status(dv.error.status).json(dv.error);
 
+    const scope = await resolveAuditTenantScope(req.user.tenantId);
+    if (!scope) {
+      return res.status(403).json({ error: 'Invalid audit tenant scope', code: 'AUDIT_SCOPE_INVALID' });
+    }
+
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 200);
-    const where = buildWhere(req);
+    const where = buildWhere(req, scope);
 
     // #920 slice 24 — slim-shape opt-in. Audit rows carry heavy `details`
-    // JSON (often PII diffs) + hash-chain bookkeeping (`prevHash`/`hash`)
-    // that callers paginating a list view don't need. Opt-in additive — no
-    // existing caller passes ?fields=summary (grep audit pre-flight clean),
-    // so legacy callers keep the full row shape with the nested user
-    // include unchanged. Slim shape drops:
-    //   - details      (heavy JSON, PII)
-    //   - prevHash     (hash-chain bookkeeping, not list-view-relevant)
-    //   - hash         (hash-chain bookkeeping, not list-view-relevant)
-    //   - user include (slim is list-only; detail fetch hydrates user)
+    // JSON (often PII diffs) that callers paginating a list view don't need.
+    // Opt-in additive — no existing caller passes ?fields=summary. Slim shape
+    // drops details and actor identifiers; the default response separately
+    // hydrates actors with tenant + vertical constraints.
     // The createdAtFormatted + viewerTimezone decoration from #387 still
     // applies on slim rows because decorateRow operates on the projected
     // shape (it only depends on `createdAt`, which slim still selects).
@@ -132,13 +175,8 @@ router.get('/', async (req, res) => {
         entity: true,
         entityId: true,
         action: true,
-        userId: true,
         tenantId: true,
         createdAt: true,
-      };
-    } else {
-      findManyArgs.include = {
-        user: { select: { id: true, name: true, email: true } },
       };
     }
 
@@ -147,13 +185,23 @@ router.get('/', async (req, res) => {
       prisma.auditLog.count({ where }),
     ]);
 
-    const tz = await resolveViewerTZ(req);
+    const tz = await resolveViewerTZ(req, scope);
+    const visibleLogs = isSummary
+      ? logs.map((log) => {
+          const summary = { ...log };
+          delete summary.userId;
+          return summary;
+        })
+      : attachTenantAuditActors(
+          logs,
+          await loadTenantAuditActors(logs.map((log) => log.userId), scope),
+        );
     res.json({
       // #387: each row carries createdAt (raw UTC) + createdAtFormatted
       // (rendered in the viewer's TZ with a label). viewerTimezone surfaces
       // the resolved zone so the frontend / CSV consumer doesn't have to
       // re-derive it.
-      logs: logs.map((log) => decorateRow(log, tz)),
+      logs: visibleLogs.map((log) => decorateRow(log, tz)),
       total,
       pages: Math.max(Math.ceil(total / limit), 1),
       page,
@@ -169,8 +217,12 @@ router.get('/', async (req, res) => {
 // GET /stats — last 30 days aggregate stats for the current tenant
 router.get('/stats', async (req, res) => {
   try {
+    const scope = await resolveAuditTenantScope(req.user.tenantId);
+    if (!scope) {
+      return res.status(403).json({ error: 'Invalid audit tenant scope', code: 'AUDIT_SCOPE_INVALID' });
+    }
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const baseWhere = { tenantId: req.user.tenantId, createdAt: { gte: since } };
+    const baseWhere = auditTenantWhere(scope, { createdAt: { gte: since } });
 
     const [byAction, byEntity, byUser, total] = await Promise.all([
       prisma.auditLog.groupBy({
@@ -197,13 +249,7 @@ router.get('/stats', async (req, res) => {
 
     // Hydrate user details for top users
     const userIds = byUser.map(u => u.userId).filter(Boolean);
-    const users = userIds.length
-      ? await prisma.user.findMany({
-          where: { id: { in: userIds } },
-          select: { id: true, name: true, email: true },
-        })
-      : [];
-    const userMap = Object.fromEntries(users.map(u => [u.id, u]));
+    const userMap = await loadTenantAuditActors(userIds, scope);
 
     const counts = { CREATE: 0, UPDATE: 0, DELETE: 0 };
     for (const row of byAction) {
@@ -220,11 +266,10 @@ router.get('/stats', async (req, res) => {
       since,
       byAction: counts,
       byEntity: byEntity.map(e => ({ entity: e.entity, count: e._count._all })),
-      topUsers: byUser.map(u => ({
-        userId: u.userId,
-        count: u._count._all,
-        user: userMap[u.userId] || null,
-      })),
+      topUsers: byUser.flatMap(u => {
+        const user = userMap.get(Number(u.userId));
+        return user ? [{ userId: u.userId, count: u._count._all, user }] : [];
+      }),
     });
   } catch (err) {
     console.error('[AuditViewer] Stats error:', err);
@@ -240,21 +285,26 @@ router.get('/entity/:entity/:id', async (req, res) => {
       return res.status(400).json({ error: 'Invalid entity id' });
     }
 
+    const scope = await resolveAuditTenantScope(req.user.tenantId);
+    if (!scope) {
+      return res.status(403).json({ error: 'Invalid audit tenant scope', code: 'AUDIT_SCOPE_INVALID' });
+    }
+
     const logs = await prisma.auditLog.findMany({
-      where: {
-        tenantId: req.user.tenantId,
+      where: auditTenantWhere(scope, {
         entity: req.params.entity,
         entityId,
-      },
+      }),
       orderBy: { createdAt: 'desc' },
-      include: {
-        user: { select: { id: true, name: true, email: true } },
-      },
     });
 
-    const tz = await resolveViewerTZ(req);
+    const tz = await resolveViewerTZ(req, scope);
+    const visibleLogs = attachTenantAuditActors(
+      logs,
+      await loadTenantAuditActors(logs.map((log) => log.userId), scope),
+    );
     res.json({
-      logs: logs.map((log) => decorateRow(log, tz)),
+      logs: visibleLogs.map((log) => decorateRow(log, tz)),
       entity: req.params.entity,
       entityId,
       viewerTimezone: tz,
@@ -282,15 +332,21 @@ router.get('/export.csv', async (req, res) => {
     const dv = validateDateRange({ from: req.query.from, to: req.query.to });
     if (dv.error) return res.status(dv.error.status).json(dv.error);
 
-    const where = buildWhere(req);
+    const scope = await resolveAuditTenantScope(req.user.tenantId);
+    if (!scope) {
+      return res.status(403).json({ error: 'Invalid audit tenant scope', code: 'AUDIT_SCOPE_INVALID' });
+    }
+
+    const where = buildWhere(req, scope);
     const logs = await prisma.auditLog.findMany({
       where,
       orderBy: { createdAt: 'desc' },
       take: 10000,
-      include: {
-        user: { select: { id: true, name: true, email: true } },
-      },
     });
+    const visibleLogs = attachTenantAuditActors(
+      logs,
+      await loadTenantAuditActors(logs.map((log) => log.userId), scope),
+    );
 
     // #387: CSV gets BOTH the raw UTC timestamp (machine-friendly, sortable
     // in Excel) AND the viewer-TZ-rendered form with a label (human-friendly,
@@ -298,9 +354,9 @@ router.get('/export.csv', async (req, res) => {
     // that hard-coded a 0-indexed offset stay green; the new column appends
     // at the end alongside the existing trailing Details column shift would
     // break those, so we slot Timestamp(local) AFTER Timestamp.
-    const tz = await resolveViewerTZ(req);
+    const tz = await resolveViewerTZ(req, scope);
     const header = ['ID', 'Timestamp', 'TimestampLocal', 'Action', 'Entity', 'EntityId', 'UserName', 'UserEmail', 'Details'];
-    const rows = logs.map(l => [
+    const rows = visibleLogs.map(l => [
       l.id,
       l.createdAt ? new Date(l.createdAt).toISOString() : '',
       l.createdAt ? formatInTenantTZ(l.createdAt, tz) : '',
@@ -309,7 +365,7 @@ router.get('/export.csv', async (req, res) => {
       l.entityId ?? '',
       l.user ? l.user.name : '',
       l.user ? l.user.email : '',
-      l.details || '',
+      visibleAuditDetails(l.details) || '',
     ].map(csvCell).join(','));
 
     const csv = [header.join(','), ...rows].join('\r\n');

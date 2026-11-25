@@ -137,7 +137,7 @@ Vinay finishes a particularly clean "Europe-classic-7d" quote and saves it as a 
 
 ### FR-3.8 Audit + history
 
-- **FR-3.8.1** Every quote-line CRUD logs an entry in `AuditLog` with tenant + actor + quote id + before/after diff (mirror existing audit-chain pattern). Compliance-critical for B2B contracts.
+- **FR-3.8.1** Every quote-line CRUD logs an entry in `AuditLog` with tenant + actor + quote id + before/after diff (mirror existing audit log pattern). Compliance-critical for B2B contracts.
 - **FR-3.8.2** Quote-version snapshots — every "Send to client" call snapshots the current quote envelope into `QuoteSnapshot`. Lets us answer "what did the customer actually see when they accepted?" months later. See OQ-9.3 for whether to snapshot on every send vs only on accept.
 - **FR-3.8.3** Send-history — list of (sent-at, channel, recipient, opened-at, accept-at) tuples per quote.
 
@@ -154,7 +154,7 @@ Vinay finishes a particularly clean "Europe-classic-7d" quote and saves it as a 
 - **Performance:** Quote with ≤50 line items renders in <2s on a 4G connection; pricing-engine re-fire across all 50 lines completes in <5s. PDF generation <3s.
 - **Mobile-friendly customer accept flow:** the customer landing page must work on iOS Safari 16+ and Android Chrome 110+ — touch-friendly Accept/Reject/Counter buttons, no tiny tap targets, scrollable line-items table.
 - **Per-tenant brand customization:** logo, primary color, terms-of-service text — pulled from `Tenant.brandConfigJson` (already shipped per #902 / earlier brand-config work). Sub-brand override allowed via `subBrandConfigJson`.
-- **Audit:** every quote-line edit + send + status change goes through the audit chain (`writeAudit` helper). Compliance pre-req for any tenant on a B2B-contract pricing tier.
+- **Audit:** every quote-line edit + send + status change goes through the audit log (`writeAudit` helper). Compliance pre-req for any tenant on a B2B-contract pricing tier.
 - **Security:** `subBrandAccess[]` enforced server-side; customer-side share-link JWTs scoped to a single quote with read+accept+reject scopes only (no listing other quotes / contacts).
 - **A11y:** WCAG 2.1 AA on the builder + customer landing page. Keyboard navigation through Cost Master picker + drag-drop (mirror DD-5.1 of Pipeline Kanban PRD if `@dnd-kit` is adopted).
 
@@ -243,7 +243,7 @@ Existing `pdfRenderer.js` (services/) handles wellness prescription + consent + 
 - **AC-6.5** Send via email + WhatsApp — customer receives a branded PDF (tenant logo + sub-brand color) + a tappable accept-link; PDF rendering completes within 3s.
 - **AC-6.6** Customer accepts via the share link — Deal status moves to "Booked"; Invoice auto-created with the same line items + FX locked at acceptance time + `sourceQuoteId` set. Reverse-link from Invoice → Quote works.
 - **AC-6.7** Sub-brand-specific markup rule (RFU peak-season +25%) auto-applies when the trip-date falls inside the Ramadan-peak season calendar window. Operator sees the markup amount in the per-line hover tooltip.
-- **AC-6.8** Audit chain — every line-edit + send + accept + status-change creates an `AuditLog` row with diff; the hash-chain extends correctly per the existing audit-integrity engine.
+- **AC-6.8** Audit log — every line-edit + send + accept + status-change creates an `AuditLog` row with the relevant diff.
 - **AC-6.9** `subBrandAccess[]` enforcement — a user with `['travelstall']` cannot create a TMC quote via API (403 Forbidden); cannot see TMC quote templates in the picker.
 - **AC-6.10** Counter-offer — customer submits "₹95k/student" as a counter; operator sees the side-by-side in the builder + can accept-and-update or reject.
 - **AC-6.11** Convert-to-Invoice idempotency — clicking Convert twice doesn't create two invoices; second click navigates to the existing Invoice.
@@ -278,7 +278,7 @@ Existing `pdfRenderer.js` (services/) handles wellness prescription + consent + 
 - `pdfRenderer.js` — extends with `renderTravelQuote()`.
 - Email + WhatsApp delivery services (existing) — `subBrandConfig` already wires WABA per sub-brand (`621aab7`).
 - `requireTravelTenant` + `canAccessSubBrand` + `assertValidSubBrand` middleware helpers in `routes/travel_pricing.js`.
-- `writeAudit` + audit-chain engine.
+- `writeAudit` + audit log engine.
 
 ### To verify before starting
 - HSN/SAC field on `TravelCostMaster` — currently `attributesJson` may hold this; promote to first-class column if not.

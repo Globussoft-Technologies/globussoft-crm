@@ -608,7 +608,7 @@ async function applyCustomerTransition({ quote, statusAfter, changedBy, changeRe
     },
   });
 
-  // Audit chain — actor is the customer; writeAudit's userId is null and
+  // Audit log — actor is the customer; writeAudit's userId is null and
   // actorType='system' falls through to 'customer' via the actorType opt.
   try {
     await writeAudit(

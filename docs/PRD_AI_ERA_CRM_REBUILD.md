@@ -341,7 +341,7 @@ Key invariant: **L0 is the source of truth, always.** L1/L2/L3 are derived. If t
 **Deliverables:**
 1. **Per-tenant agent cost cap** + ratelimits + emergency-shutoff toggles.
 2. **Agent KPI dashboards** (the user-visible Pillar 5 review surface).
-3. **Audit log integration** — every agent action emits an `AuditLog` row + a `SemanticEvent`. Same hash-chain integrity as today's audit-log (`backend/lib/audit.js`).
+3. **Audit log integration** — every agent action emits an `AuditLog` row + a `SemanticEvent` through `backend/lib/audit.js`.
 4. **PHI / PII routing** — agents that touch wellness PHI get a separate model deployment (BAA-covered LLM endpoint) + tighter audit.
 5. **Multi-region** — embedding store + query service replicate per region for data-residency tenants (India / EU / US).
 6. **External agent SDK** — partners (Callified.ai, AdsGPT, Globus Phone) can register external agents that participate in orchestration.
@@ -497,4 +497,4 @@ A running log of architectural decisions made while building this PRD. Future ma
   - `backend/lib/eventBus.js` — workflow engine; the natural foundation for AgentRun dispatch
   - `backend/routes/ai.js`, `routes/ai_scoring.js`, `routes/sentiment.js` — today's AI surfaces; rerouted in Phase 1
   - `prisma/schema.prisma` — 114 models; L0 truth store
-  - `backend/lib/audit.js` — hash-chain audit log; pattern reuses for SemanticEvent integrity
+  - `backend/lib/audit.js` — shared audit-log writer; pattern reuses for SemanticEvent history

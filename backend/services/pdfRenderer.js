@@ -5623,8 +5623,55 @@ async function resolveProfessionalInvoiceLogo(logoUrl) {
   const fs = require("fs");
   const { localLogoDiskPath, isLogoTooLarge } = require("../lib/tenantLogo");
   let logo = null;
-  if (typeof logoUrl === "string" && /^https?:\/\//i.test(logoUrl)) {
-    logo = await module.exports.fetchLogoBuffer(logoUrl);
+  const inlineImage = typeof logoUrl === "string"
+    ? /^data:image\/(?:png|jpe?g|webp|gif|svg\+xml);base64,([a-z0-9+/=\s]+)$/i.exec(logoUrl)
+    : null;
+  if (inlineImage) {
+    const inlineBuffer = Buffer.from(inlineImage[1].replace(/\s/g, ""), "base64");
+    if (inlineBuffer.length <= LOGO_FETCH_MAX_BYTES) logo = inlineBuffer;
+  } else if (typeof logoUrl === "string" && /^https?:\/\//i.test(logoUrl)) {
+    // Uploaded logos may be stored in private OCI/S3 buckets. Fetch those
+    // through the configured object-storage credentials first; a plain HTTP
+    // request cannot read a private object even though the tenant's URL is
+    // valid. Keep the public-URL fetch as a fallback for externally hosted
+    // tenant logos.
+    try {
+      const storage = require("./s3Service");
+      // Ignore cache-busting query parameters when matching a configured
+      // OCI/S3 object URL to its storage key.
+      let storageUrl = logoUrl;
+      try {
+        const parsedUrl = new URL(logoUrl);
+        storageUrl = `${parsedUrl.origin}${parsedUrl.pathname}`;
+      } catch (_e) {
+        // Keep the original URL; extractKeyFromUrl will reject malformed input.
+      }
+      const objectKey = storage.extractKeyFromUrl(storageUrl);
+      if (objectKey) {
+        const object = await storage.getObjectStream(objectKey);
+        const stream = object?.stream;
+        if (stream && typeof stream[Symbol.asyncIterator] === "function") {
+          const chunks = [];
+          let totalBytes = 0;
+          for await (const chunk of stream) {
+            const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+            totalBytes += bytes.length;
+            if (totalBytes > LOGO_FETCH_MAX_BYTES) {
+              stream.destroy?.();
+              chunks.length = 0;
+              break;
+            }
+            chunks.push(bytes);
+          }
+          if (totalBytes > 0 && totalBytes <= LOGO_FETCH_MAX_BYTES) {
+            logo = Buffer.concat(chunks, totalBytes);
+          }
+        }
+      }
+    } catch (_e) {
+      // Fall through to the public URL fetch below.
+    }
+    if (!logo) logo = await module.exports.fetchLogoBuffer(logoUrl);
   } else {
     const diskPath = localLogoDiskPath(logoUrl, nodePath.join(__dirname, ".."));
     if (diskPath) {
@@ -5635,7 +5682,30 @@ async function resolveProfessionalInvoiceLogo(logoUrl) {
       }
     }
   }
-  if (logo && !isLogoTooLarge(logo)) return logo;
+  if (logo && !isLogoTooLarge(logo)) {
+    const isPng = logo[0] === 0x89 && logo[1] === 0x50 && logo[2] === 0x4e && logo[3] === 0x47;
+    const isJpeg = logo[0] === 0xff && logo[1] === 0xd8;
+    try {
+      // Trim empty canvas around the artwork before embedding it. Tenant logos
+      // often include generous transparent or white padding, making a nominal
+      // 48 pt logo look tiny. Normalize every upload to a compact PNG so PDFKit
+      // handles PNG, JPEG, WebP, GIF, and SVG consistently.
+      const sharp = require("sharp");
+      const image = sharp(logo, { limitInputPixels: 5_000_000 });
+      const normalizedLogo = await image
+        .trim({ threshold: 12 })
+        .resize({ width: 512, height: 512, fit: "inside", withoutEnlargement: true })
+        .png()
+        .toBuffer();
+      if (normalizedLogo.length <= LOGO_FETCH_MAX_BYTES && !isLogoTooLarge(normalizedLogo)) {
+        return normalizedLogo;
+      }
+    } catch (_e) {
+      // Some PDFKit-valid PNG/JPEG files use uncommon encoding details Sharp
+      // cannot decode. Keep those supported source bytes as a fallback.
+    }
+    if (isPng || isJpeg) return logo;
+  }
   // Invoice PDFs must never substitute a shared/default logo. A missing or
   // invalid tenant logo should produce a text-only brand header instead of
   // leaking another tenant/product identity into this invoice.
@@ -6270,11 +6340,14 @@ function drawWellnessInvoiceIcon(doc, type, x, y, color) {
     doc.moveTo(x + 8, y + 0.8).lineTo(x + 8, y + 3.5).lineTo(x + 10.5, y + 3.5).stroke();
     doc.moveTo(x + 4, y + 6).lineTo(x + 9, y + 6).stroke();
     doc.moveTo(x + 4, y + 8.5).lineTo(x + 9, y + 8.5).stroke();
+  } else if (type === "user") {
+    doc.circle(x + 6, y + 3.5, 2.3).stroke();
+    doc.moveTo(x + 1, y + 12).bezierCurveTo(x + 1.5, y + 7.5, x + 10.5, y + 7.5, x + 11, y + 12).stroke();
   }
   doc.restore();
 }
 
-async function renderReferenceWellnessInvoicePdf(invoice, contact, clinic, options = {}) {
+async function _renderReferenceWellnessInvoicePdf(invoice, contact, clinic, options = {}) {
   const opts = options || {};
   const doc = new PDFDocument({ size: "A4", margin: 28, bufferPages: true });
   applyRupeeCapableFonts(doc);
@@ -6656,6 +6729,1193 @@ async function renderReferenceWellnessInvoicePdf(invoice, contact, clinic, optio
   return bufPromise;
 }
 
+// Full-width wellness invoice renderer. Every section flows vertically so
+// tenant branding, long customer details, mixed payments, and imported line
+// items can grow without colliding with neighbouring cards.
+async function _renderDetailedWellnessInvoicePdf(invoice, contact, clinic, options = {}) {
+  const opts = options || {};
+  const doc = new PDFDocument({ size: "A4", margin: 36, bufferPages: true });
+  applyRupeeCapableFonts(doc);
+  const bufPromise = streamToBuffer(doc);
+  const c = safeClinic(clinic);
+  const tenant = opts.tenant || {};
+  const settings = opts.settings || {};
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const width = right - left;
+  const currency = opts.currency || tenant.defaultCurrency || "INR";
+  const locale = opts.locale || tenant.locale || "en-IN";
+  const accent = professionalInvoiceColor(
+    tenant.brandColor
+      || professionalInvoiceSetting(settings, ["invoice.brandColor", "branding.color", "branding.primaryColor"])
+      || tenant.themeColor
+      || professionalInvoiceSetting(settings, ["invoice.themeColor", "branding.themeColor"]),
+    "#D4A300",
+  );
+  const ink = "#304258";
+  const muted = "#667085";
+  const border = "#E6DFC9";
+  const pale = "#FFF9E9";
+  const brandName = professionalInvoiceSetting(settings, ["invoice.brandName", "branding.name", "company.name"])
+    || tenant.name || c.name || "Organization";
+  const tagline = professionalInvoiceSetting(settings, ["invoice.tagline", "branding.tagline", "company.tagline"]);
+  const companyAddress = professionalInvoiceSetting(settings, [
+    "invoice.companyAddress", "invoice.address", "branding.address", "company.address", "businessAddress",
+  ]) || [c.addressLine, [c.city, c.state, c.pincode].filter(Boolean).join(", "), c.country]
+    .filter(Boolean).join("\n");
+  const companyPhone = professionalInvoiceSetting(settings, ["invoice.companyPhone", "branding.phone", "company.phone"]) || c.phone;
+  const companyEmail = professionalInvoiceSetting(settings, ["invoice.companyEmail", "branding.email", "company.email"])
+    || c.email || tenant.ownerEmail;
+  const companyWebsite = professionalInvoiceSetting(settings, ["invoice.companyWebsite", "branding.website", "company.website"]);
+  const invoiceNumber = invoice?.invoiceNum || invoice?.id || "-";
+  const status = String(invoice?.status || "UNPAID").replace(/_/g, " ").toUpperCase();
+  const issueDate = professionalInvoiceDate(invoice?.issuedDate || invoice?.createdAt, locale);
+  const dueDate = professionalInvoiceDate(invoice?.dueDate, locale);
+  const paidDate = professionalInvoiceDate(invoice?.paidAt, locale);
+  const customerName = invoice?.customerName || contact?.name || "Customer";
+  const customerPhone = invoice?.customerPhone || contact?.phone || "";
+  const customerEmail = invoice?.customerEmail || contact?.email || "";
+  const customerAddress = invoice?.customerAddress || "";
+  const billingAddress = invoice?.billingAddress || customerAddress || "";
+  const shippingAddress = invoice?.shippingAddress || "";
+  const lines = professionalInvoiceLines(invoice);
+  const readAmount = (value) => {
+    if (value == null || (typeof value === "string" && !value.trim())) return null;
+    const amount = Number(String(value).replace(/[,₹$£€\s]/g, ""));
+    return Number.isFinite(amount) ? amount : null;
+  };
+  const money = (value) => {
+    if (value == null) return "—";
+    try {
+      return new Intl.NumberFormat(locale, {
+        style: "currency",
+        currency,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(value);
+    } catch (_error) {
+      return `${currency} ${Number(value).toFixed(2)}`;
+    }
+  };
+  const quantityOf = (line) => readAmount(line?.quantity);
+  const lineRows = lines.map((line) => {
+    const quantity = quantityOf(line);
+    let amount = readAmount(line?.amount);
+    const unitPrice = readAmount(line?.unitPrice);
+    if (amount == null && unitPrice != null) amount = unitPrice * (quantity || 1);
+    return { line, quantity, amount, unitPrice };
+  });
+  const invoiceTotal = readAmount(invoice?.amount);
+  // A single unpriced imported item can safely inherit the invoice's persisted
+  // total. With multiple unpriced items there is no reliable allocation.
+  const unpricedRows = lineRows.filter((row) => row.amount == null && row.unitPrice == null);
+  if (lineRows.length === 1 && unpricedRows.length === 1 && invoiceTotal != null) {
+    unpricedRows[0].amount = invoiceTotal;
+    unpricedRows[0].amountIsInvoiceTotalFallback = true;
+  }
+  const hasUnpricedItems = lineRows.some((row) => row.amount == null);
+  const computedTotal = hasUnpricedItems
+    ? null
+    : lineRows.reduce((sum, row) => sum + row.amount, 0);
+  const total = invoiceTotal ?? computedTotal;
+  const positiveSubtotal = lineRows.reduce((sum, row) => sum + Math.max(0, row.amount || 0), 0);
+  const couponDiscount = lineRows.reduce((sum, row) => sum + Math.max(0, -(row.amount || 0)), 0);
+  const lineDiscount = lineRows.reduce((sum, row) => sum + Math.max(0, readAmount(row.line?.discount) || 0), 0);
+  const explicitDiscount = readAmount(invoice?.discountAmount);
+  const discount = explicitDiscount ?? (couponDiscount + lineDiscount);
+  const invoiceTaxDetails = invoice?.taxDetails && typeof invoice.taxDetails === "object"
+    ? invoice.taxDetails
+    : {};
+  const explicitTax = readAmount(invoice?.taxAmount) ?? readAmount(invoiceTaxDetails.totalTax);
+  const lineTaxValues = lineRows.map((row) => readAmount(row.line?.tax)).filter((value) => value != null);
+  const tax = explicitTax ?? (lineTaxValues.length
+    ? lineTaxValues.reduce((sum, value) => sum + value, 0)
+    : null);
+
+  const paymentDetails = Array.isArray(invoice?.paymentDetails)
+    ? invoice.paymentDetails.filter(Boolean)
+    : invoice?.paymentDetails && typeof invoice.paymentDetails === "object"
+      ? [invoice.paymentDetails]
+      : [];
+  const successfulPayments = paymentDetails.filter((payment) =>
+    String(payment.status || "").toUpperCase() === "SUCCESS",
+  );
+  const breakdownByMode = new Map();
+  for (const payment of successfulPayments) {
+    const mode = String(payment.paymentMode || payment.method || payment.gateway || "").trim();
+    const amount = readAmount(payment.amount ?? payment.amountPaid);
+    if (!mode || amount == null) continue;
+    const key = mode.toLowerCase();
+    const current = breakdownByMode.get(key) || { mode, amount: 0 };
+    current.amount += amount;
+    breakdownByMode.set(key, current);
+  }
+  let paymentBreakdown = Array.isArray(invoice?.paymentBreakdown) && invoice.paymentBreakdown.length
+    ? invoice.paymentBreakdown
+    : [...breakdownByMode.values()];
+  const importedPaymentSplit = invoice?.importedPaymentSplit && typeof invoice.importedPaymentSplit === "object"
+    ? invoice.importedPaymentSplit
+    : {};
+  const importedModes = Object.entries(importedPaymentSplit)
+    .map(([mode, amount]) => ({ mode, amount: readAmount(amount) }))
+    .filter((row) => row.amount != null);
+  if (!paymentBreakdown.length && importedModes.length) paymentBreakdown = importedModes;
+  const paymentMode = String(invoice?.paymentMode || "").trim();
+  const recordedPaid = readAmount(invoice?.amountPaid);
+  const paymentTotal = successfulPayments.reduce((sum, payment) => sum + (readAmount(payment.amount) || 0), 0);
+  const importedReceived = importedModes
+    .filter((row) => !/pay\s*later/i.test(row.mode))
+    .reduce((sum, row) => sum + row.amount, 0);
+  const recordedBalance = readAmount(invoice?.balance);
+  const recordedPaidIsStaleZero = recordedPaid === 0 && (paymentTotal > 0 || importedReceived > 0);
+  const paid = recordedPaid != null && !recordedPaidIsStaleZero
+    ? recordedPaid
+    : paymentTotal > 0
+      ? paymentTotal
+      : importedReceived > 0
+        ? importedReceived
+        : recordedBalance != null && total != null
+          ? Math.max(0, total - recordedBalance)
+          : /^(PAID|COMPLETED)$/i.test(status) ? total : 0;
+  const recordedBalanceIsStaleZero = recordedBalance === 0 && total != null && paid < total && !/^(PAID|COMPLETED)$/i.test(status);
+  const balance = recordedBalance != null && !recordedBalanceIsStaleZero
+    ? recordedBalance
+    : total == null ? null : Math.max(0, total - paid);
+
+  const pageBottom = doc.page.height - 66;
+  let y = 30;
+  const line = (x1, y1, x2, y2, color = border, lineWidth = 0.6) => {
+    doc.moveTo(x1, y1).lineTo(x2, y2).lineWidth(lineWidth).strokeColor(color).stroke();
+  };
+  const measuredHeight = (text, widthValue, fontName = "Helvetica", fontSize = 9) => {
+    doc.font(fontName).fontSize(fontSize);
+    return doc.heightOfString(String(text || ""), { width: widthValue, lineGap: 1.5 });
+  };
+  const drawContinuationHeader = () => {
+    const logoWidth = opts.logoBuffer ? 38 : 0;
+    if (opts.logoBuffer) {
+      try { doc.image(opts.logoBuffer, left, 25, { fit: [34, 34] }); } catch (_error) { /* use text branding */ }
+    }
+    const brandX = left + logoWidth + 8;
+    doc.font("Helvetica-Bold").fontSize(12).fillColor(accent).text(brandName, brandX, 26, { width: width - logoWidth - 8 });
+    doc.font("Helvetica").fontSize(8.5).fillColor(ink).text(`Invoice ${invoiceNumber} · continued`, brandX, 43, {
+      width: width - logoWidth - 8,
+    });
+    line(left, 68, right, 68, accent, 0.8);
+    return 82;
+  };
+  const addPage = () => {
+    doc.addPage();
+    y = drawContinuationHeader();
+  };
+  const ensureSpace = (height) => {
+    if (y + height > pageBottom) addPage();
+  };
+  const drawSection = (title) => {
+    ensureSpace(34);
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(accent).text(title, left, y, { width });
+    y += 18;
+    line(left, y, right, y, border, 0.55);
+    y += 9;
+  };
+  const drawField = (label, value) => {
+    if (value == null || String(value).trim() === "") return;
+    const labelWidth = 104;
+    const valueX = left + labelWidth;
+    const valueWidth = width - labelWidth;
+    const valueHeight = measuredHeight(value, valueWidth, "Helvetica", 9);
+    const rowHeight = Math.max(13, valueHeight) + 6;
+    ensureSpace(rowHeight);
+    doc.font("Helvetica-Bold").fontSize(8.8).fillColor(muted).text(label, left, y, { width: labelWidth - 8 });
+    doc.font("Helvetica").fontSize(9).fillColor(ink).text(String(value), valueX, y, { width: valueWidth, lineGap: 1.5 });
+    y += rowHeight;
+  };
+
+  // The first-page brand header grows with real settings and address content.
+  const logoX = left;
+  const brandTextX = opts.logoBuffer ? left + 64 : left;
+  const brandTextWidth = width - (brandTextX - left);
+  if (opts.logoBuffer) {
+    try { doc.image(opts.logoBuffer, logoX, y, { fit: [52, 52] }); } catch (_error) { /* text brand remains */ }
+  }
+  const brandNameHeight = measuredHeight(brandName, brandTextWidth, "Helvetica-Bold", 18);
+  doc.font("Helvetica-Bold").fontSize(18).fillColor(accent).text(brandName, brandTextX, y, {
+    width: brandTextWidth,
+    lineGap: 1,
+  });
+  let brandContentY = y + brandNameHeight + 3;
+  if (tagline) {
+    const taglineHeight = measuredHeight(tagline, brandTextWidth, "Helvetica", 9);
+    doc.font("Helvetica").fontSize(9).fillColor(ink).text(tagline, brandTextX, brandContentY, { width: brandTextWidth });
+    brandContentY += taglineHeight + 3;
+  }
+  const companyLines = [companyAddress, companyPhone, companyEmail, companyWebsite].filter(Boolean);
+  for (const companyLine of companyLines) {
+    const height = measuredHeight(companyLine, brandTextWidth, "Helvetica", 8.3);
+    doc.font("Helvetica").fontSize(8.3).fillColor(ink).text(companyLine, brandTextX, brandContentY, { width: brandTextWidth });
+    brandContentY += height + 2;
+  }
+  y = Math.max(brandContentY, opts.logoBuffer ? 88 : 35) + 8;
+  line(left, y, right, y, accent, 1.1);
+  y += 14;
+
+  // Invoice identity and dates use a single full-width block, with one value
+  // per line so unusually long identifiers never collide with other fields.
+  doc.font("Helvetica-Bold").fontSize(15).fillColor(ink).text("INVOICE", left, y, { width: width * 0.55 });
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(/^(PAID|COMPLETED)$/i.test(status) ? "#19764B" : "#B54708")
+    .text(status, left + width * 0.58, y + 3, { width: width * 0.42, align: "right" });
+  y += 24;
+  drawField("Invoice Number", invoiceNumber);
+  drawField("Issue Date", issueDate);
+  drawField("Due Date", dueDate);
+  if (invoice?.paidAt) drawField("Paid Date", paidDate);
+  y += 4;
+
+  drawSection("Bill To");
+  drawField("Customer", customerName);
+  drawField("Phone", customerPhone);
+  drawField("Email", customerEmail);
+  drawField("Customer Address", customerAddress);
+  drawField("Billing Address", billingAddress);
+  drawField("Shipping Address", shippingAddress);
+  drawField("GSTIN", invoice?.gstin);
+  drawField("Patient ID", invoice?.patientId);
+  if (invoice?.visit?.visitDate || invoice?.visit?.service?.name) {
+    y += 3;
+    drawSection("Visit / Service Details");
+    drawField("Visit Date", professionalInvoiceDate(invoice.visit.visitDate, locale));
+    drawField("Service", invoice.visit.service?.name);
+    drawField("Visit ID", invoice.visitId);
+  }
+
+  drawSection("Invoice Items");
+  const itemKind = (type) => ({
+    service: "Service",
+    product: "Product",
+    drug: "Medicine",
+    package: "Package",
+    membership: "Membership",
+    giftcard: "Gift Card",
+    gift_card: "Gift Card",
+    coupon: "Coupon / Discount",
+  }[String(type || "").toLowerCase()] || (type ? String(type).replace(/[_-]/g, " ") : "Item"));
+  const standardLineKeys = new Set([
+    "type", "name", "productName", "serviceName", "itemId", "quantity", "unitPrice", "amount",
+    "description", "notes", "tax", "taxAmount", "taxPercent", "taxRate", "discount", "code",
+  ]);
+  lineRows.forEach(({ line: item, quantity, amount, unitPrice, amountIsInvoiceTotalFallback }, index) => {
+    const name = String(item?.name || item?.productName || item?.serviceName || invoice?.description || itemKind(item?.type));
+    const detailParts = [];
+    const description = item?.description || item?.notes;
+    if (description) detailParts.push(String(description));
+    if (item?.itemId != null) detailParts.push(`Item ID: ${item.itemId}`);
+    if (item?.code) detailParts.push(`Code: ${item.code}`);
+    if (item?.taxPercent != null || item?.taxRate != null) {
+      detailParts.push(`Tax rate: ${item.taxPercent ?? item.taxRate}%`);
+    }
+    if (item?.taxAmount != null) detailParts.push(`Tax amount: ${money(readAmount(item.taxAmount))}`);
+    for (const [key, value] of Object.entries(item || {})) {
+      if (standardLineKeys.has(key) || value == null || value === "") continue;
+      if (typeof value === "object") {
+        try { detailParts.push(`${key.replace(/([A-Z])/g, " $1")}: ${JSON.stringify(value)}`); } catch (_error) { /* skip unserializable metadata */ }
+      } else {
+        detailParts.push(`${key.replace(/([A-Z])/g, " $1")}: ${String(value)}`);
+      }
+    }
+    if (amountIsInvoiceTotalFallback) {
+      detailParts.push("Original item price was not recorded; amount shown is the persisted invoice total.");
+    }
+    const detailText = detailParts.join(" · ");
+    const nameWidth = width - 130;
+    const nameHeight = measuredHeight(name, nameWidth, "Helvetica-Bold", 10);
+    const detailHeight = detailText ? measuredHeight(detailText, width - 22, "Helvetica", 8.5) : 0;
+    const blockHeight = 16 + Math.max(12, nameHeight) + 15 + (detailText ? detailHeight + 5 : 0) + 35;
+    ensureSpace(blockHeight);
+    const top = y;
+    doc.roundedRect(left, top, width, blockHeight - 4, 4).fillAndStroke(index % 2 ? "#FFFFFF" : "#FFFDF7", border);
+    doc.rect(left, top, 3, blockHeight - 4).fill(accent);
+    doc.font("Helvetica-Bold").fontSize(7.5).fillColor(muted).text(`${index + 1}. ${itemKind(item?.type).toUpperCase()}`, left + 12, top + 9, {
+      width: width - 24,
+    });
+    const titleY = top + 22;
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(ink).text(name, left + 12, titleY, { width: nameWidth, lineGap: 1 });
+    doc.font("Helvetica-Bold").fontSize(9.5).fillColor(ink).text(money(amount), right - 112, titleY, {
+      width: 100,
+      align: "right",
+    });
+    let detailY = titleY + nameHeight + 3;
+    if (detailText) {
+      doc.font("Helvetica").fontSize(8.5).fillColor(ink).text(detailText, left + 12, detailY, {
+        width: width - 24,
+        lineGap: 1.5,
+      });
+      detailY += detailHeight + 5;
+    }
+    const cellWidth = (width - 24) / 4;
+    const cells = [
+      ["Quantity", quantity == null ? "—" : String(quantity)],
+      ["Unit Price", money(unitPrice ?? (!amountIsInvoiceTotalFallback && quantity && amount != null ? amount / quantity : null))],
+      ["Tax", readAmount(item?.tax) == null ? (item?.taxPercent != null || item?.taxRate != null ? `${item.taxPercent ?? item.taxRate}%` : "—") : money(readAmount(item.tax))],
+      ["Discount", readAmount(item?.discount) == null ? (item?.type === "coupon" && amount != null ? money(Math.abs(amount)) : "—") : money(readAmount(item.discount))],
+    ];
+    cells.forEach(([label, value], cellIndex) => {
+      const cellX = left + 12 + cellIndex * cellWidth;
+      doc.font("Helvetica").fontSize(7.2).fillColor(muted).text(label.toUpperCase(), cellX, detailY, { width: cellWidth - 8 });
+      doc.font("Helvetica-Bold").fontSize(8.3).fillColor(ink).text(value, cellX, detailY + 10, { width: cellWidth - 8 });
+    });
+    y = top + blockHeight + 7;
+  });
+
+  if (hasUnpricedItems && lineRows.length > 1) {
+    ensureSpace(28);
+    doc.font("Helvetica").fontSize(8).fillColor(muted).text(
+      "Some imported item prices were not stored. Those item amounts are shown as unavailable; the invoice total below is the persisted total.",
+      left,
+      y,
+      { width, lineGap: 1.5 },
+    );
+    y += 30;
+  }
+
+  const summaryRows = [
+    ["Items Subtotal", hasUnpricedItems ? null : positiveSubtotal],
+    ["Discount", discount],
+    ["Tax", tax],
+    ["Invoice Total", total],
+    ["Amount Paid", paid],
+    ["Balance Due", balance],
+  ];
+  const taxComponentRows = [
+    ["Tax Rate", invoiceTaxDetails.taxRate == null ? null : `${invoiceTaxDetails.taxRate}%`],
+    ["CGST", invoiceTaxDetails.cgst == null ? null : readAmount(invoiceTaxDetails.cgst)],
+    ["SGST", invoiceTaxDetails.sgst == null ? null : readAmount(invoiceTaxDetails.sgst)],
+    ["IGST", invoiceTaxDetails.igst == null ? null : readAmount(invoiceTaxDetails.igst)],
+  ].filter(([, value]) => value != null);
+  summaryRows.splice(3, 0, ...taxComponentRows);
+  const summaryRowHeight = 21;
+  // Keep the total, amount received, and balance together as one accounting
+  // summary instead of splitting the final rows across pages.
+  ensureSpace(summaryRows.length * summaryRowHeight + 90);
+  drawSection("Payment Summary");
+  summaryRows.forEach(([label, amount]) => {
+    ensureSpace(summaryRowHeight + 2);
+    const isInvoiceTotal = label === "Invoice Total";
+    if (isInvoiceTotal) doc.rect(left, y - 2, width, summaryRowHeight).fill(pale);
+    doc.font(isInvoiceTotal ? "Helvetica-Bold" : "Helvetica").fontSize(isInvoiceTotal ? 10 : 9).fillColor(isInvoiceTotal ? accent : ink)
+      .text(label, left + 8, y + 3, { width: width - 145 });
+    const displayAmount = typeof amount === "number" ? money(amount) : amount == null ? "—" : String(amount);
+    doc.font("Helvetica-Bold").fontSize(isInvoiceTotal ? 10 : 9).fillColor(label === "Balance Due" && balance > 0 ? "#B42318" : ink)
+      .text(displayAmount, right - 128, y + 3, { width: 120, align: "right" });
+    line(left, y + summaryRowHeight, right, y + summaryRowHeight, border, 0.4);
+    y += summaryRowHeight;
+  });
+  const modeLabel = paymentMode.toLowerCase() === "combined" ? "Mixed payment" : paymentMode
+    ? paymentMode.replace(/[_-]/g, " ").replace(/\b\w/g, (character) => character.toUpperCase())
+    : "Not recorded";
+  drawField("Payment Mode", modeLabel);
+  if (invoice?.proofScreenshotFilename) drawField("Payment Proof", invoice.proofScreenshotFilename);
+  else if (invoice?.proofScreenshotUrl) drawField("Payment Proof", "Proof attached");
+
+  if (paymentBreakdown.length) {
+    y += 8;
+    drawSection("Payment Modes");
+    for (const payment of paymentBreakdown) {
+      const mode = String(payment.mode || payment.paymentMode || payment.method || "Payment");
+      const amount = readAmount(payment.amount ?? payment.amountPaid);
+      ensureSpace(22);
+      doc.font("Helvetica").fontSize(9).fillColor(ink).text(mode.replace(/[_-]/g, " "), left + 8, y + 4, { width: width - 150 });
+      doc.font("Helvetica-Bold").fontSize(9).fillColor(ink).text(money(amount), right - 128, y + 4, { width: 120, align: "right" });
+      line(left, y + 21, right, y + 21, border, 0.4);
+      y += 21;
+    }
+  } else if (paymentMode || paymentDetails.length) {
+    ensureSpace(24);
+    doc.font("Helvetica").fontSize(8.5).fillColor(muted).text("No successful payment-mode amounts were recorded.", left, y, { width });
+    y += 17;
+  }
+
+  if (paymentDetails.length) {
+    y += 8;
+    drawSection("Payment Transactions");
+    paymentDetails.forEach((payment, index) => {
+      const mode = String(payment.paymentMode || payment.method || payment.gateway || "Payment")
+        .replace(/[_-]/g, " ").replace(/\b\w/g, (character) => character.toUpperCase());
+      const amount = readAmount(payment.amount ?? payment.amountPaid);
+      const detailParts = [
+        payment.id != null ? `Payment ID: ${payment.id}` : "",
+        payment.gateway ? `Gateway: ${payment.gateway}` : "",
+        payment.gatewayId ? `Transaction reference: ${payment.gatewayId}` : payment.transactionId ? `Transaction reference: ${payment.transactionId}` : "",
+        payment.status ? `Status: ${String(payment.status).replace(/_/g, " ").toUpperCase()}` : "",
+        payment.paidAt || payment.paymentDate ? `Paid: ${professionalInvoiceDate(payment.paidAt || payment.paymentDate, locale)}` : "",
+        payment.createdAt ? `Recorded: ${professionalInvoiceDate(payment.createdAt, locale)}` : "",
+        payment.currency && payment.currency !== currency ? `Currency: ${payment.currency}` : "",
+      ].filter(Boolean).join(" · ");
+      const detailsHeight = detailParts ? measuredHeight(detailParts, width - 24, "Helvetica", 8.2) : 0;
+      const blockHeight = Math.max(41, detailsHeight + 34);
+      ensureSpace(blockHeight);
+      doc.roundedRect(left, y, width, blockHeight - 4, 4).fillAndStroke(index % 2 ? "#FFFFFF" : "#FFFDF7", border);
+      doc.font("Helvetica-Bold").fontSize(9.5).fillColor(ink).text(mode, left + 10, y + 8, { width: width - 155 });
+      doc.font("Helvetica-Bold").fontSize(9.5).fillColor(ink).text(money(amount), right - 136, y + 8, { width: 126, align: "right" });
+      if (detailParts) {
+        doc.font("Helvetica").fontSize(8.2).fillColor(muted).text(detailParts, left + 10, y + 23, {
+          width: width - 20,
+          lineGap: 1.5,
+        });
+      }
+      y += blockHeight + 6;
+    });
+  } else if (paymentBreakdown.length) {
+    ensureSpace(28);
+    doc.font("Helvetica").fontSize(8.2).fillColor(muted).text(
+      importedModes.length ? "Mode amounts are from the imported invoice record; no individual transaction records are available." : "No individual transaction references were recorded for these payments.",
+      left,
+      y,
+      { width, lineGap: 1.5 },
+    );
+    y += 24;
+  } else {
+    ensureSpace(18);
+    doc.font("Helvetica").fontSize(8.5).fillColor(muted).text("No individual payment transactions are recorded.", left, y, { width });
+    y += 16;
+  }
+
+  const configuredNotes = professionalInvoiceSetting(settings, ["invoice.notes", "branding.invoiceNotes"]);
+  const invoiceNotes = invoice?.notes == null ? "" : Array.isArray(invoice.notes) ? invoice.notes.join("\n") : String(invoice.notes);
+  const contactNote = [companyEmail, companyPhone].filter(Boolean).join(" or ");
+  const defaultNotes = [
+    "This is a computer generated invoice and does not require a signature.",
+    "Please make the payment before the due date to avoid any inconvenience.",
+  ];
+  const termsRows = String(configuredNotes || "").split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+  const noteRows = termsRows.length ? termsRows : defaultNotes;
+  if (contactNote && !noteRows.some((note) => /for any queries/i.test(note))) {
+    noteRows.push(`For any queries, contact ${contactNote}.`);
+  }
+  if (brandName && !noteRows.some((note) => /thank you for choosing/i.test(note))) {
+    noteRows.push(`Thank you for choosing ${brandName}.`);
+  }
+  const noteSections = [
+    ["Invoice Notes", invoiceNotes],
+    ["Terms and Notes", noteRows.join("\n")],
+  ].filter(([, value]) => String(value || "").trim());
+  for (const [heading, noteText] of noteSections) {
+    y += 7;
+    drawSection(heading);
+    const noteLines = String(noteText).split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+    for (const note of noteLines) {
+      const noteHeight = measuredHeight(note, width - 14, "Helvetica", 8.5);
+      ensureSpace(noteHeight + 8);
+      doc.font("Helvetica").fontSize(8.5).fillColor(ink).text(note, left + 8, y, { width: width - 14, lineGap: 1.5 });
+      y += noteHeight + 6;
+    }
+  }
+
+  const pages = doc.bufferedPageRange();
+  const footerY = doc.page.height - 54;
+  for (let pageIndex = 0; pageIndex < pages.count; pageIndex += 1) {
+    doc.switchToPage(pages.start + pageIndex);
+    line(left, footerY - 8, right, footerY - 8, accent, 0.7);
+    const footerLeft = [brandName, tagline].filter(Boolean).join(" · ");
+    doc.font("Helvetica").fontSize(7.5).fillColor(muted).text(footerLeft, left, footerY, {
+      width: width - 90,
+      lineBreak: false,
+      ellipsis: true,
+    });
+    doc.font("Helvetica").fontSize(7.5).fillColor(muted).text(`Page ${pageIndex + 1} of ${pages.count}`, right - 85, footerY, {
+      width: 85,
+      align: "right",
+    });
+  }
+  doc.end();
+  return bufPromise;
+}
+
+// Branded wellness invoice: compact information panels, a true line-item
+// table, and side-by-side payment and totals cards. Each card measures its
+// content before drawing, so long names and addresses wrap without overlap.
+async function renderWellnessInvoicePdfLayout(invoice, contact, clinic, options = {}) {
+  const opts = options || {};
+  const doc = new PDFDocument({ size: "A4", margin: 36, bufferPages: true });
+  applyRupeeCapableFonts(doc);
+  const bufPromise = streamToBuffer(doc);
+  const c = safeClinic(clinic);
+  const tenant = opts.tenant || {};
+  const settings = opts.settings || {};
+  const left = doc.page.margins.left;
+  const right = doc.page.width - doc.page.margins.right;
+  const width = right - left;
+  const currency = opts.currency || tenant.defaultCurrency || "INR";
+  const locale = opts.locale || tenant.locale || "en-IN";
+  const accent = professionalInvoiceColor(
+    tenant.brandColor
+      || professionalInvoiceSetting(settings, ["invoice.brandColor", "branding.color", "branding.primaryColor"])
+      || tenant.themeColor
+      || professionalInvoiceSetting(settings, ["invoice.themeColor", "branding.themeColor"]),
+    "#D4A300",
+  );
+  const navy = "#253B50";
+  const muted = "#64748B";
+  const border = "#E4DED1";
+  const pale = "#F8F4EB";
+  const soft = "#FFFEFB";
+  const brandName = professionalInvoiceSetting(settings, ["invoice.brandName", "branding.name", "company.name"])
+    || tenant.name || c.name || "Organization";
+  const tagline = professionalInvoiceSetting(settings, ["invoice.tagline", "branding.tagline", "company.tagline"]);
+  const companyAddress = professionalInvoiceSetting(settings, [
+    "invoice.companyAddress", "invoice.address", "branding.address", "company.address", "businessAddress",
+  ]) || [c.addressLine, [c.city, c.state, c.pincode].filter(Boolean).join(", "), c.country]
+    .filter(Boolean).join("\n");
+  const companyPhone = professionalInvoiceSetting(settings, ["invoice.companyPhone", "branding.phone", "company.phone"]) || c.phone;
+  const companyEmail = professionalInvoiceSetting(settings, ["invoice.companyEmail", "branding.email", "company.email"])
+    || c.email || tenant.ownerEmail;
+  const companyWebsite = professionalInvoiceSetting(settings, ["invoice.companyWebsite", "branding.website", "company.website"]);
+  const documentTitle = professionalInvoiceSetting(settings, ["invoice.documentTitle", "company.invoiceTitle"]) || "INVOICE";
+  const invoiceNumber = invoice?.invoiceNum || invoice?.id || "-";
+  const status = String(invoice?.status || "UNPAID").replace(/_/g, " ").toUpperCase();
+  const isPaid = /^(PAID|COMPLETED)$/i.test(status);
+  const issueDate = professionalInvoiceDate(invoice?.issuedDate || invoice?.createdAt, locale);
+  const dueDate = professionalInvoiceDate(invoice?.dueDate, locale);
+  const paidDate = professionalInvoiceDate(invoice?.paidAt, locale);
+  const customerName = invoice?.customerName || contact?.name || "";
+  const customerPhone = invoice?.customerPhone || contact?.phone || "";
+  const customerEmail = invoice?.customerEmail || contact?.email || "";
+  const customerAddress = invoice?.customerAddress || "";
+  const billingAddress = invoice?.billingAddress || customerAddress || "";
+  const shippingAddress = invoice?.shippingAddress || "";
+  const lines = professionalInvoiceLines(invoice);
+  const readAmount = (value) => {
+    if (value == null || (typeof value === "string" && !value.trim())) return null;
+    const valueNumber = Number(String(value).replace(/[,₹$£€\s]/g, ""));
+    return Number.isFinite(valueNumber) ? valueNumber : null;
+  };
+  const money = (value) => {
+    if (value == null) return "";
+    try {
+      return new Intl.NumberFormat(locale, {
+        style: "currency",
+        currency,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(value);
+    } catch (_error) {
+      return `${currency} ${Number(value).toFixed(2)}`;
+    }
+  };
+  const visitCouponBreakdown = (() => {
+    const source = invoice?.visit?.couponBreakdown;
+    if (source && typeof source === "object" && !Array.isArray(source)) return source;
+    if (typeof source === "string") {
+      try {
+        const parsed = JSON.parse(source);
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+      } catch (_error) { return {}; }
+    }
+    return {};
+  })();
+  const taxDetails = invoice?.taxDetails && typeof invoice.taxDetails === "object" ? invoice.taxDetails : {};
+  const lineRows = lines.map((item) => {
+    const quantity = readAmount(item?.quantity);
+    const unitPrice = readAmount(item?.unitPrice);
+    let amount = readAmount(item?.amount);
+    if (amount == null && unitPrice != null) amount = unitPrice * (quantity || 1);
+    return { item, quantity, unitPrice, amount, amountIsInvoiceTotalFallback: false };
+  });
+  const invoiceTotal = readAmount(invoice?.amount);
+  const unpricedRows = lineRows.filter((row) => row.amount == null && row.unitPrice == null);
+  if (lineRows.length === 1 && unpricedRows.length === 1 && invoiceTotal != null) {
+    unpricedRows[0].amount = invoiceTotal;
+    unpricedRows[0].amountIsInvoiceTotalFallback = true;
+  }
+  const hasUnpricedItems = lineRows.some((row) => row.amount == null);
+  const positiveSubtotal = lineRows.reduce((sum, row) => sum + Math.max(0, row.amount || 0), 0);
+  const subtotal = readAmount(invoice?.subtotal)
+    ?? readAmount(visitCouponBreakdown.baseAmount)
+    ?? (hasUnpricedItems ? null : positiveSubtotal);
+  const couponLineDiscount = lineRows.reduce((sum, row) => sum + Math.max(0, -(row.amount || 0)), 0);
+  const lineDiscount = lineRows.reduce((sum, row) => sum + Math.max(0, readAmount(row.item?.discount) || 0), 0);
+  const discount = [readAmount(invoice?.discountAmount), readAmount(visitCouponBreakdown.discount), couponLineDiscount + lineDiscount]
+    .find((value) => value != null && value > 0) || null;
+  const couponCode = visitCouponBreakdown.couponCode?.code || visitCouponBreakdown.couponCode || "";
+  const lockingFee = readAmount(visitCouponBreakdown.lockingFee);
+  const taxCandidates = [
+    readAmount(invoice?.taxAmount),
+    readAmount(taxDetails.totalTax),
+    lineRows.reduce((sum, row) => sum + (readAmount(row.item?.tax) || readAmount(row.item?.taxAmount) || 0), 0),
+  ];
+  const tax = taxCandidates.find((value) => value != null && value > 0) || null;
+  const total = invoiceTotal
+    ?? readAmount(invoice?.visit?.amountCharged)
+    ?? (subtotal == null ? null : subtotal - (discount || 0) - (lockingFee || 0) + (tax || 0));
+
+  const paymentDetails = Array.isArray(invoice?.paymentDetails)
+    ? invoice.paymentDetails.filter(Boolean)
+    : invoice?.paymentDetails && typeof invoice.paymentDetails === "object"
+      ? [invoice.paymentDetails]
+      : [];
+  const successfulPayments = paymentDetails.filter((payment) => String(payment.status || "").toUpperCase() === "SUCCESS");
+  const transactionModes = new Map();
+  successfulPayments.forEach((payment) => {
+    const mode = String(payment.paymentMode || payment.method || payment.gateway || "").trim();
+    const amount = readAmount(payment.amount ?? payment.amountPaid);
+    if (!mode || amount == null || amount <= 0) return;
+    const current = transactionModes.get(mode.toLowerCase()) || { mode, amount: 0 };
+    current.amount += amount;
+    transactionModes.set(mode.toLowerCase(), current);
+  });
+  const importedPaymentSplit = invoice?.importedPaymentSplit && typeof invoice.importedPaymentSplit === "object"
+    ? invoice.importedPaymentSplit
+    : {};
+  const importedModes = Object.entries(importedPaymentSplit)
+    .map(([mode, value]) => ({ mode, amount: readAmount(value) }))
+    .filter((row) => row.amount != null && row.amount > 0);
+  const normalizeModeRows = (rows) => rows
+    .map((row) => ({ mode: String(row.mode || row.paymentMode || row.method || "").trim(), amount: readAmount(row.amount ?? row.amountPaid) }))
+    .filter((row) => row.mode && row.amount != null && row.amount > 0);
+  let paymentModes = normalizeModeRows(invoice?.paymentBreakdown || []);
+  if (!paymentModes.length) paymentModes = [...transactionModes.values()];
+  if (!paymentModes.length) paymentModes = importedModes;
+  const storedPaymentMode = String(invoice?.paymentMode || "").trim();
+  const modeName = (value) => String(value || "").replace(/[_-]/g, " ").replace(/\b\w/g, (character) => character.toUpperCase());
+  const paymentModeLabel = paymentModes.length > 1
+    ? "Mixed payment"
+    : paymentModes.length === 1
+      ? modeName(paymentModes[0].mode)
+      : storedPaymentMode.toLowerCase() === "combined"
+        ? "Mixed payment"
+        : modeName(storedPaymentMode);
+  const recordedPaid = readAmount(invoice?.amountPaid);
+  const paymentTotal = successfulPayments.reduce((sum, payment) => sum + (readAmount(payment.amount) || 0), 0);
+  const importedReceived = importedModes.filter((row) => !/pay\s*later/i.test(row.mode)).reduce((sum, row) => sum + row.amount, 0);
+  const recordedBalance = readAmount(invoice?.balance);
+  const paid = recordedPaid != null && !(recordedPaid === 0 && (paymentTotal > 0 || importedReceived > 0))
+    ? recordedPaid
+    : paymentTotal > 0
+      ? paymentTotal
+      : importedReceived > 0
+        ? importedReceived
+        : recordedBalance != null && total != null
+          ? Math.max(0, total - recordedBalance)
+          : isPaid ? total : 0;
+  const balance = recordedBalance != null && !(recordedBalance === 0 && total != null && paid < total && !isPaid)
+    ? recordedBalance
+    : total == null ? null : Math.max(0, total - paid);
+
+  const pageBottom = doc.page.height - 72;
+  let y = 26;
+  const measure = (value, textWidth, font = "Helvetica", size = 9) => {
+    doc.font(font).fontSize(size);
+    return doc.heightOfString(String(value || ""), { width: Math.max(1, textWidth), lineGap: 1 });
+  };
+  const rule = (x1, y1, x2, y2, color = border, weight = 0.5) => {
+    doc.moveTo(x1, y1).lineTo(x2, y2).lineWidth(weight).strokeColor(color).stroke();
+  };
+  const nextPage = () => {
+    doc.addPage();
+    const continuationY = 25;
+    const logoWidth = opts.logoBuffer ? 40 : 0;
+    if (opts.logoBuffer) {
+      try { doc.image(opts.logoBuffer, left, continuationY, { fit: [34, 34] }); } catch (_error) { /* continue with text branding */ }
+    }
+    const brandX = left + logoWidth + 8;
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(accent).text(brandName, brandX, continuationY + 2, { width: width * 0.56 });
+    doc.font("Helvetica").fontSize(8.5).fillColor(navy).text(`Invoice ${invoiceNumber} · continued`, right - 210, continuationY + 5, {
+      width: 210,
+      align: "right",
+    });
+    rule(left, 66, right, 66, accent, 0.8);
+    y = 78;
+  };
+  const ensureSpace = (height) => {
+    if (y + height > pageBottom) nextPage();
+  };
+  const drawLabeledValue = (label, value, x, top, rowWidth, labelWidth, options = {}) => {
+    const valueWidth = rowWidth - labelWidth - 8;
+    const fontSize = options.fontSize || 8.7;
+    const valueHeight = measure(value, valueWidth, options.valueFont || "Helvetica", fontSize);
+    doc.font("Helvetica").fontSize(7.4).fillColor(muted).text(String(label).toUpperCase(), x, top, { width: labelWidth - 4 });
+    doc.font(options.valueFont || "Helvetica").fontSize(fontSize).fillColor(navy).text(String(value), x + labelWidth, top - 1, {
+      width: valueWidth,
+      lineGap: 1,
+    });
+    return Math.max(12, valueHeight) + 6;
+  };
+  const drawRoundedPanel = (x, top, panelWidth, panelHeight, fill = soft) => {
+    doc.roundedRect(x, top, panelWidth, panelHeight, 5).fillAndStroke(fill, border);
+  };
+
+  // Dynamic brand block: the configured logo, name, contacts, and theme color
+  // remain tenant-controlled. Contact details occupy their own measured area.
+  const logoSlotWidth = opts.logoBuffer ? 74 : 0;
+  const logoDisplayHeight = opts.logoBuffer ? 64 : 0;
+  const brandX = left + (logoSlotWidth ? logoSlotWidth + 12 : 0);
+  const contactX = left + width * 0.57;
+  const brandWidth = contactX - brandX - 15;
+  const contactWidth = right - contactX;
+  if (opts.logoBuffer) {
+    doc.roundedRect(left, y + 1, logoSlotWidth, logoDisplayHeight, 6)
+      .fillAndStroke("#FFFFFF", border);
+    try {
+      doc.image(opts.logoBuffer, left + 5, y + 5, {
+        fit: [logoSlotWidth - 10, logoDisplayHeight - 10],
+        align: "center",
+        valign: "center",
+      });
+    } catch (_error) { /* keep text-only branding */ }
+  }
+  doc.font("Helvetica-Bold");
+  const brandNameFontSize = fitReferenceInvoiceMetadataFont(
+    doc,
+    brandName,
+    brandWidth,
+    18.5,
+    13,
+  );
+  const brandNameHeight = measure(brandName, brandWidth, "Helvetica-Bold", brandNameFontSize);
+  const brandNameY = y + (logoDisplayHeight > brandNameHeight
+    ? (logoDisplayHeight - brandNameHeight) / 2
+    : 2);
+  doc.font("Helvetica-Bold").fontSize(brandNameFontSize).fillColor(navy).text(brandName, brandX, brandNameY, {
+    width: brandWidth,
+    lineGap: 1,
+  });
+  let brandY = brandNameY + brandNameHeight + 2;
+  if (tagline) {
+    const taglineHeight = measure(tagline, brandWidth, "Helvetica", 8.5);
+    doc.font("Helvetica").fontSize(8.5).fillColor(muted).text(tagline, brandX, brandY, { width: brandWidth });
+    brandY += taglineHeight + 2;
+  }
+  const contactLines = [
+    ["pin", companyAddress],
+    ["phone", companyPhone],
+    ["mail", companyEmail],
+    ["tag", companyWebsite],
+  ].filter(([, value]) => value);
+  let contactY = y + 2;
+  for (const [icon, contactLine] of contactLines) {
+    const textWidth = contactWidth - 18;
+    const contactHeight = measure(contactLine, textWidth, "Helvetica", 8.5);
+    drawWellnessInvoiceIcon(doc, icon, contactX, contactY + 1, muted);
+    doc.font("Helvetica").fontSize(8.5).fillColor(navy).text(contactLine, contactX + 18, contactY, { width: textWidth, lineGap: 1 });
+    contactY += contactHeight + 2;
+  }
+  const brandBlockBottom = Math.max(brandY, contactY, y + (logoDisplayHeight || 48));
+  rule(contactX - 9, y + 1, contactX - 9, brandBlockBottom, border, 0.7);
+  y += brandBlockBottom - y + 12;
+  rule(left, y, right, y, accent, 1.1);
+  y += 12;
+
+  // Invoice title and status establish the same hierarchy as the reference.
+  const titleSize = 22;
+  doc.font("Helvetica-Bold").fontSize(titleSize).fillColor(navy).text(documentTitle.toUpperCase(), left, y, { width: width * 0.65 });
+  const statusColor = isPaid ? "#347547" : /OVERDUE|UNPAID|PARTIAL/i.test(status) ? "#A65A24" : muted;
+  const statusWidth = Math.max(72, measure(status, 120, "Helvetica-Bold", 9.5) + 22);
+  doc.roundedRect(right - statusWidth, y + 2, statusWidth, 25, 12).fill(isPaid ? "#E8F2DE" : "#F8EBDD");
+  doc.font("Helvetica-Bold").fontSize(9.5).fillColor(statusColor).text(status, right - statusWidth + 8, y + 9, {
+    width: statusWidth - 16,
+    align: "center",
+  });
+  y += 35;
+
+  // Bill-to and invoice metadata share a flexible card row. Heights come from
+  // the actual wrapped values; missing customer fields are not rendered.
+  const customerRows = [];
+  if (customerPhone) customerRows.push(["Phone", customerPhone]);
+  if (customerEmail) customerRows.push(["Email", customerEmail]);
+  if (billingAddress) customerRows.push(["Billing Address", billingAddress]);
+  if (customerAddress && customerAddress !== billingAddress) customerRows.push(["Address", customerAddress]);
+  if (shippingAddress) customerRows.push(["Shipping Address", shippingAddress]);
+  if (invoice?.gstin) customerRows.push(["GSTIN", invoice.gstin]);
+  if (invoice?.patientId != null) customerRows.push(["Patient ID", invoice.patientId]);
+  const gap = 12;
+  const customerWidth = Math.round(width * 0.55);
+  const metadataX = left + customerWidth + gap;
+  const metadataWidth = right - metadataX;
+  const customerLabelWidth = 76;
+  const customerNameHeight = customerName
+    ? measure(customerName, customerWidth - 28, "Helvetica-Bold", 12)
+    : 0;
+  const customerRowsTopOffset = 34 + (customerName ? customerNameHeight + 6 : 0);
+  let customerContentHeight = customerRowsTopOffset + 10;
+  customerRows.forEach(([, value]) => {
+    customerContentHeight += Math.max(12, measure(value, customerWidth - customerLabelWidth - 38, "Helvetica", 8.7)) + 7;
+  });
+  const metadataRows = [
+    ["Invoice Number", invoiceNumber],
+    ["Issue Date", issueDate !== "-" ? issueDate : ""],
+    ["Due Date", dueDate !== "-" ? dueDate : ""],
+    ...(invoice?.paidAt ? [["Paid Date", paidDate]] : []),
+  ].filter(([, value]) => value != null && String(value).trim());
+  const metadataRowHeight = 21;
+  const metadataHeight = 39 + metadataRows.length * metadataRowHeight;
+  const customerHeight = customerContentHeight + 10;
+  const customerCardHeight = Math.max(88, customerHeight, metadataHeight);
+  ensureSpace(customerCardHeight + 12);
+  const cardTop = y;
+  drawRoundedPanel(left, cardTop, customerWidth, customerCardHeight, "#FBF8F0");
+  drawRoundedPanel(metadataX, cardTop, metadataWidth, customerCardHeight, "#FBF8F0");
+  drawWellnessInvoiceIcon(doc, "user", left + 12, cardTop + 13, accent);
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(accent).text("Bill To", left + 30, cardTop + 12, { width: customerWidth - 42 });
+  if (customerName) {
+    doc.font("Helvetica-Bold").fontSize(12).fillColor(navy).text(customerName, left + 14, cardTop + 32, {
+      width: customerWidth - 28,
+    });
+  }
+  let customerY = cardTop + customerRowsTopOffset;
+  for (const [label, value] of customerRows) {
+    customerY += drawLabeledValue(label, value, left + 14, customerY, customerWidth - 28, customerLabelWidth - 14);
+  }
+  doc.font("Helvetica-Bold").fontSize(10.5).fillColor(accent).text("Invoice Details", metadataX + 14, cardTop + 12, {
+    width: metadataWidth - 28,
+  });
+  let metadataY = cardTop + 33;
+  metadataRows.forEach(([label, value], index) => {
+    if (index > 0) rule(metadataX + 14, metadataY - 3, right - 14, metadataY - 3, border, 0.4);
+    const labelWidth = Math.min(83, metadataWidth * 0.43);
+    const valueWidth = metadataWidth - labelWidth - 28;
+    const fontSize = fitReferenceInvoiceMetadataFont(doc, String(value), valueWidth, 9, 7.4);
+    doc.font("Helvetica").fontSize(8.8).fillColor(navy).text(label, metadataX + 14, metadataY, { width: labelWidth - 5 });
+    doc.font("Helvetica-Bold").fontSize(fontSize).fillColor(navy).text(String(value), metadataX + 14 + labelWidth, metadataY, {
+      width: valueWidth,
+      align: "right",
+      lineBreak: false,
+    });
+    metadataY += metadataRowHeight;
+  });
+  y = cardTop + customerCardHeight + 13;
+
+  const visitFields = [
+    ["Visit Date", invoice?.visit?.visitDate ? professionalInvoiceDate(invoice.visit.visitDate, locale) : ""],
+    ["Service", invoice?.visit?.service?.name || ""],
+    ["Visit ID", invoice?.visitId != null ? String(invoice.visitId) : ""],
+  ].filter(([, value]) => value);
+  if (visitFields.length) {
+    const columnWidth = width / visitFields.length;
+    const contentHeights = visitFields.map(([, value]) => measure(value, columnWidth - 54, "Helvetica-Bold", 9.5));
+    const visitHeight = 37 + Math.max(...contentHeights) + 24;
+    ensureSpace(visitHeight + 10);
+    const visitTop = y;
+    drawRoundedPanel(left, visitTop, width, visitHeight, soft);
+    doc.rect(left + 1, visitTop + 1, width - 2, 25).fill(pale);
+    drawWellnessInvoiceIcon(doc, "calendar", left + 11, visitTop + 8, accent);
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(navy).text("Visit / Service Details", left + 30, visitTop + 7, { width: width - 42 });
+    visitFields.forEach(([label, value], index) => {
+      const cellX = left + index * columnWidth + 14;
+      if (index > 0) rule(left + index * columnWidth, visitTop + 34, left + index * columnWidth, visitTop + visitHeight - 11, border, 0.6);
+      doc.font("Helvetica").fontSize(7.5).fillColor(muted).text(label.toUpperCase(), cellX, visitTop + 35, { width: columnWidth - 28 });
+      doc.font("Helvetica-Bold").fontSize(9.5).fillColor(navy).text(String(value), cellX, visitTop + 48, {
+        width: columnWidth - 28,
+        lineGap: 1,
+      });
+    });
+    y = visitTop + visitHeight + 13;
+  }
+
+  const sectionLabel = (title, icon) => {
+    ensureSpace(30);
+    drawWellnessInvoiceIcon(doc, icon, left, y + 1, accent);
+    doc.font("Helvetica-Bold").fontSize(12).fillColor(navy).text(title, left + 21, y, { width: width - 21 });
+    y += 23;
+  };
+  const columns = [
+    ["#", 22, "left"],
+    ["DESCRIPTION", 150, "left"],
+    ["ITEM ID", 45, "left"],
+    ["QTY", 38, "right"],
+    ["UNIT PRICE", 70, "right"],
+    ["TAX", 50, "right"],
+    ["DISCOUNT", 75, "right"],
+    ["AMOUNT", width - 22 - 150 - 45 - 38 - 70 - 50 - 75, "right"],
+  ];
+  const tableHeaderHeight = 26;
+  const drawTableHeader = () => {
+    doc.rect(left, y, width, tableHeaderHeight).fill(accent);
+    let x = left;
+    doc.font("Helvetica-Bold").fontSize(7.2).fillColor("#FFFFFF");
+    for (const [label, columnWidth, align] of columns) {
+      doc.text(label, x + 4, y + 9, { width: columnWidth - 8, align, lineBreak: false });
+      x += columnWidth;
+    }
+    y += tableHeaderHeight;
+  };
+  sectionLabel("Invoice Items", "file");
+  ensureSpace(tableHeaderHeight + 36);
+  drawTableHeader();
+  const itemKind = (type) => ({
+    service: "Service",
+    product: "Product",
+    drug: "Medicine",
+    package: "Package",
+    membership: "Membership",
+    giftcard: "Gift Card",
+    gift_card: "Gift Card",
+    coupon: "Coupon / Discount",
+  }[String(type || "").toLowerCase()] || (type ? String(type).replace(/[_-]/g, " ") : "Item"));
+  const ignoredLineKeys = new Set([
+    "type", "name", "productName", "serviceName", "itemId", "quantity", "unitPrice", "amount",
+    "description", "notes", "tax", "taxAmount", "taxPercent", "taxRate", "discount", "code",
+  ]);
+  lineRows.forEach(({ item, quantity, unitPrice, amount, amountIsInvoiceTotalFallback }, index) => {
+    const name = String(item?.name || item?.productName || item?.serviceName || invoice?.description || itemKind(item?.type));
+    const detailParts = [];
+    if (item?.description || item?.notes) detailParts.push(String(item.description || item.notes));
+    if (item?.code) detailParts.push(`Code: ${item.code}`);
+    if (item?.taxPercent > 0 || item?.taxRate > 0) detailParts.push(`Tax rate: ${item.taxPercent ?? item.taxRate}%`);
+    if (item?.taxAmount != null && readAmount(item.taxAmount) > 0) detailParts.push(`Tax: ${money(readAmount(item.taxAmount))}`);
+    for (const [key, value] of Object.entries(item || {})) {
+      if (ignoredLineKeys.has(key) || value == null || value === "") continue;
+      const label = key.replace(/([A-Z])/g, " $1").replace(/[_-]/g, " ");
+      if (typeof value === "object") {
+        try { detailParts.push(`${label}: ${JSON.stringify(value)}`); } catch (_error) { /* omit unserializable details */ }
+      } else detailParts.push(`${label}: ${String(value)}`);
+    }
+    if (amountIsInvoiceTotalFallback) detailParts.push("Original item price unavailable; amount shown is the saved invoice total.");
+    const descriptionWidth = columns[1][1] - 10;
+    const titleHeight = measure(name, descriptionWidth, "Helvetica-Bold", 9.2);
+    const detailText = [itemKind(item?.type), ...detailParts].filter(Boolean).join(" · ");
+    const detailHeight = measure(detailText, descriptionWidth, "Helvetica", 7.7);
+    const rowHeight = Math.max(31, titleHeight + detailHeight + 11);
+    if (y + rowHeight > pageBottom) {
+      nextPage();
+      sectionLabel("Invoice Items · continued", "file");
+      drawTableHeader();
+    }
+    const rowTop = y;
+    if (index % 2 === 0) doc.rect(left, rowTop, width, rowHeight).fill("#FBF9F4");
+    doc.rect(left, rowTop, width, rowHeight).lineWidth(0.45).strokeColor(border).stroke();
+    let x = left;
+    const values = [
+      String(index + 1),
+      "",
+      item?.itemId == null ? "" : String(item.itemId),
+      quantity == null ? "" : String(quantity),
+      unitPrice != null ? money(unitPrice) : amountIsInvoiceTotalFallback ? "" : quantity && amount != null ? money(amount / quantity) : "",
+      readAmount(item?.tax) > 0 ? money(readAmount(item.tax)) : readAmount(item?.taxAmount) > 0 ? money(readAmount(item.taxAmount)) : readAmount(item?.taxPercent) > 0 ? `${item.taxPercent}%` : readAmount(item?.taxRate) > 0 ? `${item.taxRate}%` : "",
+      readAmount(item?.discount) > 0 ? money(readAmount(item.discount)) : String(item?.type || "").toLowerCase() === "coupon" && amount != null ? money(Math.abs(amount)) : "",
+      amount == null ? "" : money(amount),
+    ];
+    doc.font("Helvetica").fontSize(8.2).fillColor(navy);
+    columns.forEach(([, columnWidth, align], columnIndex) => {
+      if (columnIndex === 1) {
+        doc.font("Helvetica-Bold").fontSize(9.2).fillColor(navy).text(name, x + 5, rowTop + 6, {
+          width: columnWidth - 10,
+          lineGap: 1,
+        });
+        doc.font("Helvetica").fontSize(7.7).fillColor(muted).text(detailText, x + 5, rowTop + 7 + titleHeight, {
+          width: columnWidth - 10,
+          lineGap: 1,
+        });
+      } else if (values[columnIndex]) {
+        const textWidth = columnWidth - 8;
+        const fontSize = fitReferenceInvoiceMetadataFont(doc, values[columnIndex], textWidth, 8.2, 6.7);
+        doc.font("Helvetica").fontSize(fontSize).fillColor(navy).text(values[columnIndex], x + 4, rowTop + 8, {
+          width: textWidth,
+          align,
+          lineBreak: false,
+        });
+      }
+      x += columnWidth;
+    });
+    y += rowHeight;
+  });
+  if (hasUnpricedItems && lineRows.length > 1) {
+    const note = "Some imported item prices were not recorded; the invoice total remains the saved total.";
+    const noteHeight = measure(note, width - 8, "Helvetica", 7.8) + 6;
+    ensureSpace(noteHeight);
+    doc.font("Helvetica").fontSize(7.8).fillColor(muted).text(note, left + 4, y + 3, { width: width - 8 });
+    y += noteHeight;
+  }
+  y += 12;
+
+  const summaryRows = [];
+  if (subtotal != null && !hasUnpricedItems) summaryRows.push(["Items Subtotal", money(subtotal)]);
+  if (discount != null) summaryRows.push(["Discount", money(discount)]);
+  if (couponCode && !lineRows.some((row) => row.item?.code === couponCode)) summaryRows.push(["Coupon Code", String(couponCode)]);
+  if (lockingFee != null && lockingFee > 0) summaryRows.push(["Locking Fee Applied", money(lockingFee)]);
+  if (tax != null) summaryRows.push([taxDetails.taxRate > 0 ? `Tax (${taxDetails.taxRate}%)` : "Tax", money(tax)]);
+  for (const label of ["cgst", "sgst", "igst"]) {
+    const amount = readAmount(taxDetails[label]);
+    if (amount != null && amount > 0) summaryRows.push([label.toUpperCase(), money(amount)]);
+  }
+  if (total != null) summaryRows.push(["Invoice Total", money(total)]);
+  if (paid != null && paid > 0) summaryRows.push(["Amount Paid", money(paid)]);
+  if (balance != null && balance > 0) summaryRows.push(["Balance Due", money(balance)]);
+  if (paymentModeLabel) summaryRows.push(["Payment Mode", paymentModeLabel]);
+
+  const modeRows = paymentModes.length > 1 ? paymentModes : [];
+  const summaryRowHeight = 20;
+  const cardTitleHeight = 34;
+  const summaryCardHeight = Math.max(65, cardTitleHeight + summaryRows.length * summaryRowHeight + 12);
+  const modesCardHeight = Math.max(65, cardTitleHeight + modeRows.length * summaryRowHeight + 12);
+  const paymentCardGap = 12;
+  const modesCardWidth = modeRows.length ? Math.round(width * 0.46) : width;
+  const summaryCardWidth = modeRows.length ? width - modesCardWidth - paymentCardGap : width;
+  const paymentCardHeight = Math.max(summaryCardHeight, modeRows.length ? modesCardHeight : 0);
+  ensureSpace(paymentCardHeight + 10);
+  if (modeRows.length) {
+    const modesX = left;
+    const summaryX = left + modesCardWidth + paymentCardGap;
+    drawRoundedPanel(modesX, y, modesCardWidth, paymentCardHeight, soft);
+    drawRoundedPanel(summaryX, y, summaryCardWidth, paymentCardHeight, soft);
+    drawWellnessInvoiceIcon(doc, "card", modesX + 12, y + 12, accent);
+    doc.font("Helvetica-Bold").fontSize(10.2).fillColor(navy).text("Payment Modes Breakdown", modesX + 31, y + 11, { width: modesCardWidth - 42 });
+    let modeY = y + cardTitleHeight;
+    modeRows.forEach((row, index) => {
+      if (index > 0) rule(modesX + 10, modeY, modesX + modesCardWidth - 10, modeY, border, 0.4);
+      doc.font("Helvetica").fontSize(8.4).fillColor(navy).text(modeName(row.mode), modesX + 12, modeY + 5, { width: modesCardWidth - 112 });
+      if (row.amount != null) doc.font("Helvetica-Bold").fontSize(8.4).fillColor(navy).text(money(row.amount), modesX + modesCardWidth - 96, modeY + 5, {
+        width: 84,
+        align: "right",
+      });
+      modeY += summaryRowHeight;
+    });
+    drawWellnessInvoiceIcon(doc, "card", summaryX + 12, y + 12, accent);
+    doc.font("Helvetica-Bold").fontSize(10.2).fillColor(navy).text("Payment Summary", summaryX + 31, y + 11, { width: summaryCardWidth - 42 });
+    let totalY = y + cardTitleHeight;
+    summaryRows.forEach(([label, value]) => {
+      const isTotal = label === "Invoice Total";
+      if (isTotal) doc.rect(summaryX + 1, totalY, summaryCardWidth - 2, summaryRowHeight).fill(pale);
+      else if (totalY > y + cardTitleHeight) rule(summaryX + 10, totalY, summaryX + summaryCardWidth - 10, totalY, border, 0.4);
+      doc.font(isTotal ? "Helvetica-Bold" : "Helvetica").fontSize(isTotal ? 9.3 : 8.3).fillColor(isTotal ? accent : navy).text(label, summaryX + 12, totalY + 5, {
+        width: summaryCardWidth - 112,
+      });
+      const valueWidth = summaryCardWidth - 125;
+      const valueFont = fitReferenceInvoiceMetadataFont(doc, String(value), valueWidth, isTotal ? 9.3 : 8.3, 6.8);
+      doc.font("Helvetica-Bold").fontSize(valueFont).fillColor(label === "Balance Due" ? "#A23D31" : navy).text(String(value), summaryX + summaryCardWidth - valueWidth - 12, totalY + 5, {
+        width: valueWidth,
+        align: "right",
+        lineBreak: false,
+      });
+      totalY += summaryRowHeight;
+    });
+    y += paymentCardHeight + 14;
+  } else if (summaryRows.length) {
+    drawRoundedPanel(left, y, width, paymentCardHeight, soft);
+    drawWellnessInvoiceIcon(doc, "card", left + 12, y + 12, accent);
+    doc.font("Helvetica-Bold").fontSize(10.2).fillColor(navy).text("Payment Summary", left + 31, y + 11, { width: width - 42 });
+    let totalY = y + cardTitleHeight;
+    summaryRows.forEach(([label, value]) => {
+      const isTotal = label === "Invoice Total";
+      if (isTotal) doc.rect(left + 1, totalY, width - 2, summaryRowHeight).fill(pale);
+      else if (totalY > y + cardTitleHeight) rule(left + 10, totalY, right - 10, totalY, border, 0.4);
+      doc.font(isTotal ? "Helvetica-Bold" : "Helvetica").fontSize(isTotal ? 9.3 : 8.3).fillColor(isTotal ? accent : navy).text(label, left + 12, totalY + 5, {
+        width: width - 150,
+      });
+      doc.font("Helvetica-Bold").fontSize(isTotal ? 9.3 : 8.3).fillColor(label === "Balance Due" ? "#A23D31" : navy).text(String(value), right - 128, totalY + 5, {
+        width: 116,
+        align: "right",
+      });
+      totalY += summaryRowHeight;
+    });
+    y += paymentCardHeight + 14;
+  }
+
+  const transactions = paymentDetails.filter((payment) => {
+    const amount = readAmount(payment.amount ?? payment.amountPaid);
+    return (amount != null && amount > 0) || payment.id != null || payment.gatewayId || payment.transactionId;
+  });
+  if (transactions.length) {
+    sectionLabel("Payment Transactions", "card");
+    const transactionColumns = [
+      ["METHOD", 100], ["AMOUNT", 82], ["STATUS", 72], ["DATE", 75], ["TRANSACTION REFERENCE", width - 329],
+    ];
+    const txHeaderHeight = 24;
+    const drawTxHeader = () => {
+      doc.rect(left, y, width, txHeaderHeight).fill(pale);
+      let txX = left;
+      doc.font("Helvetica-Bold").fontSize(7).fillColor(navy);
+      transactionColumns.forEach(([label, colWidth]) => {
+        doc.text(label, txX + 4, y + 8, { width: colWidth - 8, lineBreak: false });
+        txX += colWidth;
+      });
+      y += txHeaderHeight;
+    };
+    drawTxHeader();
+    transactions.forEach((payment, index) => {
+      const mode = payment.paymentMode || payment.method || payment.gateway || "";
+      const amount = readAmount(payment.amount ?? payment.amountPaid);
+      const txRef = payment.gatewayId || payment.transactionId || payment.reference || "";
+      const paidAt = payment.paidAt || payment.paymentDate || payment.createdAt;
+      const dateLabel = paidAt ? professionalInvoiceDate(paidAt, locale) : "";
+      const statusLabel = payment.status ? String(payment.status).replace(/_/g, " ").toUpperCase() : "";
+      const rowHeight = 23;
+      if (y + rowHeight > pageBottom) {
+        nextPage();
+        sectionLabel("Payment Transactions · continued", "card");
+        drawTxHeader();
+      }
+      if (index % 2 === 0) doc.rect(left, y, width, rowHeight).fill("#FBF9F4");
+      doc.rect(left, y, width, rowHeight).lineWidth(0.4).strokeColor(border).stroke();
+      const values = [modeName(mode), amount == null || amount === 0 ? "" : money(amount), statusLabel, dateLabel, txRef];
+      let txX = left;
+      transactionColumns.forEach(([, colWidth], columnIndex) => {
+        if (values[columnIndex]) {
+          const fsize = fitReferenceInvoiceMetadataFont(doc, values[columnIndex], colWidth - 8, 7.8, 6.4);
+          doc.font("Helvetica").fontSize(fsize).fillColor(navy).text(values[columnIndex], txX + 4, y + 7, {
+            width: colWidth - 8,
+            lineBreak: false,
+          });
+        }
+        txX += colWidth;
+      });
+      y += rowHeight;
+    });
+    y += 12;
+  }
+
+  if (hasUnpricedItems && lineRows.length > 1) {
+    const note = "Some imported line item amounts are unavailable because the original prices were not saved.";
+    ensureSpace(measure(note, width - 20, "Helvetica", 8.2) + 28);
+    doc.font("Helvetica").fontSize(8.2).fillColor(muted).text(note, left, y, { width, lineGap: 1 });
+    y += 20;
+  }
+  const configuredNotes = professionalInvoiceSetting(settings, ["invoice.notes", "branding.invoiceNotes"]);
+  const invoiceNotes = invoice?.notes == null ? "" : Array.isArray(invoice.notes) ? invoice.notes.join("\n") : String(invoice.notes);
+  const notes = [
+    ...String(invoiceNotes).split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
+    ...String(configuredNotes || "").split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
+  ];
+  if (!notes.length) {
+    notes.push("This is a computer-generated invoice.");
+    if (balance != null && balance > 0) notes.push("Please make payment by the due date.");
+  }
+  const contactDetails = [companyEmail, companyPhone].filter(Boolean).join(" or ");
+  if (contactDetails && !notes.some((note) => /for any queries/i.test(note))) notes.push(`For any queries, contact ${contactDetails}.`);
+  if (brandName && !notes.some((note) => /thank you for choosing/i.test(note))) notes.push(`Thank you for choosing ${brandName}.`);
+  if (notes.length) {
+    const notePadding = 12;
+    const noteHeights = notes.map((note) => measure(note, width - notePadding * 2 - 15, "Helvetica", 8.2));
+    const notesHeight = 17 + noteHeights.reduce((sum, height) => sum + Math.max(11, height) + 5, 0);
+    ensureSpace(notesHeight + 30);
+    sectionLabel("Terms and Notes", "file");
+    drawRoundedPanel(left, y, width, notesHeight, "#FBF8F0");
+    let noteY = y + 10;
+    notes.forEach((note, index) => {
+      doc.circle(left + 14, noteY + 4, 1.5).fill(accent);
+      doc.font("Helvetica").fontSize(8.2).fillColor(navy).text(note, left + 24, noteY, { width: width - 36, lineGap: 1 });
+      noteY += Math.max(11, noteHeights[index]) + 5;
+    });
+    y += notesHeight + 8;
+  }
+
+  const pages = doc.bufferedPageRange();
+  const footerY = doc.page.height - 58;
+  for (let pageIndex = 0; pageIndex < pages.count; pageIndex += 1) {
+    doc.switchToPage(pages.start + pageIndex);
+    doc.rect(left, footerY, width, 22).fill(accent);
+    doc.font("Helvetica-Bold").fontSize(7.7).fillColor("#FFFFFF").text(brandName, left + 10, footerY + 7, {
+      width: width - 110,
+      lineBreak: false,
+      ellipsis: true,
+    });
+    doc.font("Helvetica").fontSize(7.5).fillColor("#FFFFFF").text(`Page ${pageIndex + 1} of ${pages.count}`, right - 86, footerY + 7, {
+      width: 76,
+      align: "right",
+    });
+  }
+  doc.end();
+  return bufPromise;
+}
+
 // Corporate invoice renderer. Generic CRM invoices intentionally have their
 // own layout instead of borrowing the wellness document: the source data is
 // shared, but the document language and information hierarchy are different.
@@ -6931,7 +8191,7 @@ module.exports = {
   renderBrandedInvoicePdf,
   renderProfessionalInvoicePdf,
   renderGenericPlotInvoicePdf,
-  renderProfessionalWellnessInvoicePdf: renderReferenceWellnessInvoicePdf,
+  renderProfessionalWellnessInvoicePdf: renderWellnessInvoicePdfLayout,
   renderLegacyWellnessInvoicePdf: renderProfessionalWellnessInvoicePdf,
   fitReferenceInvoiceMetadataFont,
   resolveProfessionalInvoiceLogo,

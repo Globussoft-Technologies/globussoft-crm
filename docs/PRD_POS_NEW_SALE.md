@@ -102,7 +102,7 @@ Zylu's New Sale screen ships:
 - `frontend/src/pages/wellness/PointOfSale.jsx:1-769` — existing single-flat-builder New Sale page
 - `backend/services/pdfRenderer.js` — existing PDF emission infra (extends with `renderReceiptPDF()`)
 - `backend/lib/notificationService.js` — re-used for "receipt emailed" notification confirmation if operator opts to email
-- `backend/lib/audit.js` `writeAudit()` — new + existing `SALE_*` action set flows through the existing tamper-evident chain
+- `backend/lib/audit.js` `writeAudit()` — new + existing `SALE_*` actions are recorded in the tenant audit log
 - `PRD_WALLET_TOPUP.md` (D16) — wallet redemption integration point: if a payment line uses `WALLET`, finalize calls into `POST /api/wallet/redeem` per FR-3.3 there
 - `PRD_INVOICE_POLYMORPHISM.md` (#775, separate PRD — pending) — finalize creates an `Invoice` row pointing at the `Sale` per the polymorphism PRD
 
@@ -112,7 +112,7 @@ The today flow has THREE structural gaps that the tab refactor needs to address 
 
 1. **No Booking → Sale lineage** — `Sale.bookingId` doesn't exist. Adding it is one nullable FK + index, but reporting downstream (the per-location P&L, the per-professional attribution, the Booking-level "this booking converted to ₹2200 revenue" metric) ALL depend on this FK being populated correctly. The lineage is the load-bearing column the rest hangs off.
 2. **Payment splitter is half-shipped** — column exists, route ACCEPTS the JSON, UI does NOT emit it. Wiring the UI is the obvious half; the under-tested half is server-side re-validation (sum-of-lines == grand-total) + audit-emission with the breakdown (today the audit row has only the single `paymentMethod` string, not the per-method shape).
-3. **Atomicity ambiguity on inventory + wallet + audit** — today's finalize loops through `SaleLineItem`[] inside a Prisma transaction; the inventory decrement happens inside the same transaction for PRODUCT lines, BUT the wallet-debit and the audit row emission happen OUTSIDE the transaction (audit on purpose for hash-chain reasons; wallet inadvertently). If a wallet line fails (insufficient balance) AFTER the sale's been committed, today's flow leaves the Sale row created + the wallet balance untouched + no compensating refund. The tab refactor surfaces this — when payment splitter says "₹500 cash + ₹500 wallet" and wallet has ₹300, the sale should NEVER commit; today there's a window where it could.
+3. **Atomicity ambiguity on inventory + wallet + audit** — today's finalize loops through `SaleLineItem`[] inside a Prisma transaction; the inventory decrement happens inside the same transaction for PRODUCT lines, BUT the wallet-debit and the audit row emission happen OUTSIDE the transaction. If a wallet line fails (insufficient balance) AFTER the sale's been committed, today's flow leaves the Sale row created + the wallet balance untouched + no compensating refund. The tab refactor surfaces this — when payment splitter says "₹500 cash + ₹500 wallet" and wallet has ₹300, the sale should NEVER commit; today there's a window where it could.
 
 This PRD's slice 1 fixes the lineage + tab-route surface; slice 2 fixes the payment-splitter + atomicity hardening; slice 3 fixes the receipt-emission; slice 4 fixes the audit-action vocabulary; slice 5 is the page refactor.
 
@@ -301,13 +301,13 @@ Mirror today's `cashierGate` middleware exactly:
 
 ### FR-3.9 Audit log integration — 3 new audit actions (replaces today's bare SALE_CREATED)
 
-All flow through existing `backend/lib/audit.js` `writeAudit()` for tamper-evident hashing. Audit entity = `SALE`.
+All flow through existing `backend/lib/audit.js` `writeAudit()` for audit logging. Audit entity = `SALE`.
 
 - `SALE_DRAFT_CREATED` — when a `Sale` row goes from non-existence to `status=DRAFT` via the Booking-tab click-to-load (per FR-3.2). Fields: `{ saleId, bookingId?, patientId?, basketCount }`.
 - `SALE_FINALIZED` — when a Sale completes (`status=COMPLETED`); REPLACES the legacy `SALE_CREATED`. Fields: `{ saleId, invoiceNumber, bookingId?, patientId?, total, paymentBreakdown[], lineTypes[], appliedMembershipId?, idempotencyKey, durationMs }`.
 - `SALE_VOIDED` — when a Sale is voided/cancelled per FR-3.10. Fields: `{ saleId, originalTotal, reason, voidedByUserId, refundedWalletCents?, inventoryAdjustmentsReversed[] }`.
 
-Backward compat: existing `SALE_CREATED` audit rows from before this PRD ships are NOT migrated; the `/audit/verify` engine accepts both vocabularies.
+Backward compat: existing `SALE_CREATED` audit rows from before this PRD ships are NOT migrated; both vocabularies remain in audit history.
 
 ### FR-3.10 Void / refund flow — `POST /api/pos/sales/:id/void`
 
@@ -348,7 +348,7 @@ Cross-tenant access always 404 (existence-disclosure prevention; same pattern as
 
 - **Per-tenant scoping enforced.** Every endpoint scopes by `req.user.tenantId`; cross-tenant access returns 404.
 - **Idempotency.** `POST /api/pos/sales` accepts `Idempotency-Key: <uuid>` header. Cached responses replay for 24h. Per DD-5.6 shared with PRD_WALLET_TOPUP / PRD_PAYMENT_GATEWAY_CONFIG.
-- **Atomicity.** Sale insert + SaleLineItem inserts + InventoryAdjustment + WalletTransaction (redeem) + Invoice insert (per #775 polymorphism) + Booking status flip + audit row enqueue — ALL inside ONE Prisma `$transaction`. Failure rolls back all of them. Audit chain write is the only deliberate post-commit step (hash-chain reasons).
+- **Atomicity.** Sale insert + SaleLineItem inserts + InventoryAdjustment + WalletTransaction (redeem) + Invoice insert (per #775 polymorphism) + Booking status flip + audit row enqueue — ALL inside ONE Prisma `$transaction`. Failure rolls back all of them. If audit emission remains post-commit, document that choice as fail-soft logging behavior.
 - **Performance.** New Sale page initial load: P95 <800ms (today's bookings list ≤30 cards + cashier's open-shift state + catalogue search index warm). Per-item search autocomplete P95 <200ms (5-model fan-out; uses `.findMany({take: 10})` on each with tenantId+search indexes).
 - **Inventory check.** Real-time `stockOnHand` validation on PRODUCT-type lines INSIDE the transaction — never oversell. If a SKU runs out between client-load and finalize, the response is 409 with `INSUFFICIENT_STOCK { productId, availableQty, requestedQty }`.
 - **Receipt latency.** PDF generation P95 <500ms (pdfKit; in-memory render; not write-to-disk).
@@ -473,11 +473,11 @@ Cross-tenant access always 404 (existence-disclosure prevention; same pattern as
 - **`Service` + `Product` + `Membership` + `GiftCard` + `Package` Prisma models** — re-used as catalogue sources; new unified-search endpoint fans out over them.
 - **`backend/routes/pos.js:697-960`** `POST /api/pos/sales` finalize endpoint — extended with `bookingId` + `Idempotency-Key` + atomicity hardening (wallet redemption moves inside the transaction).
 - **`backend/routes/pos.js:147-660`** existing register / shift / petty-cash endpoints — re-used as-is.
-- **`backend/lib/audit.js` `writeAudit()`** — new `SALE_*` action set flows through the existing tamper-evident chain.
+- **`backend/lib/audit.js` `writeAudit()`** — records the new `SALE_*` action set in the tenant audit log.
 - **`backend/middleware/auth.js`** `verifyToken` + `cashierGate` + `adminGate` — gates the new endpoints.
 - **`backend/services/pdfRenderer.js`** — extended with `renderReceiptPDF()` helper (thermal + A4 templates).
 - **`backend/lib/notificationService.js`** — re-used optionally for "receipt emailed" notification (Phase 2 auto-email; v1 manual).
-- **`backend/routes/audit.js`** `/verify` endpoint — accepts the SALE_* event family without code change (entity = `SALE`).
+- The Audit Log viewer displays the SALE_* event family.
 - **Idempotency mechanism** — reuses the existing model from PRD_WALLET_TOPUP DD-5.6 / PRD_PAYMENT_GATEWAY_CONFIG (D9). v1 ships dependency-on-D9-or-D16.
 - **`PRD_WALLET_TOPUP.md` (D16)** — wallet redemption integration: when a payment line uses `WALLET`, finalize calls `lib/walletRedemption.js::redeemInternal()` (the new internal-API surface added in this PRD's slice 2 to avoid the HTTP round-trip pattern).
 - **`PRD_INVOICE_POLYMORPHISM.md` (#775, separate PRD — pending)** — finalize creates an `Invoice` row pointing at the `Sale` per the polymorphism PRD; v1 may ship without this integration if #775 is not ready (Sale.id is the receipt anchor in the interim).
@@ -595,12 +595,12 @@ Slices 1 + 2 + 3 + 4 must ship in order (each depends on the prior). Slice 5 + 6
 
 **Cross-PRD coordination check:** Before implementation starts, confirm:
 
-- `routes/audit.js` `/verify` endpoint accepts the SALE_* event family without code change (entity = `SALE` per FR-3.9).
+- `writeAudit()` records the SALE_* event family in the tenant audit log.
 - `backend/services/pdfRenderer.js` is willing to host a new `renderReceiptPDF()` helper alongside the existing prescription / consent / invoice helpers (no module-bloat objection).
 - `lib/walletRedemption.js` extracted as internal helper before slice 1 ships (currently lives only in PRD_WALLET_TOPUP D16's slice 1 plan; this PRD depends on it landing as a pure-function helper, NOT an HTTP route handler).
 - `cron/` directory registers `draftSaleCleanupEngine.js` in `server.js`'s cron-init block; honours `DISABLE_CRONS=1` env-flag for local-stack-only e2e specs.
 - Existing `routes/pos.js:697-960` (`POST /api/pos/sales`) continues to work for any direct API integrations that don't pass `bookingId` or `Idempotency-Key` (both fields are optional).
 - Existing legacy `/pos` flat-builder page (`PointOfSale.jsx`) stays available at `/pos/legacy` for 30 days post-deploy; telemetry-driven sunset decision in Phase 2.
-- Existing `SALE_CREATED` audit rows (from before this PRD ships) are NOT migrated to `SALE_FINALIZED`; the `/audit/verify` engine accepts both vocabularies (entity = `SALE` either way).
+- Existing `SALE_CREATED` audit rows (from before this PRD ships) are NOT migrated to `SALE_FINALIZED`; both vocabularies remain in audit history.
 - `Sale.bookingId` is purely additive nullable FK; no data migration; passes `migration_check` gate without bless markers.
 - The 8th payment-line method (`PAYLATER` / `ONLINE` / `CASHBACK`) routes are already supported by the existing `POST /api/pos/sales` (vocabulary frozen at #789); no schema changes needed for those.

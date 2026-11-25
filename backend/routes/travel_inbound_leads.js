@@ -645,7 +645,7 @@ router.post("/inbound/leads/:channel", async (req, res) => {
     // placeholder (`inbound-<channel>-<ts>@imported.local`) since that's a
     // freshly-minted value with zero dedup signal.
     //
-    // No match → fall through to create; touchpoint chain + AuditLog
+    // No match → fall through to create; touchpoint history + AuditLog
     // hand-off lives in the eventual slice that ships the Touchpoint
     // model integration (PRD §3.5).
     let existing = null;

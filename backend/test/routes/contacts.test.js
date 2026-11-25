@@ -604,6 +604,21 @@ describe('GET /api/contacts — list', () => {
     expect(res.body).toMatchObject({ total: 6, page: 2, totalPages: 2 });
   });
 
+  test('Wellness Leads include converted customer contacts when CRM statuses are requested', async () => {
+    const customer = { ...SAMPLE_CONTACT, id: 9002, status: 'Customer' };
+    prisma.contact.findMany.mockResolvedValueOnce([customer]);
+
+    const res = await request(makeApp({ vertical: 'wellness' })).get(
+      '/api/contacts?status=Lead&includeCrmStatuses=true&page=1&limit=10',
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual([expect.objectContaining({ id: 9002, status: 'Customer' })]);
+    const expectedWhere = { tenantId: TENANT_ID, deletedAt: null };
+    expect(prisma.contact.findMany.mock.calls[0][0].where).toEqual(expectedWhere);
+    expect(prisma.contact.count).toHaveBeenCalledWith({ where: expectedWhere });
+  });
+
   test('Generic New Call Status includes null, blank, and legacy raw values', async () => {
     const res = await request(makeApp()).get(
       '/api/contacts?status=Lead&includeCrmStatuses=true&page=1&limit=100&callifiedLeadStatus=yet_to_call',

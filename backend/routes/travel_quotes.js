@@ -4068,7 +4068,7 @@ router.post(
 // Schema note: TravelQuote has no acceptedAt / acceptedBy columns
 // (schema frozen for this slice). The acceptance timestamp + actor are
 // captured in the audit row's details payload; downstream surfaces that
-// need "when was this accepted" read from the audit chain rather than
+// need "when was this accepted" read from the audit log rather than
 // the quote envelope. A future slice can promote those into first-class
 // columns once the product call lands.
 router.post(
@@ -4159,7 +4159,7 @@ router.post(
 // Dedicated semantic endpoint paralleling /accept. Optional `reason`
 // body field (max 1000 chars) is captured in the audit row's details
 // payload — TravelQuote has no rejectionReason column (schema frozen
-// for this slice), so the audit chain is the source of truth for
+// for this slice), so the audit log is the source of truth for
 // rejection rationale until a future slice promotes it.
 //
 // Status-transition guard: only quotes in "Draft" or "Sent" can move

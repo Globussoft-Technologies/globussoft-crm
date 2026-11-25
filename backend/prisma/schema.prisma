@@ -236,6 +236,7 @@ model Tenant {
   travelSeasonCalendars               TravelSeasonCalendar[]
   travelMarkupRules                   TravelMarkupRule[]
   tmcTrips                            TmcTrip[]
+  tmcTripTeacherAssignments          TmcTripTeacherAssignment[]
   tmcParentTrips                      TmcParentTrip[]
   tmcParentDocuments                  TmcParentDocument[]
   tmcConsentTemplates                 TmcConsentTemplate[]
@@ -1107,6 +1108,7 @@ model Contact {
   travelQuotes              TravelQuote[]
   passportIdentities        PassportIdentity[]
   assignedTmcTrips          TmcTrip[]                     @relation("TmcTripTeacher")
+  tmcTripTeacherAssignments TmcTripTeacherAssignment[]   @relation("TmcTripTeacherAssignmentTeacher")
   tmcParentTrips            TmcParentTrip[]               @relation("TmcParentTripParent")
   tmcTeacherParentTrips     TmcParentTrip[]               @relation("TmcParentTripTeacher")
   tmcTeacherReviews         TmcTripTeacherReview[]        @relation("TmcTripTeacherReviewTeacher")
@@ -2369,18 +2371,6 @@ model AuditLog {
   details   String?  @db.Text // JSON diff or description
   createdAt DateTime @default(now())
 
-  // #558 — Hash-chain tamper-evidence. Each row's `hash` =
-  // sha256(prevHash + canonicalize({tenantId, entity, action, entityId,
-  // userId, details, createdAt})). `prevHash` points at the previous
-  // row's `hash` for the same tenant (or "GENESIS_<tenantId>" for the
-  // first row). Both columns are nullable so legacy pre-#558 rows
-  // survive the migration; new rows are always populated by writeAudit.
-  // The integrity verifier walks the chain and recomputes each hash;
-  // any tampering with details / userId / etc. breaks the chain at
-  // the tampered row. See backend/lib/audit.js + GET /api/audit/verify.
-  prevHash String? @db.Text
-  hash     String? @db.Text
-
   // #413 — Restrict (not Cascade) on Tenant deletion. AuditLog is the
   // forensic / compliance record-of-record (GDPR access logs, who-changed-
   // what, security events). A misclick on tenant.delete() must NOT silently
@@ -2746,7 +2736,7 @@ model SmsConfig {
   isActive      Boolean   @default(false)
   settings      String?   @db.Text
   // #651 — Stamp every credential rotation so the admin UI can show
-  // "Last rotated <date>" and so the audit chain has a corroborating
+  // "Last rotated <date>" and so the audit log has a corroborating
   // signal alongside the ProviderConfig.ROTATE row.
   lastRotatedAt DateTime?
   createdAt     DateTime  @default(now())
@@ -5761,7 +5751,7 @@ model PrescriptionRequest {
 // Append-only history for a renewal request — one row per state change.
 //
 // AuditLog already records every transition for compliance, but it is
-// tenant-wide, hash-chained and admin-gated; the review screen needs a
+// tenant-wide and admin-gated; the review screen needs a
 // cheap request-scoped "what has happened to this so far" list it can
 // render inline. This is that list, not a replacement for the audit trail.
 model PrescriptionRequestEvent {
@@ -8640,11 +8630,11 @@ model TmcTrip {
   familyParentId        Int?
   familyParent          TmcTrip?                  @relation("TmcTripFamily", fields: [familyParentId], references: [id], onDelete: SetNull)
   familyVariants        TmcTrip[]                 @relation("TmcTripFamily")
-  // TMC teacher portal assignment. This is intentionally a single teacher
-  // for the first slice; it can be promoted to a join model if co-teachers
-  // become a requirement.
+  // Kept as the lead/attribution teacher for existing parent links and older
+  // callers. The join model below is the canonical source for portal access.
   teacherContactId      Int?
   teacher               Contact?                  @relation("TmcTripTeacher", fields: [teacherContactId], references: [id], onDelete: SetNull)
+  teacherAssignments    TmcTripTeacherAssignment[]
   participants          TripParticipant[]
   visaApplications      VisaApplication[]
   visaLetterGenerations VisaLetterGeneration[]
@@ -8670,6 +8660,23 @@ model TmcTrip {
   @@index([tenantId, departDate])
   @@index([tenantId, teacherContactId])
   @@index([tenantId, familyParentId])
+}
+
+/// Teachers assigned to a TMC trip. Every assigned teacher receives the same
+/// trip-level portal access; teacher-specific reports remain keyed separately.
+model TmcTripTeacherAssignment {
+  id               Int      @id @default(autoincrement())
+  tenantId         Int      @default(1)
+  tripId           Int
+  teacherContactId Int
+  createdAt        DateTime @default(now())
+  tenant           Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  trip             TmcTrip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  teacher          Contact  @relation("TmcTripTeacherAssignmentTeacher", fields: [teacherContactId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, tripId, teacherContactId])
+  @@index([tenantId, teacherContactId])
+  @@index([tenantId, tripId])
 }
 
 // Links a TMC parent portal account to the teacher and trip that issued the
@@ -10092,7 +10099,7 @@ model TravelQuote {
 //     no auth — share-link JWT authorizes the write).
 //   - Operator-side: future slices can emit snapshots from internal
 //     accept/decline routes too; today only the public-side endpoints
-//     write here (additive — operator audit chain via writeAudit() stays
+//     write here (additive — operator audit log via writeAudit() stays
 //     authoritative for staff-driven transitions).
 //   - System: quoteExpirySweep cron flips status Draft|Sent → Expired
 //     when validUntil < now and writes a snapshot with changedBy='system'.

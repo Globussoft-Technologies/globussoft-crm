@@ -57,7 +57,7 @@ prevents the same shape of regression on the next vertical's POS-like surface.
 | Backend route file | `backend/routes/pos.js` (1,079 lines) — mounted at `/api/pos` | 17 endpoints |
 | Backend role gates | `routes/pos.js:42-50` — `adminGate` (admin/manager) + `cashierGate` (admin/manager/doctor/professional/telecaller/helper) | Wellness-vertical-gated via `verifyWellnessRole` |
 | Prisma models | `Register`, `Shift`, `Sale`, `SaleLineItem`, `PettyCashLedger` (`schema.prisma:3752-3828`) | Tenant-scoped, audit-emitting, fully migrated |
-| Audit emission | `writeAudit('Register' \| 'Shift' \| 'Sale', ...)` at every mutation | Captured in hash-chain |
+| Audit emission | `writeAudit('Register' \| 'Shift' \| 'Sale', ...)` at every mutation | Captured in tenant audit log |
 | Sale loyalty hook | `maybeAutoCreditLoyaltyForSale` in `routes/pos.js:68` | Credits loyalty points on `COMPLETED` sale |
 | Invoice numbering | `formatInvoiceNumber` / `generateInvoiceNumber` (tenant-scoped `POS-YYYY-NNNN`) | Per-tenant monotonic |
 
@@ -276,7 +276,7 @@ None.
 
 - Existing POS route + Register / Shift / Sale / PettyCashLedger Prisma models (`schema.prisma:3752-3828`)
 - Existing wellness-role middleware (`middleware/wellnessRole.js` — `verifyWellnessRole`)
-- Existing audit log infrastructure (`writeAudit` + hash chain)
+- Existing audit log infrastructure (`writeAudit`)
 - Existing inventory module (transactional decrement on sale)
 - Existing receipt PDF renderer (`services/pdfRenderer.js`)
 - Existing loyalty hook (`maybeAutoCreditLoyaltyForSale`)

@@ -84,7 +84,7 @@ Zylu's wallet flow ships:
 - `backend/routes/wellness.js:8478` — existing `CashbackRule` CRUD; pattern reused for `WalletBonusRule`
 - `backend/lib/notificationService.js` — re-used for customer expiry-warning notifications
 - `backend/routes/sms.js` — re-used for SMS receipt + expiry-warning delivery
-- `backend/lib/audit.js` `writeAudit()` — new `WALLET_*` action set flows through the existing tamper-evident chain
+- `backend/lib/audit.js` `writeAudit()` — records new `WALLET_*` actions in the tenant audit log
 - `backend/cron/` (22 engines today) — new `walletExpiryEngine.js` joins the family
 - Payment integration: `PRD_PAYMENT_GATEWAY_CONFIG.md` (D9) — top-up POST passes the `paymentMethod` through to the existing Stripe / Razorpay flow
 
@@ -102,17 +102,17 @@ Path (b) is the recommended pattern — it makes the expiry-bucket math first-cl
 
 ## §2 Use cases
 
-1. **Customer top-up at front desk: ₹2000 cash → ₹2000 wallet principal + ₹200 bonus per active "10% bonus on ₹2000+" rule.** Operator (role=USER + sub-role=cashier OR role=MANAGER) navigates to a patient's detail page → Wallet tab → "Top-up" button → modal opens: enter `amount=2000`, select `paymentMethod=cash`, review the rule-preview pane showing "₹200 bonus will be added per rule 'Tier 2: 10% on ₹2000+'", confirm. Backend creates 1 `WalletCreditBatch` (principal, no expiry) + 1 `WalletCreditBatch` (bonus, expiresAt=now+12mo, sourceRuleId=2) + 1 `WalletTransaction` (type=`TOPUP`, amount=2200, reason="Cash top-up + Tier 2 bonus") atomically in a single Prisma transaction. Audit chain captures `WALLET_TOPUP { walletId, principalCents, bonusCents, ruleId, paymentMethod, idempotencyKey }`. Customer receives SMS receipt: "Wallet credited ₹2200 (₹2000 + ₹200 bonus, expires 2027-05-25). Balance: ₹3450."
+1. **Customer top-up at front desk: ₹2000 cash → ₹2000 wallet principal + ₹200 bonus per active "10% bonus on ₹2000+" rule.** Operator (role=USER + sub-role=cashier OR role=MANAGER) navigates to a patient's detail page → Wallet tab → "Top-up" button → modal opens: enter `amount=2000`, select `paymentMethod=cash`, review the rule-preview pane showing "₹200 bonus will be added per rule 'Tier 2: 10% on ₹2000+'", confirm. Backend creates 1 `WalletCreditBatch` (principal, no expiry) + 1 `WalletCreditBatch` (bonus, expiresAt=now+12mo, sourceRuleId=2) + 1 `WalletTransaction` (type=`TOPUP`, amount=2200, reason="Cash top-up + Tier 2 bonus") atomically in a single Prisma transaction. audit log captures `WALLET_TOPUP { walletId, principalCents, bonusCents, ruleId, paymentMethod, idempotencyKey }`. Customer receives SMS receipt: "Wallet credited ₹2200 (₹2000 + ₹200 bonus, expires 2027-05-25). Balance: ₹3450."
 
-2. **ADMIN configures a new bonus rule "Festive: 15% on ₹3000+".** ADMIN navigates `/admin/wallet-rules` → "New rule" → fills name=`Festive Boost`, minAmountCents=300000, bonusPercent=15, validityMonths=12, validFrom=`2026-10-15`, validTo=`2026-11-15`, active=true, precedence=10 (higher than the existing 5% / 10% tiers). Saves. Audit chain captures `WALLET_RULE_CHANGED { ruleId, action: 'CREATED', diff }`. For top-ups during the Festive window, the engine applies Tier 2 (10%) AND Festive (15%) — both match — but only ONE wins per DD-5.1. Recommendation: HIGHEST-PERCENT-WINS (Festive 15% wins over Tier 2 10%). Alternative paths in DD-5.1.
+2. **ADMIN configures a new bonus rule "Festive: 15% on ₹3000+".** ADMIN navigates `/admin/wallet-rules` → "New rule" → fills name=`Festive Boost`, minAmountCents=300000, bonusPercent=15, validityMonths=12, validFrom=`2026-10-15`, validTo=`2026-11-15`, active=true, precedence=10 (higher than the existing 5% / 10% tiers). Saves. audit log captures `WALLET_RULE_CHANGED { ruleId, action: 'CREATED', diff }`. For top-ups during the Festive window, the engine applies Tier 2 (10%) AND Festive (15%) — both match — but only ONE wins per DD-5.1. Recommendation: HIGHEST-PERCENT-WINS (Festive 15% wins over Tier 2 10%). Alternative paths in DD-5.1.
 
-3. **Customer redeems wallet balance at a Visit checkout.** Customer's wallet has 3 LIVE batches: B1=₹500 principal (no expiry) from Apr-12, B2=₹2000 principal (no expiry) from May-25, B3=₹200 bonus (expires 2027-05-25) from May-25. Visit checkout charges ₹600 to wallet. Per DD-5.3 (principal-first + expiry-soonest-bonus-first): the engine debits B1=₹500 (now empty, status=`CONSUMED`) + B2=₹100 (₹1900 remains). Creates 2 `WalletDebit` ledger rows + 1 `WalletTransaction` (type=`REDEEM`, amount=-600, visitId=X). Bonus batch B3 stays untouched (still ₹200 + expiry=2027-05-25). Audit chain captures `WALLET_REDEEM { walletId, visitId, debitedBatches: [{id: 1, cents: 50000}, {id: 2, cents: 10000}], remainingBalance: 210000 }`.
+3. **Customer redeems wallet balance at a Visit checkout.** Customer's wallet has 3 LIVE batches: B1=₹500 principal (no expiry) from Apr-12, B2=₹2000 principal (no expiry) from May-25, B3=₹200 bonus (expires 2027-05-25) from May-25. Visit checkout charges ₹600 to wallet. Per DD-5.3 (principal-first + expiry-soonest-bonus-first): the engine debits B1=₹500 (now empty, status=`CONSUMED`) + B2=₹100 (₹1900 remains). Creates 2 `WalletDebit` ledger rows + 1 `WalletTransaction` (type=`REDEEM`, amount=-600, visitId=X). Bonus batch B3 stays untouched (still ₹200 + expiry=2027-05-25). audit log captures `WALLET_REDEEM { walletId, visitId, debitedBatches: [{id: 1, cents: 50000}, {id: 2, cents: 10000}], remainingBalance: 210000 }`.
 
 4. **Operator views wallet transaction history per patient.** Operator opens Patient detail → Wallet tab. Page renders: current balance (₹2100 — principal ₹1900 + bonus ₹200), a "Top-up" button (gated to cashier+), and a paginated transactions table with columns: date / type-pill / amount (signed; green for credit, red for debit) / source (rule name for bonus, visit-link for redeem, refund-reason for reversal) / running-balance / expiry-countdown (only for bonus rows). Operator clicks pagination → backend returns next page from `GET /api/wallet/transactions?patientId=X&page=2&limit=25`.
 
 5. **Auto-expire engine sweeps expired bonus credits monthly; sends customer notification 7d before.** Nightly cron `backend/cron/walletExpiryEngine.js` runs at 03:30 IST. Phase 1: find all bonus `WalletCreditBatch` where `expiresAt BETWEEN now AND now+7d` AND `warning7dSentAt IS NULL` → send T-7d notification ("Your ₹200 bonus expires on 2027-05-25. Use at your next visit."). Phase 2: find all bonus batches where `expiresAt <= now` AND `status='LIVE'` → mark `status='EXPIRED'`, write `WalletTransaction` (type=`EXPIRY`, amount=-200, reason="12-month bonus expiry, rule: Tier 2"), send T-0 notification ("Your ₹200 bonus has expired."). Each phase is paginated (1000 batches per tick); idempotent if the cron is killed mid-run.
 
-6. **Refund flow — operator cancels a top-up; wallet reverses principal + claws back bonus.** Customer disputes a ₹2000 cash top-up done 3 days ago. ADMIN navigates to the wallet transaction history → finds the original `WALLET_TOPUP` row → clicks "Reverse". Modal: "This will reverse the principal credit AND claw back the unredeemed bonus. If bonus has been partially redeemed, only the unredeemed portion is clawed back. Continue?" Per DD-5.7 (clawback-only-unredeemed-portion): the engine debits B2 (₹2000 principal) by however much is REMAINING (₹1900 in the post-redeem state) + debits B3 (₹200 bonus) by however much is REMAINING (₹200, untouched) = total reversal credit ₹2100. If the customer's redeemed ₹100 from this batch is non-refundable (per DD-5.7), the reversal is `₹1900 principal + ₹200 bonus` returned via the operator's chosen refund mechanism (cash / payment-gateway). Audit chain captures `WALLET_REVERSAL { originalTransactionId, reversedPrincipalCents: 190000, clawbackBonusCents: 20000, residualConsumedByVisitId: X, paymentRefundMethod: 'cash' }`.
+6. **Refund flow — operator cancels a top-up; wallet reverses principal + claws back bonus.** Customer disputes a ₹2000 cash top-up done 3 days ago. ADMIN navigates to the wallet transaction history → finds the original `WALLET_TOPUP` row → clicks "Reverse". Modal: "This will reverse the principal credit AND claw back the unredeemed bonus. If bonus has been partially redeemed, only the unredeemed portion is clawed back. Continue?" Per DD-5.7 (clawback-only-unredeemed-portion): the engine debits B2 (₹2000 principal) by however much is REMAINING (₹1900 in the post-redeem state) + debits B3 (₹200 bonus) by however much is REMAINING (₹200, untouched) = total reversal credit ₹2100. If the customer's redeemed ₹100 from this batch is non-refundable (per DD-5.7), the reversal is `₹1900 principal + ₹200 bonus` returned via the operator's chosen refund mechanism (cash / payment-gateway). audit log captures `WALLET_REVERSAL { originalTransactionId, reversedPrincipalCents: 190000, clawbackBonusCents: 20000, residualConsumedByVisitId: X, paymentRefundMethod: 'cash' }`.
 
 ---
 
@@ -293,7 +293,7 @@ Each phase paginated (1000 rows per tick); engine is restartable (idempotent; us
 
 ### FR-3.8 Audit log integration — 6 new audit actions
 
-All flow through existing `backend/lib/audit.js` `writeAudit()` for tamper-evident hashing. Audit entity = `WALLET`.
+All flow through existing `backend/lib/audit.js` `writeAudit()` for audit logging. Audit entity = `WALLET`.
 
 - `WALLET_TOPUP` — fields: walletId, principalCents, bonusCents, ruleId, paymentMethod, paymentReference, idempotencyKey
 - `WALLET_REDEEM` — fields: walletId, visitId, invoiceId, totalCents, debitedBatches[]
@@ -343,7 +343,7 @@ Audit `WALLET_REVERSAL`. SMS notification to customer ("Your top-up of ₹2000 h
 - **Cron cadence.** `walletExpiryEngine.js` daily at 03:30 IST. Configurable via env var `WALLET_EXPIRY_CRON_SCHEDULE` (defaults to `30 3 * * *`).
 - **Notification cadence.** T-7d warning once per batch (set-once via `warning7dSentAt`); T-0 expiry once per batch (set-once via `expiredAt`). No double-sends.
 - **Read latency.** Wallet detail load (FR-3.7) P95 target <500ms — single Prisma query with `_count` + paginated transactions + summed batches. Transactions page with 25 rows ≈ 100ms.
-- **Write latency.** Top-up P95 <800ms (Prisma transaction + audit-chain + SMS-enqueue; SMS-dispatch is fire-and-forget via job queue).
+- **Write latency.** Top-up P95 <800ms (Prisma transaction + audit log + SMS-enqueue; SMS-dispatch is fire-and-forget via job queue).
 - **Storage cost.** Per top-up: 1 transaction row (~200 bytes) + 1-2 batch rows (~150 bytes each) = ~500 bytes. Per active patient with monthly top-ups over 2 years = ~24 * 500 = 12 KB. Across 10K patients = ~120 MB. Negligible.
 - **Mobile responsive.** Top-up modal stacks vertically <768px. Transactions table degrades to card list.
 - **i18n-ready.** All operator + customer-facing labels route through `LanguageSwitcher.jsx`. Rule names + reason strings are user-content (NOT translated).
@@ -419,7 +419,7 @@ Audit `WALLET_REVERSAL`. SMS notification to customer ("Your top-up of ₹2000 h
 
 ## §6 Acceptance criteria
 
-- **AC-6.1** Cashier (USER + cashier sub-role) navigates Patient detail → Wallet tab → "Top-up" → enters amount=2000 INR + paymentMethod=cash → confirms. Backend creates 1 `WalletTransaction` (type=TOPUP, amount=+2200), 1 `WalletCreditBatch` (PRINCIPAL, 200000 cents, no expiry), 1 `WalletCreditBatch` (BONUS, 20000 cents, expiresAt=now+12mo, sourceRuleId=2 with name="Tier 2: 10% on ₹2000+") inside one Prisma transaction. `Wallet.balance` increments by 220000 cents. Audit chain captures `WALLET_TOPUP` with all batch metadata. SMS receipt is enqueued via `notificationService.js` for the patient's phone. The same POST with the same `Idempotency-Key` header within 24h returns the cached response with `replayed: true`.
+- **AC-6.1** Cashier (USER + cashier sub-role) navigates Patient detail → Wallet tab → "Top-up" → enters amount=2000 INR + paymentMethod=cash → confirms. Backend creates 1 `WalletTransaction` (type=TOPUP, amount=+2200), 1 `WalletCreditBatch` (PRINCIPAL, 200000 cents, no expiry), 1 `WalletCreditBatch` (BONUS, 20000 cents, expiresAt=now+12mo, sourceRuleId=2 with name="Tier 2: 10% on ₹2000+") inside one Prisma transaction. `Wallet.balance` increments by 220000 cents. audit log captures `WALLET_TOPUP` with all batch metadata. SMS receipt is enqueued via `notificationService.js` for the patient's phone. The same POST with the same `Idempotency-Key` header within 24h returns the cached response with `replayed: true`.
 
 - **AC-6.2** Cashier triggers `POST /api/wallet/redeem` for a Visit checkout of ₹600 against a wallet with batches [B1=₹500 PRINCIPAL Apr-12, B2=₹2000 PRINCIPAL May-25, B3=₹200 BONUS May-25/expires 2027-05-25]. Engine debits B1=₹500 (flipped to CONSUMED) + B2=₹100 (₹1900 remaining LIVE). B3 untouched. `WalletTransaction` (type=REDEEM, amount=-60000, visitId=X) created. `Wallet.balance` decrements by 60000. Audit `WALLET_REDEEM { debitedBatches: [{id: B1, cents: 50000}, {id: B2, cents: 10000}] }`. A second redeem attempt for ₹100K against the remaining ₹2100 wallet returns 400 `INSUFFICIENT_BALANCE { availableCents: 210000 }` and rolls back.
 
@@ -459,10 +459,10 @@ Audit `WALLET_REVERSAL`. SMS notification to customer ("Your top-up of ₹2000 h
 - **`backend/routes/wellness.js:7888-7935`** `writeWalletTransaction()` + `getOrCreateWallet()` helpers — re-used as low-level primitives by the new `routes/wallet.js`.
 - **`backend/lib/notificationService.js`** — re-used for SMS top-up receipts + expiry warnings + reversal notifications.
 - **`backend/services/smsProvider.js`** — re-used as the SMS dispatcher (MSG91 / Twilio cred already deployed).
-- **`backend/lib/audit.js` `writeAudit()`** — new `WALLET_*` action set flows through the existing tamper-evident chain.
+- **`backend/lib/audit.js` `writeAudit()`** — records new `WALLET_*` actions in the tenant audit log.
 - **`backend/middleware/auth.js`** `verifyToken` + `verifyRole` — gates the new endpoints.
 - **`backend/routes/staff.js`** (existing) — extended optionally to surface a "Cashier" sub-role badge per FR-3.6.
-- **`backend/routes/audit.js`** `/verify` endpoint — accepts the WALLET_* event family without code change (entity = `WALLET`).
+- The Audit Log viewer displays WALLET_* events.
 - **`backend/cron/`** — new `walletExpiryEngine.js` joins as engine #23 (after `segmentEvaluationEngine.js`); registered in `server.js` cron-init block. Honours `DISABLE_CRONS=1` env-flag for the local-stack-only e2e specs.
 - **Idempotency mechanism** — either (a) new DB-backed `IdempotencyKey` model OR (c) reuse the existing model from `PRD_PAYMENT_GATEWAY_CONFIG.md` (D9). Per DD-5.6.
 - **`PRD_PAYMENT_GATEWAY_CONFIG.md` (D9)** — when top-up paymentMethod=`gateway`, the top-up POST routes through the configured Stripe / Razorpay flow. v1 may ship cash-only first if D9 isn't ready.
@@ -570,7 +570,7 @@ Slices 1 + 2 + 3 + 4 must ship in order (each depends on the prior). Slice 5 + 6
 
 **Cross-PRD coordination check:** Before implementation starts, confirm:
 
-- `routes/audit.js` `/verify` endpoint accepts the WALLET_* event family without code change (entity = `WALLET` per FR-3.8).
+- `writeAudit()` records the WALLET_* event family in the tenant audit log.
 - `lib/notificationService.js` accepts the new wallet notification templates (`WALLET_TOPUP_RECEIPT` / `WALLET_EXPIRY_WARNING_7D` / `WALLET_EXPIRY_T0` / `WALLET_REVERSAL_NOTIFICATION`).
 - `services/smsProvider.js` SMS-send flow respects the per-patient `smsOptIn` flag for marketing-type messages but DOES dispatch transactional messages (top-up receipt + reversal) regardless (per Q10 product call).
 - `cron/` directory registers `walletExpiryEngine.js` in `server.js`'s cron-init block; honours `DISABLE_CRONS=1`.

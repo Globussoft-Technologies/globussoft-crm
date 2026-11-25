@@ -72,7 +72,6 @@ DragonflyDB is a modern, multi-threaded, Redis-compatible in-memory store. It ca
 
 **What it will NOT fix:**
 
-- It would **not** have prevented the audit backfill OOM (`backend/lib/audit.js` loading whole tables into JS heap). That is a code-level pagination/row-limit issue, not a cache problem.
 - It is not a substitute for fixing unbounded queries, missing `take` clauses, or un-paginated admin endpoints.
 
 **Integration sketch:**

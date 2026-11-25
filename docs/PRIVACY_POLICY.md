@@ -66,7 +66,7 @@ Payments are processed by **Stripe** and **Razorpay**. We do not store full card
 ### 2.5 Data collected automatically
 
 - **Usage and log data** — IP address, browser type, pages viewed, API requests, timestamps. Used for security (rate limiting, abuse prevention), debugging, and audit trails.
-- **Audit logs** — administrative and data-changing actions are recorded in a tamper-evident audit log (hash-chained) for security and compliance.
+- **Audit logs** — administrative and data-changing actions are recorded in tenant-scoped logs for security and operational review.
 - **Error diagnostics** — we use Sentry for error monitoring; error reports may include request context.
 - **Website visitor tracking** — if a tenant enables the web-visitor feature on their own website, that feature records page visits and form submissions for the tenant's site. The tenant is responsible for disclosing this to their visitors.
 
@@ -180,7 +180,7 @@ We apply technical and organisational measures appropriate to the risk, includin
 - Role-based access control (RBAC) with field-level permission filtering
 - Two-factor authentication and SSO support
 - CSRF protection, security headers, input sanitisation, and rate limiting
-- Tamper-evident (hash-chained) audit logging with automated integrity checks
+- Tenant-scoped audit logging for administrative and data-changing actions
 - Tenant isolation enforced at the application and query layer
 - Automated dependency vulnerability scanning and secret scanning in our development pipeline
 

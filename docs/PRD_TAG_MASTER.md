@@ -88,7 +88,7 @@ Tags work today. Drift accumulates silently — every operator hour adds drift, 
 - Related: GH #931 — Bulk-tag UI on Patients page (consumer of the `bulk-tags` endpoint at [routes/wellness.js:1318](../backend/routes/wellness.js#L1318)). THIS PRD's master list is the right layer to land BEFORE additional bulk-tag UIs ship for Contact / Lead / Deal — otherwise the drift compounds across entities.
 - Related: schema-comment convention at [backend/prisma/schema.prisma:2612-2622](../backend/prisma/schema.prisma#L2612-L2622) — establishes the JSON-string column shape as canonical. THIS PRD treats that as the per-entity persistence layer; introduces TagMaster as the orthogonal metadata layer.
 - Cross-reference: `PRD_INTEGRATIONS_HUB.md` (tick #190) — same operator-governance shape; tags master is its data-quality sibling.
-- Cross-reference: `routes/audit.js` — every tag mutation (CREATE / RENAME / MERGE / DELETE / ARCHIVE) writes to the tamper-evident audit chain.
+- Cross-reference: `routes/audit.js` — every tag mutation (CREATE / RENAME / MERGE / DELETE / ARCHIVE) is recorded in the tenant audit log.
 
 ---
 
@@ -227,7 +227,7 @@ A new consumer joins the system by adding a registry entry + a `tags String? @db
 
 ### FR-3.8 Audit log integration
 
-Audit chain entries (via `backend/lib/audit.js` `writeAudit(entity, action, entityId, userId, tenantId, details)`):
+audit log entries (via `backend/lib/audit.js` `writeAudit(entity, action, entityId, userId, tenantId, details)`):
 
 - `TAG_MASTER` + `CREATED` — on `POST /api/tags`; details = `{ name, slug, color, category }`.
 - `TAG_MASTER` + `RENAMED` — on `PUT /api/tags/:id` when name changed; details = `{ oldName, newName, slug }`.
@@ -345,17 +345,17 @@ Runs once after the deploy + cron takes over on day 2.
 
 ## §6 Acceptance criteria
 
-- **AC-6.1** ADMIN navigates to `/admin/tags` → page loads within 1s (P95) → master list shows all active tags grouped by category with usage counts + color swatches + last-used timestamps. Filtering by category / status / search works correctly; URL state persists filters. Audit chain logs `TAG_MASTER / VIEWED` (throttled per CLAUDE.md audit-throttling pattern).
+- **AC-6.1** ADMIN navigates to `/admin/tags` → page loads within 1s (P95) → master list shows all active tags grouped by category with usage counts + color swatches + last-used timestamps. Filtering by category / status / search works correctly; URL state persists filters. audit log logs `TAG_MASTER / VIEWED` (throttled per CLAUDE.md audit-throttling pattern).
 
-- **AC-6.2** ADMIN creates a new tag `vip-2026` with color `teal` + category `Patient Type` → `POST /api/tags` returns 201 + master row created with `slug='vip-2026'` + `tenantId=req.user.tenantId` + `createdBy=req.user.userId`. Slug is auto-derived from name. Second `POST /api/tags` with `name='VIP 2026'` returns 409 (slug collision). Audit chain logs `TAG_MASTER / CREATED`.
+- **AC-6.2** ADMIN creates a new tag `vip-2026` with color `teal` + category `Patient Type` → `POST /api/tags` returns 201 + master row created with `slug='vip-2026'` + `tenantId=req.user.tenantId` + `createdBy=req.user.userId`. Slug is auto-derived from name. Second `POST /api/tags` with `name='VIP 2026'` returns 409 (slug collision). audit log logs `TAG_MASTER / CREATED`.
 
-- **AC-6.3** ADMIN renames `new-lead` to `prospect` via `PUT /api/tags/:id` → master row's `name` updated; `slug` unchanged. Cron-deferred sweep (or manual recalculate) confirms `usageCount` matches the count of Patient.tags entries still referencing slug `new-lead`. Audit chain logs `TAG_MASTER / RENAMED` with `{ oldName: 'new-lead', newName: 'prospect', slug: 'new-lead' }`.
+- **AC-6.3** ADMIN renames `new-lead` to `prospect` via `PUT /api/tags/:id` → master row's `name` updated; `slug` unchanged. Cron-deferred sweep (or manual recalculate) confirms `usageCount` matches the count of Patient.tags entries still referencing slug `new-lead`. audit log logs `TAG_MASTER / RENAMED` with `{ oldName: 'new-lead', newName: 'prospect', slug: 'new-lead' }`.
 
-- **AC-6.4** ADMIN merges `VIP` (usage 134) + `Vip` (usage 61) + `v.i.p` (usage 23) into `vip` (usage 412) via three calls to `POST /api/tags/:id/merge-into/:targetId` → all Patient.tags JSON values rewritten transactionally (218 affected rows total) + source tags' `mergedIntoId + archivedAt` set + target's `usageCount` reflects new aggregate (630). Audit chain logs three `TAG_MASTER / MERGED` events with per-merge `rowsUpdated`.
+- **AC-6.4** ADMIN merges `VIP` (usage 134) + `Vip` (usage 61) + `v.i.p` (usage 23) into `vip` (usage 412) via three calls to `POST /api/tags/:id/merge-into/:targetId` → all Patient.tags JSON values rewritten transactionally (218 affected rows total) + source tags' `mergedIntoId + archivedAt` set + target's `usageCount` reflects new aggregate (630). audit log logs three `TAG_MASTER / MERGED` events with per-merge `rowsUpdated`.
 
 - **AC-6.5** ADMIN toggles `Tenant.tagsControlled=true` → next operator request to `PATCH /api/wellness/patients/bulk-tags` with `addTags: ['unknown-tag']` returns 400 with `{ error, code: 'TAG_NOT_IN_MASTER', unmatched: ['unknown-tag'], suggestions: { 'unknown-tag': ['unknown'] } }`. Same request with `addTags: ['vip']` (in master) succeeds. ADMIN toggles back to false → unknown tags auto-create master entries with category `uncategorized` + color `null`.
 
-- **AC-6.6** Daily cron `tagUsageEngine.js` runs at 03:30 IST → for each tenant, recomputes `usageCount + lastUsedAt` for each TagMaster row from Patient.tags JSON-string scan. Master page on next operator visit shows the refreshed counts. Manual trigger `POST /api/tags/recalculate-usage` runs synchronously + returns the same recomputed values in the response body. Audit chain logs `TAG_MASTER / USAGE_RECALCULATED`.
+- **AC-6.6** Daily cron `tagUsageEngine.js` runs at 03:30 IST → for each tenant, recomputes `usageCount + lastUsedAt` for each TagMaster row from Patient.tags JSON-string scan. Master page on next operator visit shows the refreshed counts. Manual trigger `POST /api/tags/recalculate-usage` runs synchronously + returns the same recomputed values in the response body. audit log logs `TAG_MASTER / USAGE_RECALCULATED`.
 
 - **AC-6.7** Cross-tenant access blocked: ADMIN of tenant A returns 404 on `GET /api/tags/<id>` where `<id>` belongs to tenant B. Same for PUT / DELETE / merge endpoints. `@@unique([tenantId, slug])` enforces no collision possible across tenants. Per-tenant scoping verified by gate-spec.
 
@@ -382,7 +382,7 @@ Runs once after the deploy + cron takes over on day 2.
 
 - **Existing `Patient.tags` column** at [backend/prisma/schema.prisma:2612-2622](../backend/prisma/schema.prisma#L2612-L2622) — JSON-string source of truth. THIS PRD's TagMaster sits on top as metadata.
 - **Existing `bulk-tags` endpoint** at [backend/routes/wellness.js:1318](../backend/routes/wellness.js#L1318) — consumer of the master; gains the pre-check loop in FR-3.7.
-- **`backend/lib/audit.js`** `writeAudit()` — Audit chain integration. New entity `'TAG_MASTER'` written transparently; hash chain inherits.
+- **`backend/lib/audit.js`** `writeAudit()` — records new `'TAG_MASTER'` events in tenant audit history.
 - **`backend/lib/eventBus.js`** (read-only in v1) — Phase 2 real-time usage counts subscribe here.
 - **`backend/prisma/schema.prisma`** — NEW model `TagMaster` (FR-3.1) + new field `Tenant.tagsControlled Boolean @default(false)` (additive nullable, no migration risk).
 - **Cron engine pattern** (`backend/cron/` — 22 existing engines) — `tagUsageEngine.js` follows the same shape as `appointmentRemindersEngine.js` / `wellnessOpsEngine.js`.
@@ -414,7 +414,7 @@ Runs once after the deploy + cron takes over on day 2.
 
 - **Q7 Merge confirmation preview — show "X rows will be updated" preview before commit?** Per FR-3.5 (merge modal) — YES. Confirm. The count is computed via a pre-merge SELECT; operator clicks "Confirm" to proceed. Open: should the preview also show a SAMPLE of affected entity rows (e.g. first 5 patient names) to give operator a sanity check? Recommend YES — adds 50ms to the preview round-trip + materially reduces "oh wait I merged the wrong one" recovery.
 
-- **Q8 Audit-log retention for tag events — same as other audit chain entries (7-year) or shorter?** Open. Tag mutations are operational metadata, not PHI / financial. A shorter retention (e.g. 2 years) might be acceptable + reduce audit-table growth. Recommend default 7-year for consistency; revisit if growth becomes material.
+- **Q8 Audit-log retention for tag events — same as other audit log entries (7-year) or shorter?** Open. Tag mutations are operational metadata, not PHI / financial. A shorter retention (e.g. 2 years) might be acceptable + reduce audit-table growth. Recommend default 7-year for consistency; revisit if growth becomes material.
 
 ---
 
@@ -468,5 +468,5 @@ Slices are sequential within the backend, but slice 1's frontend page + slice 2'
 
 **Cross-PRD coordination check:** Before implementation starts, confirm:
 - `PRD_IMPORT_EXPORT_JOBS.md` CSV import handlers integrate with controlled-vocab mode — CSV rows with unmapped tags surface as per-row errors with the same `TAG_NOT_IN_MASTER` code FR-3.7 uses.
-- `routes/audit.js` `/verify` endpoint inherits TAG_MASTER entries cleanly (no code change required).
+- `writeAudit()` records TAG_MASTER entries in the tenant audit log.
 - The schema-comment at [backend/prisma/schema.prisma:2612-2622](../backend/prisma/schema.prisma#L2612-L2622) gets updated post-ship to cross-reference the TagMaster model + the canonical mode of operation (denormalized + metadata layer).

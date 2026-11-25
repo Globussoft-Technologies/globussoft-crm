@@ -51,7 +51,7 @@ prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({ vertical: 'wellness' });
 
 // Avoid blowing up when audit.writeAudit logs to console for the
-// audit-chain disabled path; stub auditLog model.
+// audit write fail-soft path; stub the auditLog model.
 prisma.auditLog = prisma.auditLog || {};
 prisma.auditLog.create = vi.fn().mockResolvedValue({});
 prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);

@@ -1426,9 +1426,26 @@ router.get(
           deletedAt: null,
         },
         orderBy: [{ name: "asc" }, { id: "asc" }],
-        select: { id: true, name: true, email: true, phone: true },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          company: true,
+          createdAt: true,
+          _count: {
+            select: {
+              tmcTripTeacherAssignments: { where: { tenantId: req.travelTenant.id } },
+            },
+          },
+        },
       });
-      res.json({ teachers });
+      res.json({
+        teachers: teachers.map(({ _count, ...teacher }) => ({
+          ...teacher,
+          assignedTripCount: Number(_count?.tmcTripTeacherAssignments || 0),
+        })),
+      });
     } catch (err) {
       console.error("[tmc-portal][staff/teachers]", err);
       res.status(500).json({ error: "Failed to load TMC teachers" });
@@ -1463,6 +1480,10 @@ router.post(
           tripCode: true,
           destination: true,
           teacherContactId: true,
+          teacherAssignments: {
+            orderBy: { id: "asc" },
+            select: { teacherContactId: true },
+          },
         },
       });
       if (!trip) {
@@ -1470,7 +1491,9 @@ router.post(
           .status(404)
           .json({ error: "Trip not found", code: "TRIP_NOT_FOUND" });
       }
-      if (!trip.teacherContactId) {
+      const teacherContactId = trip.teacherContactId
+        || trip.teacherAssignments?.[0]?.teacherContactId;
+      if (!teacherContactId) {
         return res.status(409).json({
           error:
             "Assign a teacher before generating a parent registration link",
@@ -1483,7 +1506,7 @@ router.post(
         link: buildTmcParentRegistrationUrl({
           baseUrl,
           tenantId: req.travelTenant.id,
-          teacherContactId: trip.teacherContactId,
+          teacherContactId,
           tripId: trip.id,
         }),
         linkType: "trip-specific",
@@ -1533,7 +1556,14 @@ router.get(
           portalRole: "TEACHER",
           deletedAt: null,
         },
-        select: { id: true, name: true, email: true, phone: true },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          company: true,
+          createdAt: true,
+        },
       });
       if (!teacher) {
         return res
@@ -1544,7 +1574,10 @@ router.get(
       const trips = await prisma.tmcTrip.findMany({
         where: {
           tenantId: req.travelTenant.id,
-          teacherContactId: teacher.id,
+          OR: [
+            { teacherContactId: teacher.id },
+            { teacherAssignments: { some: { tenantId: req.travelTenant.id, teacherContactId: teacher.id } } },
+          ],
           status: { not: "cancelled" },
         },
         orderBy: [{ departDate: "asc" }, { id: "asc" }],
@@ -1605,7 +1638,6 @@ router.get(
         prisma.tmcParentTrip.findMany({
           where: {
             tenantId: req.travelTenant.id,
-            teacherContactId: teacher.id,
             tripId: { in: tripIds },
           },
           orderBy: { createdAt: "desc" },
@@ -1698,7 +1730,10 @@ async function loadTeacherTrip(req, res) {
     where: {
       id: tripId,
       tenantId: Number(req.portal.tenantId),
-      teacherContactId: Number(req.tmcContact.id),
+      OR: [
+        { teacherContactId: Number(req.tmcContact.id) },
+        { teacherAssignments: { some: { tenantId: Number(req.portal.tenantId), teacherContactId: Number(req.tmcContact.id) } } },
+      ],
     },
     select: {
       id: true,
@@ -1798,7 +1833,10 @@ router.get("/registration-context", async (req, res) => {
       where: {
         id: context.tripId,
         tenantId: context.tenantId,
-        teacherContactId: context.teacherContactId,
+        OR: [
+          { teacherContactId: context.teacherContactId },
+          { teacherAssignments: { some: { tenantId: context.tenantId, teacherContactId: context.teacherContactId } } },
+        ],
       },
       select: { id: true },
     });
@@ -2714,7 +2752,10 @@ router.get(
       const trips = await prisma.tmcTrip.findMany({
         where: {
           tenantId: Number(req.portal.tenantId),
-          teacherContactId: Number(req.tmcContact.id),
+          OR: [
+            { teacherContactId: Number(req.tmcContact.id) },
+            { teacherAssignments: { some: { tenantId: Number(req.portal.tenantId), teacherContactId: Number(req.tmcContact.id) } } },
+          ],
         },
         orderBy: [{ departDate: "asc" }, { id: "asc" }],
         select: {
@@ -2765,7 +2806,10 @@ router.get(
       const trips = await prisma.tmcTrip.findMany({
         where: {
           tenantId,
-          teacherContactId,
+          OR: [
+            { teacherContactId },
+            { teacherAssignments: { some: { tenantId, teacherContactId } } },
+          ],
           status: "completed",
         },
         orderBy: [{ returnDate: "desc" }, { id: "desc" }],
@@ -2931,7 +2975,6 @@ router.get(
           where: {
             tenantId: Number(req.portal.tenantId),
             tripId: trip.id,
-            teacherContactId: Number(req.tmcContact.id),
           },
           orderBy: { createdAt: "desc" },
           select: {
@@ -3443,7 +3486,10 @@ router.get(
         ? await prisma.tmcTrip.findMany({
             where: {
               tenantId: Number(req.portal.tenantId),
-              teacherContactId: { in: teacherIds },
+              OR: [
+                { teacherContactId: { in: teacherIds } },
+                { teacherAssignments: { some: { tenantId: Number(req.portal.tenantId), teacherContactId: { in: teacherIds } } } },
+              ],
               status: { not: "cancelled" },
             },
             orderBy: [{ departDate: "asc" }, { id: "asc" }],

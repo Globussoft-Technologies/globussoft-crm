@@ -62,7 +62,7 @@ import prisma from '../../lib/prisma.js';
 // required — the router does `const { verifyToken } = require(...)` at
 // module-load, so the destructured reference captures whatever
 // `authMw.verifyToken` points at THE MOMENT the route is required.
-// Same pattern as approvals-notifications.test.js + audit-chain.test.js.
+// Same pattern as approvals-notifications.test.js + audit.test.js.
 import { createRequire } from 'node:module';
 const requireCJS = createRequire(import.meta.url);
 const authMw = requireCJS('../../middleware/auth');

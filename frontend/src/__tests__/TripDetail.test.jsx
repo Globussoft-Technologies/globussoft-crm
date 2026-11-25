@@ -226,6 +226,7 @@ function installFetchMock({
       }
       return Promise.resolve(landingPage);
     }
+    if (method === 'POST' && url === '/api/landing-pages/77/publish') return Promise.resolve({ status: 'PUBLISHED' });
     // GET /api/landing-pages/:id (builder surface reached from the trip page)
     if (method === 'GET' && /^\/api\/landing-pages\/\d+$/.test(url)) {
       if (builderLandingPage instanceof Error) return Promise.reject(builderLandingPage);
@@ -343,7 +344,7 @@ describe('<TripDetail /> — load lifecycle', () => {
     renderPage();
     expect(await screen.findByText('Loading…')).toBeInTheDocument();
     resolveTrip(makeTrip());
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
   });
 
   it('GETs /api/travel/trips/:id on mount with the route-param id', async () => {
@@ -354,7 +355,7 @@ describe('<TripDetail /> — load lifecycle', () => {
       );
       expect(call).toBeTruthy();
     });
-    expect(await screen.findByText('TMC-AND-2026-MUMBAI-G7')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 })).toBeInTheDocument();
   });
 
   it('renders "Trip not found." + Back-to-trips link when fetch resolves null', async () => {
@@ -396,7 +397,7 @@ describe('<TripDetail /> — header + status badge', () => {
 
   it('Trips back-link in header points to /travel/trips', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     const backLink = screen.getByRole('link', { name: /Trips/i });
     expect(backLink).toHaveAttribute('href', '/travel/trips');
   });
@@ -405,20 +406,20 @@ describe('<TripDetail /> — header + status badge', () => {
 describe('<TripDetail /> — tab strip', () => {
   it('normalizes the removed microsite URL to Overview', async () => {
     renderPage(101, { search: '?tab=microsite' });
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     expect(screen.getByRole('tab', { name: /Overview/i })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('restores the active tab from the trip URL after refresh', async () => {
     renderPage(101, { search: '?tab=documents' });
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     expect(screen.getByRole('tab', { name: /Documents/i })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('Documents to collect')).toBeInTheDocument();
   });
 
   it('uses preserved report result URL when opened from Reports drill-down', async () => {
     renderPage(101, { backTo: '/travel/trips?status=confirmed&from=reports', backLabel: 'Back to reports results' });
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     expect(screen.getByRole('link', { name: /Back to reports results/i })).toHaveAttribute(
       'href',
       '/travel/trips?status=confirmed&from=reports',
@@ -427,7 +428,7 @@ describe('<TripDetail /> — tab strip', () => {
 
   it('renders all 5 tabs with role="tab" + Overview selected by default', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     const tabs = screen.getAllByRole('tab');
     expect(tabs).toHaveLength(5);
     const labels = tabs.map((t) => t.textContent.trim());
@@ -506,7 +507,7 @@ describe('<TripDetail /> — Overview tab', () => {
 
   it('renders hero band + KPI cards + summary bands wired to the ops-dashboard surface', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     // Hero band shows Destination label + the value + legal entity inline.
     expect(screen.getByText('Destination')).toBeInTheDocument();
     expect(screen.getByText('tmc_nexus')).toBeInTheDocument();
@@ -540,7 +541,7 @@ describe('<TripDetail /> — Overview tab', () => {
       }),
     });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
 
     expect(screen.getByText('Trip family')).toBeInTheDocument();
     expect(screen.getByText(/Teacher assignments, landing pages, parent links/i)).toBeInTheDocument();
@@ -552,7 +553,7 @@ describe('<TripDetail /> — Overview tab', () => {
 describe('<TripDetail /> — Participants tab', () => {
   it('switching to Participants shows the registered roster and no manual add CTA', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     expect(await screen.findByTestId('participants-list-count')).toHaveTextContent('1 participant');
     expect(screen.queryByTestId('participants-tab-count')).not.toBeInTheDocument();
@@ -567,7 +568,7 @@ describe('<TripDetail /> — Participants tab', () => {
   it('empty trip renders the empty roster copy and a zero participant list badge', async () => {
     installFetchMock({ trip: makeTrip({ participants: [] }) });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     // Click Participants tab — scope via getAllByRole + label filter to
     // avoid the regex ambiguity that bit the prior shape (the count caption
     // "0 participants" can flap the role-name lookup in some renders).
@@ -587,7 +588,7 @@ describe('<TripDetail /> — Participants tab', () => {
       }),
     });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByText('Anaya Sharma');
 
@@ -624,7 +625,7 @@ describe('<TripDetail /> — Participants tab', () => {
       }),
     });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     expect(await screen.findByTestId('registered-participants-list')).toBeInTheDocument();
     expect(screen.queryByTestId('view-participant-901-1')).not.toBeInTheDocument();
@@ -633,7 +634,7 @@ describe('<TripDetail /> — Participants tab', () => {
 
   it('does not expose manual participant creation', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByTestId('registered-participants-list');
     expect(screen.queryByRole('button', { name: /Add participant/i })).not.toBeInTheDocument();
@@ -642,7 +643,7 @@ describe('<TripDetail /> — Participants tab', () => {
 
   it('requires the import flow for adding participants', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     fireEvent.click(await screen.findByRole('button', { name: /Import participants/i }));
     expect(await screen.findByTestId('participant-bulk-import-modal')).toBeInTheDocument();
@@ -656,7 +657,7 @@ describe('<TripDetail /> — Participants tab', () => {
       json: () => Promise.resolve({ inserted: 1, updated: 1, skipped: 0, errors: [], total: 2 }),
     });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByText('Anaya Sharma');
 
@@ -693,7 +694,7 @@ describe('<TripDetail /> — Participants tab', () => {
     });
 
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByText('Anaya Sharma');
     fireEvent.click(screen.getByRole('button', { name: /Import participants/i }));
@@ -721,7 +722,7 @@ describe('<TripDetail /> — Participants tab', () => {
 describe('<TripDetail /> — Rooming tab', () => {
   it('switching to Rooming fires GET /api/travel/trips/:id/rooming + renders the read-only count caption', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fetchApiMock.mockClear();
     installFetchMock();
     fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
@@ -770,7 +771,7 @@ describe('<TripDetail /> — Rooming tab', () => {
     };
     installFetchMock({ trip: tripFixture, rooming: roomingWithOrphan });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
     // Room tile capacity readout must reflect the SURVIVING participant
     // only — not the orphaned 999. Pre-fix this rendered "2 / 2 assigned".
@@ -807,7 +808,7 @@ describe('<TripDetail /> — Rooming tab', () => {
 describe('<TripDetail /> — Participants remove flow', () => {
   it('does not expose participant deletion from the simplified roster', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByTestId('registered-participants-list');
     expect(screen.queryByRole('button', { name: /Remove/i })).not.toBeInTheDocument();
@@ -816,7 +817,7 @@ describe('<TripDetail /> — Participants remove flow', () => {
   it('does not issue participant DELETE requests from the simplified roster', async () => {
     notifyConfirm.mockResolvedValue(false);
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByTestId('registered-participants-list');
     expect(fetchApiMock.mock.calls.filter(([, o]) => o?.method === 'DELETE')).toHaveLength(0);
@@ -826,7 +827,7 @@ describe('<TripDetail /> — Participants remove flow', () => {
 describe('<TripDetail /> — Participants add error + cancel', () => {
   it('does not expose the legacy participant POST flow', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByTestId('registered-participants-list');
     expect(screen.queryByRole('button', { name: /Add participant/i })).not.toBeInTheDocument();
@@ -835,7 +836,7 @@ describe('<TripDetail /> — Participants add error + cancel', () => {
 
   it('keeps the import modal closed until the admin requests it', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByTestId('registered-participants-list');
     expect(screen.queryByTestId('participant-bulk-import-modal')).not.toBeInTheDocument();
@@ -846,7 +847,7 @@ describe('<TripDetail /> — Header date edge cases', () => {
   it('renders "—" placeholder when returnDate is null', async () => {
     installFetchMock({ trip: makeTrip({ returnDate: null }) });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     // Header sub-row reads "{depart} → {return} · {destination}". When
     // returnDate is null the fmt() helper renders "—".
     // The em-dash is the only place "—" appears on the un-published trip
@@ -856,7 +857,7 @@ describe('<TripDetail /> — Header date edge cases', () => {
 
   it('Overview hero band renders locale-formatted price / student inline', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     // Price now renders in the hero band as "<IndianRupee icon> {value} /
     // student" — the ₹ glyph is an SVG icon, so assert the locale-formatted
     // numeric value + "/ student" suffix appears (the matcher reads the
@@ -869,7 +870,7 @@ describe('<TripDetail /> — Header date edge cases', () => {
 describe('<TripDetail /> - Rooming admin viewer', () => {
   it('shows rooming counts but hides admin allocation controls when no rooms exist', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
     expect(await screen.findByText(/No rooming assignments yet/i)).toBeInTheDocument();
     expect(screen.getByText(/0 rooms/)).toBeInTheDocument();
@@ -895,7 +896,7 @@ describe('<TripDetail /> - Rooming admin viewer', () => {
       },
     });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
     expect(await screen.findByText('Room 101')).toBeInTheDocument();
     expect(screen.getByText('Anaya Sharma')).toBeInTheDocument();
@@ -907,7 +908,7 @@ describe('<TripDetail /> - Rooming admin viewer', () => {
 describe('<TripDetail /> — Payment plan tab', () => {
   it('switching to Payment plan shows the empty-state editor copy', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
     // Heading reads "Create payment plan" when there's no existing plan.
     expect(
@@ -921,7 +922,7 @@ describe('<TripDetail /> — Payment plan tab', () => {
 
   it('clicking "Add instalment" prepends a row + total starts at ₹0', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
     await screen.findByRole('heading', { name: /Create payment plan/i });
     fireEvent.click(screen.getByRole('button', { name: /Add instalment/i }));
@@ -941,7 +942,7 @@ describe('<TripDetail /> — Payment plan tab', () => {
 
   it('keeps an unsaved instalment when a background payment refresh arrives', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
     await screen.findByRole('heading', { name: /Create payment plan/i });
     fireEvent.click(screen.getByRole('button', { name: /Add instalment/i }));
@@ -964,7 +965,7 @@ describe('<TripDetail /> — Payment plan tab', () => {
 
   it('Save with no dueDate surfaces notify.error + no PUT fires', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
     await screen.findByRole('heading', { name: /Create payment plan/i });
     fireEvent.click(screen.getByRole('button', { name: /Add instalment/i }));
@@ -985,7 +986,7 @@ describe('<TripDetail /> — Payment plan tab', () => {
 
   it('sets each date input minimum to today and the previous instalment date', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
     await screen.findByRole('heading', { name: /Create payment plan/i });
     fireEvent.click(screen.getByRole('button', { name: /Add instalment/i }));
@@ -1002,7 +1003,7 @@ describe('<TripDetail /> — Payment plan tab', () => {
 
   it('rejects a past due date before sending the payment plan', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
     await screen.findByRole('heading', { name: /Create payment plan/i });
     fireEvent.click(screen.getByRole('button', { name: /Add instalment/i }));
@@ -1026,7 +1027,7 @@ describe('<TripDetail /> — Payment plan tab', () => {
 
   it('rejects a later instalment date before the previous date', async () => {
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
     await screen.findByRole('heading', { name: /Create payment plan/i });
     fireEvent.click(screen.getByRole('button', { name: /Add instalment/i }));
@@ -1118,7 +1119,7 @@ describe('<TripDetail /> — Payment plan with existing plan', () => {
   it('load with existing plan hydrates editor with instalments + Delete-plan button', async () => {
     installPaymentMock();
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
     // Heading flips to "Edit payment plan" when plan exists.
     expect(
@@ -1148,7 +1149,7 @@ describe('<TripDetail /> — Payment plan with existing plan', () => {
   it('empty editor Save surfaces "Add at least one instalment" + no PUT fires', async () => {
     // No plan → editInstalments starts as []. Save without adding rows.
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
     await screen.findByRole('heading', { name: /Create payment plan/i });
     fetchApiMock.mockClear();
@@ -1167,7 +1168,7 @@ describe('<TripDetail /> — Payment plan with existing plan', () => {
   it('removes the ambiguous plan-level payment-link column', async () => {
     installPaymentMock();
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
     await screen.findByRole('heading', { name: /Edit payment plan/i });
 
@@ -1197,7 +1198,7 @@ describe('<TripDetail /> — Payment plan with existing plan', () => {
     ];
     installPaymentMock({ instalments: perPartFixture });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Payment plan/i }));
     await screen.findByRole('heading', { name: /Per-participant instalments/i });
     // Participant accordion header shows "Anaya Sharma" (fixture participant 901).
@@ -1217,7 +1218,7 @@ describe('<TripDetail /> — StatusBadge fallback', () => {
   it('unknown status renders the literal text using subtle fallback colours (no crash)', async () => {
     installFetchMock({ trip: makeTrip({ status: 'pending-approval' }) });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     // The badge falls back to {bg:'var(--subtle-bg)', color:'var(--text-secondary)'}
     // when status isn't in the known set; literal text still renders.
     expect(screen.getByText('pending-approval')).toBeInTheDocument();
@@ -1228,7 +1229,7 @@ describe('<TripDetail /> — dynamic document requirements', () => {
   async function openDocumentsTab(trip = makeTrip(), pendingRegs = []) {
     installFetchMock({ trip, pendingRegs });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Documents/i }));
     await screen.findByRole('heading', { name: 'Documents to collect' });
   }
@@ -1236,7 +1237,7 @@ describe('<TripDetail /> — dynamic document requirements', () => {
   async function openParticipantsTab(trip = makeTrip()) {
     installFetchMock({ trip });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByRole('heading', { name: 'Participant status' });
   }
@@ -1521,7 +1522,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
   it('Participants tab shows the registered roster without fetching pending registrations', async () => {
     installFetchMock({ pendingRegs: [makePendingReg()] });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     expect(await screen.findByTestId('registered-participants-list')).toBeInTheDocument();
     expect(screen.getByText('Anaya Sharma')).toBeInTheDocument();
@@ -1538,7 +1539,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
       ],
     });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByTestId('registered-participants-list');
     expect(screen.queryByTestId('pending-regs-count')).not.toBeInTheDocument();
@@ -1569,7 +1570,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
       }),
     });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     expect(await screen.findByText('Complete Participant')).toBeInTheDocument();
     expect(screen.getByText('Pending Participant')).toBeInTheDocument();
@@ -1582,7 +1583,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
       pendingRegs: [makePendingReg({ id: 9003, status: 'DRAFT', studentName: 'Sara' })],
     });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByTestId('registered-participants-list');
     expect(screen.queryByText('Sara')).not.toBeInTheDocument();
@@ -1597,7 +1598,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
       ],
     });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     expect(screen.getByText('AlreadyConverted')).toBeInTheDocument();
     expect(screen.queryByTestId('pending-reg-row-9002')).not.toBeInTheDocument();
@@ -1617,7 +1618,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
       ],
     });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByText('Ritu');
     expect(screen.queryByTestId('pending-reg-row-14')).not.toBeInTheDocument();
@@ -1634,7 +1635,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
       ],
     });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByText('Jas');
     expect(screen.getAllByText('Jas')).toHaveLength(1);
@@ -1648,7 +1649,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
       registrationDecide: { approved: true, participant: { id: 555 }, registration: { id: 9001, status: 'CONVERTED' } },
     });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     const approveBtn = await screen.findByTestId('approve-registration-9001');
     fireEvent.click(approveBtn);
@@ -1673,7 +1674,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
       registrationDecide: { rejected: true, registration: { id: 9001, status: 'REJECTED' } },
     });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     const rejectBtn = await screen.findByTestId('reject-registration-9001');
     fireEvent.click(rejectBtn);
@@ -1705,7 +1706,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
 
     installFetchMock({ pendingRegs: [makePendingReg()] });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     const rejectBtn = await screen.findByTestId('reject-registration-9001');
     fireEvent.click(rejectBtn);
@@ -1719,7 +1720,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
     notifyPrompt.mockResolvedValueOnce('   ');
     installFetchMock({ pendingRegs: [makePendingReg()] });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     fireEvent.click(await screen.findByTestId('reject-registration-9001'));
     await waitFor(() => {
@@ -1731,7 +1732,7 @@ describe('<TripDetail /> — Phase 8 unified Participants list', () => {
   it('shows the registered list without a pending registrations section', async () => {
     installFetchMock({ pendingRegs: [] });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Participants/i }));
     await screen.findByText('Anaya Sharma'); // existing participant still shows
     expect(screen.getByTestId('registered-participants-list')).toBeInTheDocument();
@@ -1744,7 +1745,7 @@ describe('<TripDetail /> — Phase 8 Public Experience: LandingPageCard', () => 
   it('renders "No landing page linked yet" empty state with a link to the Landing Pages module', async () => {
     installFetchMock({ landingPage: { status: 404, body: { code: 'NOT_LINKED' } } });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     expect(await screen.findByTestId('landing-page-card')).toBeInTheDocument();
     expect(screen.getByText(/No landing page created yet/i)).toBeInTheDocument();
     expect(screen.getByText(/participant registration/i)).toBeInTheDocument();
@@ -1763,7 +1764,7 @@ describe('<TripDetail /> — Phase 8 Public Experience: LandingPageCard', () => 
       },
     });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     expect(await screen.findByText('Bali Trip — bali2026')).toBeInTheDocument();
     const manageLink = screen.getByTestId('manage-landing-page-link');
     expect(manageLink.getAttribute('href')).toBe('/landing-pages/builder/77');
@@ -1784,6 +1785,7 @@ describe('<TripDetail /> — Phase 8 Public Experience: LandingPageCard', () => 
       },
       builderLandingPage: {
         id: 77,
+        tripId: 101,
         slug: 'trip-bali2026',
         status: 'DRAFT',
         title: 'Bali Trip — bali2026',
@@ -1791,9 +1793,12 @@ describe('<TripDetail /> — Phase 8 Public Experience: LandingPageCard', () => 
       },
     });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(await screen.findByTestId('manage-landing-page-link'));
 
+    expect(await screen.findByRole('button', { name: 'Step 4: Landing page, pending' })).toHaveAttribute('aria-current', 'step');
+    fireEvent.click(screen.getByRole('button', { name: 'Publish', exact: true }));
+    expect(await screen.findByRole('button', { name: 'Step 4: Landing page, complete' })).toBeVisible();
     expect(await screen.findByTitle('Back to TMC Trips')).toHaveAttribute('href', '/travel/trips/101?tab=overview');
     expect(screen.getByRole('link', { name: 'TMC Trips' })).toHaveAttribute('href', '/travel/trips/101?tab=overview');
     expect(screen.getByText('Overview')).toBeInTheDocument();
@@ -1808,10 +1813,23 @@ describe('<TripDetail /> — Phase 8 Public Experience: LandingPageCard', () => 
       },
     });
     renderPage();
-    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     // Landing page card present
     expect(await screen.findByTestId('landing-page-card')).toBeInTheDocument();
     expect(screen.queryByText(/Create a public registration page/i)).not.toBeInTheDocument();
   });
 });
 
+
+it('shows saved steps independently and opens the selected tab from either navigator', async () => {
+  installFetchMock({ trip: makeTrip({ teacherContactId: 45 }), landingPage: { id: 90, slug: 'school-trip', status: 'PUBLISHED' } });
+  renderPage();
+  expect(await screen.findByText('4 of 6 complete')).toBeInTheDocument();
+  expect(screen.getAllByRole('button', { name: 'Step 5: Assign teacher, complete' })).toHaveLength(2);
+  const docs = screen.getAllByRole('button', { name: 'Step 3: Documents, complete' });
+  fireEvent.click(docs[1]);
+  expect(screen.getByRole('tab', { name: 'Documents' })).toHaveAttribute('aria-selected', 'true');
+  fireEvent.click(screen.getAllByRole('button', { name: 'Step 2: Payment plan, pending' })[0]);
+  expect(screen.getByRole('tab', { name: 'Payment plan' })).toHaveAttribute('aria-selected', 'true');
+  expect(screen.getByText('4 of 6 complete')).toBeInTheDocument();
+});

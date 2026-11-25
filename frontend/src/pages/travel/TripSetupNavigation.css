@@ -1,0 +1,121 @@
+﻿.ts-detail {padding-bottom:180px!important;container-type:inline-size}
+.ts-trip-header {display:flex;align-items:center;justify-content:space-between;gap:20px}
+.ts-trip-header>div:first-child {min-width:0;overflow-wrap:anywhere}
+.ts-ui {font-family:Outfit,sans-serif;color:#14142b;box-sizing:border-box;line-height:1.4}
+.ts-ui button {font:inherit;color:inherit;cursor:pointer;background:transparent;border:0;border-radius:12px}
+.ts-ui button:disabled {opacity:.45;cursor:default}
+.ts-ui button:focus-visible {outline:2px solid #4b57d9;outline-offset:1px}
+.ts-header {background:transparent;color:var(--text-primary,#14142b);padding:4px 0;flex:1;max-width:600px;min-width:0}
+.ts-header .ts-summary small {color:var(--text-secondary,#5b5b73)}
+/* The Travel shell sizes ordinary buttons for one line. Setup steps need
+   room for both the marker and its label, including when the label wraps. */
+@layer trip-setup-header {
+  .ts-header .ts-dots button {
+    height: auto !important;
+    max-height: none !important;
+    padding: 5px 2px !important;
+  }
+}
+.ts-header .ts-dot {flex:0 0 30px;aspect-ratio:1}
+.ts-header .ts-dots button:not(:last-child)::after {top:20px;transform:translateY(-50%)}
+.ts-summary,.ts-float,.ts-controls,.ts-trigger,.ts-menu button,.ts-summary>span {display:flex;align-items:center}
+.ts-summary {justify-content:space-between;font-size:13px;margin-bottom:6px}
+.ts-ui small {display:block;color:#5b5b73;font-size:12px}
+.ts-summary small {display:inline;font:500 13px Outfit,sans-serif}
+.ts-summary>span,.ts-float>b {gap:6px;font-variant-numeric:tabular-nums}
+.ts-summary i,.ts-strip {display:block;width:96px;height:6px;border-radius:8px;background:#e9e9f2;overflow:hidden}
+.ts-summary i b,.ts-strip b {display:block;height:100%;background:#12b76a;transition:width .25s}
+.ts-dots {display:grid;grid-template-columns:repeat(6,minmax(0,1fr));isolation:isolate}
+.ts-ui .ts-dots button {position:relative;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:4px;font-size:12px!important;font-weight:600;padding:5px 1px!important;white-space:normal!important;height:auto!important;max-height:none!important;min-height:48px;line-height:1.25}
+.ts-dots button:is(:hover,[aria-current=step]) {background:#f1f2ff}
+.ts-header .ts-dots button[aria-current=step] {background:color-mix(in srgb,#707cf5 13%,transparent)}
+.ts-header .ts-dots button:hover:not([aria-current=step]) {background:transparent}
+@media (hover:hover) {
+  .ts-header .ts-dots button:hover:not([aria-current=step]) > span:last-child {
+    text-decoration:underline;
+    text-underline-offset:3px;
+  }
+}
+.ts-dots button:not(:last-child)::after {content:"";position:absolute;width:100%;height:3px;background:#e4e4ee;left:50%;top:19px;pointer-events:none}
+.ts-dots button[data-done=true]::after,.ts-segments i[data-done=true] {background:#12b76a}
+.ts-dot {position:relative;z-index:1;display:grid;place-items:center;box-sizing:border-box;width:30px;height:30px;border-radius:50%;background:#fff4ce;color:#785000;border:2px solid #e8ba55;font-weight:700}
+[data-done=true]>.ts-dot {background:#12b76a;color:white;border-color:#12b76a}
+[data-current=true]>.ts-dot {box-shadow:0 0 0 4px var(--ts-halo,#e3e6ff);animation:ts-halo 2s ease-in-out infinite}
+@keyframes ts-halo {50%{box-shadow:0 0 0 6px var(--ts-halo,#e3e6ff)}}
+.ts-float {position:fixed;z-index:45;left:50%;bottom:max(20px,env(safe-area-inset-bottom));transform:translateX(-50%);width:min(940px,calc(100% - 24px));gap:10px;padding:8px 14px 12px 8px;border-radius:22px;border:1px solid #e4e4ee;background:white;box-shadow:0 12px 40px #14142b29,0 2px 6px #14142b18}
+.ts-switch {position:relative;flex:1;min-width:0;max-width:290px}
+.ts-float .ts-trigger,.ts-menu button {width:100%;padding:8px;gap:10px;text-align:left}
+.ts-float .ts-trigger {background:#f3f3f9}
+.ts-trigger>span,.ts-menu button>span {min-width:0;flex:1}
+.ts-trigger strong,.ts-menu strong {display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+.ts-initial {border-radius:8px;background:#e3e6ff;color:#3644bb;padding:6px;min-width:32px;text-align:center}
+.ts-controls {border-inline:1px solid #e4e4ee;padding-inline:5px}
+.ts-controls>button {width:44px;height:48px;display:grid;place-items:center}
+.ts-controls .compact button {width:44px;justify-content:center}
+.compact .ts-dot {width:28px;height:28px}
+.compact button:not(:last-child)::after {top:50%;height:2px}
+.ts-where {flex:1}.ts-where strong {font-size:14px}.ts-where small {font-size:11px}
+.ts-float .ts-close {width:44px;height:44px;display:grid;place-items:center;flex-shrink:0;color:#b42318;background:#fee4e2}
+.ts-float .ts-close:hover {background:#b42318;color:white}
+body:not(:has(.ts-float)) .ts-detail {padding-bottom:24px!important}
+body:not(:has(.ts-float)) .landing-builder {--tmc-builder-nav-space:0px}
+.ts-strip {position:absolute;bottom:4px;left:14px;right:14px;width:auto;height:3px}
+.ts-menu {position:absolute;bottom:calc(100% + 14px);left:0;width:min(430px,calc(100vw - 44px));background:white;border:1px solid #e4e4ee;border-radius:16px;padding:8px;max-height:min(70dvh,calc(100dvh - 180px));overflow:auto;box-shadow:0 12px 40px #14142b29}
+.ts-menu>small {padding:8px;font-weight:600}
+.ts-menu-search {position:sticky;top:-8px;z-index:1;background:white;padding:8px}
+.ts-menu-search small {font-weight:600;margin-bottom:6px}
+.ts-menu-search input {box-sizing:border-box;width:100%;padding:9px 12px;border:1px solid #d0d0dd;border-radius:9px;background:white;color:#14142b;font:inherit}
+.ts-menu-search input:focus-visible {outline:2px solid #4b57d9;outline-offset:1px}
+.ts-menu button {min-height:60px}
+.ts-menu button:is(:hover,[data-selected=true]) {background:#eef0ff}
+.ts-menu .ts-new {border-top:1px solid #e4e4ee;color:#4b57d9;font-weight:600}
+.ts-segments {display:flex;gap:3px;margin-top:4px}.ts-segments i {width:16px;height:3px;border-radius:3px;background:#e4e4ee}
+@container (max-width:800px){.ts-trip-header{flex-wrap:wrap}.ts-header{order:3;flex-basis:100%;max-width:none}}
+@media(max-width:760px){.ts-float{flex-wrap:wrap;gap:4px}.ts-switch{flex:1 0 100%;max-width:none}.ts-controls{border:0;padding:0}.ts-summary i{width:48px}.ts-detail{padding-bottom:210px!important}}
+@media(max-width:500px){.ts-controls{width:100%}.ts-controls>button,.ts-controls .compact button{width:100%;min-width:0}.ts-controls>button{flex:1}.ts-controls .compact{flex:6}.ts-where{display:flex;align-items:center;gap:8px;padding-left:8px}.ts-header{padding:8px 2px}.ts-header .ts-dots button{overflow-wrap:anywhere}.ts-summary{padding-inline:4px}}
+@media(prefers-reduced-motion:reduce){.ts-ui *{animation:none!important;transition:none!important}}
+@media (max-width:760px) { .landing-builder { --tmc-builder-nav-space: 180px; } }
+
+
+[data-theme="dark"] .ts-ui {
+  --ts-halo: #393858;
+  --ts-track: #454655;
+  --ts-selection: #292b46;
+}
+[data-theme="dark"] .ts-float,
+[data-theme="dark"] .ts-menu {
+  color-scheme: dark;
+  background: var(--surface-color, #191a20);
+  color: var(--text-primary, #f4f4fa);
+  border-color: var(--border-color, #363741);
+  box-shadow: 0 12px 40px #0006, 0 2px 6px #0004;
+}
+[data-theme="dark"] .ts-menu,
+[data-theme="dark"] .ts-menu-search { background: #191a20; }
+[data-theme="dark"] .ts-float small,
+[data-theme="dark"] .ts-menu-search input::placeholder { color: var(--text-secondary, #c0c0cd); }
+[data-theme="dark"] .ts-float .ts-trigger,
+[data-theme="dark"] .ts-menu-search input {
+  background: var(--input-bg, #22232c);
+  color: var(--text-primary, #f4f4fa);
+  border-color: var(--border-color, #363741);
+}
+[data-theme="dark"] .ts-initial { color: #c4c9ff; background: var(--ts-selection); }
+[data-theme="dark"] .ts-float :is(button:hover:enabled, button[aria-current=step], button[data-selected=true]) {
+  background: var(--ts-selection);
+}
+[data-theme="dark"] .ts-float :is(button, input):focus-visible { outline-color: white; }
+[data-theme="dark"] .ts-float .ts-close {background:#542127;color:#ffb4ab}
+[data-theme="dark"] .ts-float .ts-close:hover:enabled {background:#b42318;color:white}
+[data-theme="dark"] .ts-controls,
+[data-theme="dark"] .ts-menu .ts-new { border-color: var(--border-color, #363741); }
+[data-theme="dark"] .ts-menu .ts-new { color: #b5beff; }
+[data-theme="dark"] .ts-ui button[data-done=false] > .ts-dot {
+  background: #372d1b;
+  border-color: #c59a4a;
+  color: #ffdc88;
+}
+[data-theme="dark"] .ts-summary i,
+[data-theme="dark"] .ts-strip,
+[data-theme="dark"] .ts-segments i[data-done=false],
+[data-theme="dark"] .ts-dots button[data-done=false]::after { background: var(--ts-track); }

@@ -22,6 +22,14 @@
   min-height: 44px; padding: 6px 13px; border: 1px solid var(--border-color); border-radius: 99px;
   background: var(--dq-surface);
 }
+.dq-settings button, .dq-filters button {
+  font-size: .78rem;
+  line-height: 1.35;
+}
+@media (pointer: fine) {
+  .dq-settings button, .dq-filters button { min-height: 32px; }
+  .dq-filters button { padding: 5px 10px; }
+}
 .dq-filters button[aria-pressed=true], .dq-filters button:hover {
   border-color: var(--dq-primary); background: color-mix(in srgb, var(--dq-primary) 9%, var(--dq-surface));
 }

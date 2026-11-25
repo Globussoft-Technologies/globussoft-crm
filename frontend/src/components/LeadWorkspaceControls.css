@@ -263,3 +263,90 @@
 .rule-value-options [role=option] { cursor:pointer; }
 .rule-value-options [role=option]:hover,.rule-value-options [data-active=true] { background:color-mix(in srgb,var(--primary-color,var(--accent-color)) 13%,var(--bg-color)); }
 .rule-value-options [aria-selected=true] { font-weight:600; }
+
+/* Keep both retry switches centered above their expandable settings. */
+.lead-automation-dialog [data-automation-section="retries"] > label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+  margin-block: 4px 8px;
+}
+.lead-automation-dialog [data-automation-section="retries"] > label > input[type=checkbox] {
+  box-sizing: border-box;
+  flex: 0 0 34px;
+  min-height: 20px;
+  padding: 0;
+  margin-block: 0;
+  background-color: var(--text-secondary);
+  transition: background-color .15s ease;
+}
+.lead-automation-dialog [data-automation-section="retries"] > label > input[type=checkbox]:checked {
+  background-color: var(--primary-color, var(--accent-color));
+}
+.lead-automation-dialog [data-automation-section="retries"] > label > input[type=checkbox]:focus-visible {
+  outline: 2px solid var(--primary-color, var(--accent-color));
+  outline-offset: 3px;
+}
+.lead-automation-dialog [data-automation-section="retries"] > label > input[type=checkbox]:enabled:hover {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text-secondary) 20%, transparent);
+}
+.lead-automation-dialog [data-automation-section="retries"] > label > input[type=checkbox]:disabled {
+  opacity: .6;
+  cursor: not-allowed;
+}
+
+@media (max-width: 520px) {
+  .lead-automation-dialog .lead-automation-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .lead-automation-dialog .lead-automation-nav {
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    padding: 6px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .lead-automation-dialog .lead-automation-nav button {
+    flex: 0 0 auto;
+    width: auto;
+    margin: 0;
+    padding: 10px 24px 10px 10px;
+  }
+
+  .lead-automation-dialog .lead-automation-nav-dot {
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
+  .lead-automation-dialog .lead-automation-nav small {
+    display: none;
+  }
+
+  .lead-automation-dialog .lead-automation-content {
+    min-width: 0;
+    padding: 10px;
+    overflow: auto;
+  }
+
+  .lead-automation-dialog [data-automation-section="retries"] div:has(> .automation-stepper) {
+    flex-wrap: wrap;
+  }
+
+  .lead-automation-dialog .call-settings-schedule :is(input, select) {
+    box-sizing: border-box;
+    min-width: 0;
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 360px) {
+  .lead-automation-dialog .call-settings-segmented,
+  .lead-automation-dialog .call-settings-schedule:has(input[type="time"]) > div:has(input[type="time"]) {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}

@@ -1681,8 +1681,8 @@ function matchesVertical(pageVertical, vertical) {
 /**
  * Return the subset of catalog entries whose requiredPermissions are all
  * satisfied by the given Set of "module.action" permission strings. A
- * page with empty requiredPermissions always passes (so /home always
- * appears as a final-fallback target).
+ * page with empty requiredPermissions always passes. Vertical-specific
+ * permission overrides may still gate a shared page such as Generic /home.
  *
  * Multi-permission pages: an entry with multiple {module, action} items
  * requires the user to have ALL of them (AND semantics via .every()).

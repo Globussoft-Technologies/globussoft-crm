@@ -192,9 +192,11 @@ describe('canAccessPath', () => {
     'prescriptions.read',
   ]);
 
-  it('returns true for /home regardless of permissions', () => {
+  it('keeps legacy /home fallback while enforcing Generic home.read', () => {
     expect(canAccessPath('/home', new Set())).toBe(true);
     expect(canAccessPath('/home', docPerms)).toBe(true);
+    expect(canAccessPath('/home', new Set(), { vertical: 'generic' })).toBe(false);
+    expect(canAccessPath('/home', new Set(['home.read']), { vertical: 'generic' })).toBe(true);
   });
 
   it('returns true when the user has all required perms', () => {

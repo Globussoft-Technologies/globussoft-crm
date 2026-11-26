@@ -56,7 +56,12 @@ function canAccess(feature, user, permissionState) {
     // with an effective permission are tourable.
     if (!pageAccess) return false;
     if (feature.path === "/tasks") return true;
-    if (pageAccess && !canUseGenericSidebarPage(pageAccess, {
+    // `sidebarHidden` controls navigation/search visibility, not whether an
+    // authorized user may use a tour on a directly-routable page. Contacts is
+    // intentionally hidden from the generic sidebar, for example, while its
+    // `/contacts` route and product tour remain available.
+    const tourPageAccess = { ...pageAccess, sidebarHidden: false };
+    if (!canUseGenericSidebarPage(tourPageAccess, {
       isAdmin,
       isManager,
       permissionsReady: permissionState.isReady,

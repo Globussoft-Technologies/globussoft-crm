@@ -632,7 +632,7 @@ const Sidebar = ({
     : sectionLabel;
 
   // #631: defensive active-state. Some users reported /deal-insights,
-  // /document-templates, /reports rendering without the active highlight
+  // /reports rendering without the active highlight
   // even though NavLink's isActive should catch them. We OR the NavLink
   // signal with an explicit segment-boundary startsWith check on the
   // current pathname so any future NavLink behavior shift (e.g. someone

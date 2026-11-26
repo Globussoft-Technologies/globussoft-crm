@@ -4,12 +4,11 @@
  * This spec pins the contract that these nav links render as active on the
  * matching routes:
  * - /deal-insights
- * - /document-templates
  * - /reports
  * - /reports/agent
  *
- * It also asserts that unrelated and sibling-prefix routes do not light up
- * the wrong link.
+ * It also asserts that intentionally hidden navigation remains absent and
+ * that unrelated and sibling-prefix routes do not light up the wrong link.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
@@ -77,12 +76,10 @@ describe('Sidebar active-state - #631', () => {
     expect(link.className).toMatch(/\bactive\b/);
   });
 
-  it('marks Doc Templates nav link as active when on /document-templates', async () => {
+  it('keeps Doc Templates hidden when visiting /document-templates directly', async () => {
     renderSidebarAt('/document-templates');
     await waitFor(() => expect(fetchApi).toHaveBeenCalled());
-    const link = await findLinkByLabel('Doc Templates');
-    expect(link).toBeTruthy();
-    expect(link.className).toMatch(/\bactive\b/);
+    expect(screen.queryByText('Doc Templates')).not.toBeInTheDocument();
   });
 
   it('marks Reports nav link as active when on /reports', async () => {

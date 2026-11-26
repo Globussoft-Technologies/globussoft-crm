@@ -39,7 +39,8 @@
     },
     {
       "pattern": "index-*.js",
-      "maxKB": 350,
+      "maxKB": 355,
+      "//latest-notification-automation-bump": "350 -> 355 KB: commit 91407420d expands the always-loaded notification preferences, notification bell, and Omnibar shell. The production build measures 350.2 KB; retain reviewable headroom without changing route-level splitting.",
       "//pr-global-search-entry-bump": "325 -> 350 KB: expanded Generic CRM Omnibar search adds permission-aware result mappings for the visible sidebar catalogue. The Node 24 production build measures 334.5 KB; no runtime dependency was added, and the 350 KB cap retains 15.5 KB headroom.",
       "//pr1557-entry-bump": "315 → 325 KB: PR #1557 adds the always-mounted page-access guard, permission-catalog caching/invalidation, and permission-aware navigation. Run 38412233558 compiled successfully at 318.7 KB. No runtime dependency was added; retain about 6 KB of entry headroom.",
       "//2026-10-05-pickup-plot-pages": "The two admin-only lazy routes add only route declarations to the main shell. No dependency was added.",

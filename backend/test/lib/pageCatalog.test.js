@@ -581,7 +581,7 @@ describe('Vertical isolation — getCatalogForVertical', () => {
       label: 'Email Automation',
       category: 'Travel Marketing',
       vertical: 'travel',
-      requiredPermissions: [{ module: 'marketing', action: 'read' }],
+      requiredPermissions: [{ module: 'email_automation', action: 'read' }],
     });
     expect(getCatalogForVertical('generic').find((p) => p.path === '/travel/email-automation')).toBeUndefined();
     expect(getCatalogForVertical('wellness').find((p) => p.path === '/travel/email-automation')).toBeUndefined();

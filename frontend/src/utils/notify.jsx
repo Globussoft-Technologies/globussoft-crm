@@ -95,6 +95,7 @@ export function NotifyProvider({ children }) {
       const cfg = typeof input === 'string'
         ? { message: input }
         : (input || {});
+      if (cfg.skipRender) return Promise.resolve(cfg.confirmValue ?? true);
       return openModal({
         kind: 'confirm',
         title: cfg.title || 'Confirm',

@@ -8,7 +8,11 @@ import { describe, expect, test, vi } from "vitest";
 import { createRequire } from "node:module";
 const requireCJS = createRequire(import.meta.url);
 
-vi.mock("../../lib/emailSender", () => ({ sendEmail: vi.fn().mockResolvedValue({ sent: true }) }));
+const mockedSendEmail = vi.hoisted(() => vi.fn().mockResolvedValue({ sent: true }));
+vi.mock("../../lib/emailSender", () => ({
+  sendEmail: mockedSendEmail,
+  default: { sendEmail: mockedSendEmail },
+}));
 
 vi.mock("../../lib/prisma", () => ({
   tenant: { findUnique: vi.fn() },
@@ -22,7 +26,6 @@ vi.mock("../../lib/prisma", () => ({
 }));
 const prisma = requireCJS("../../lib/prisma");
 const automation = requireCJS("../../lib/travelEmailAutomation");
-const emailSender = requireCJS("../../lib/emailSender");
 
 beforeEach(() => {
   prisma.tenant.findUnique = vi.fn();
@@ -35,7 +38,7 @@ beforeEach(() => {
   prisma.travelEmailEnrollment.create = vi.fn();
   prisma.travelEmailEnrollment.findMany = vi.fn().mockResolvedValue([]);
   prisma.travelEmailDeliveryLog.create = vi.fn();
-  emailSender.sendEmail.mockReset().mockResolvedValue({ sent: true });
+  mockedSendEmail.mockReset().mockResolvedValue({ sent: true });
 });
 
 describe("Travel email automation", () => {

@@ -182,9 +182,9 @@ async function notify({ userId, tenantId, title, message, type, priority, link, 
   // user has enabled either optional channel, fan that same notification out
   // through it as well. Keep explicit non-in-app channel lists unchanged.
   const wantsBrowserPush = channelEnabled("push")
-    && (requestedChannels.includes("db") || requestedChannels.includes("socket"));
+    && requestedChannels.includes("socket");
   const wantsEmail = channelEnabled("email")
-    && (requestedChannels.includes("db") || requestedChannels.includes("socket"));
+    && requestedChannels.includes("socket");
   const effectiveRequestedChannels = [
     ...requestedChannels,
     ...(wantsBrowserPush && !requestedChannels.includes("push") ? ["push"] : []),

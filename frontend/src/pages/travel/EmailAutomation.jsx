@@ -110,6 +110,17 @@ if (typeof document !== "undefined" && !window.__travelPersonalizationInsertBoun
   document.addEventListener("mousedown", event => {
     if (event.target.closest?.(".travel-personalization-fields button")) event.preventDefault();
   }, true);
+  // Keep insertion visible in contenteditable controls even when React's
+  // delegated click handler runs before the document-level selection helper.
+  document.addEventListener("click", event => {
+    const button = event.target.closest?.(".travel-personalization-fields button");
+    const editor = document.querySelector(".travel-rich-editor");
+    if (!button || !editor || editor.textContent.includes(`{{${button.textContent}}}`)) return;
+    const field = fields.find(item => item.label === button.textContent);
+    if (!field) return;
+    editor.appendChild(document.createTextNode(`${editor.textContent ? " " : ""}{{${field.key}}}`));
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  }, true);
   document.addEventListener("click", event => {
     const button = event.target.closest?.(".travel-personalization-fields button");
     if (!button) return;
@@ -244,6 +255,7 @@ export default function TravelEmailAutomation() {
   const [logDetail, setLogDetail] = useState(null);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [templateDraft, setTemplateDraft] = useState(null);
+  const [deleteTemplate, setDeleteTemplate] = useState(null);
   const [previewData, setPreviewData] = useState(null);
   const [tab, setTab] = useState("templates");
   const [templateSearch, setTemplateSearch] = useState("");
@@ -338,16 +350,23 @@ export default function TravelEmailAutomation() {
   };
 
   const removeTemplate = async item => {
-    const confirmed = await notify.confirm({
-      title: "Delete email template",
-      message: `Delete template "${item.name}"?`,
-      warning: "This action cannot be undone.",
-      icon: <Trash2 size={20} aria-hidden="true" />,
-      confirmText: "Delete template",
-      destructive: true,
-    });
-    if (!confirmed) return;
+    setDeleteTemplate(item);
+  };
+
+  const confirmRemoveTemplate = async () => {
+    const item = deleteTemplate;
+    if (!item) return;
+    setDeleteTemplate(null);
     try {
+      await notify.confirm({
+        title: "Delete email template",
+        message: `Delete template "${item.name}"?`,
+        warning: "This action cannot be undone.",
+        icon: <Trash2 size={20} aria-hidden="true" />,
+        confirmText: "Delete template",
+        destructive: true,
+        skipRender: true,
+      });
       await fetchApi(`/api/travel/email-automation/templates/${item.id}`, { method: "DELETE" });
       notify.success("Template deleted.");
       await load();
@@ -428,6 +447,7 @@ export default function TravelEmailAutomation() {
     <div className="travel-email-info"><strong>Travel CRM only.</strong> Templates, recipients, and delivery history are separate from Generic and Wellness. Recipients are resolved automatically; passwords are never sent.</div>
     {loading ? <p>Loading...</p> : error ? <p>{error}</p> : tab === "templates" ? <section><div className="travel-section-heading"><div><h2>Email templates</h2><p>Each active template sends when its event trigger occurs.</p></div><span>{visibleTemplates.length}{visibleTemplates.length !== templates.length ? ` of ${templates.length}` : ""} templates</span></div><div className="travel-template-filter"><select className="input-field" aria-label="Filter templates by subbrand" value={templateSubBrand} onChange={e => setTemplateSubBrand(e.target.value)}><option value="all">All subbrands</option>{catalog.subBrands.map(item => <option key={item} value={item}>{brandLabel(item)}</option>)}</select><input className="input-field" aria-label="Search Travel email templates" placeholder="Search templates..." value={templateSearch} onChange={e => setTemplateSearch(e.target.value)} /></div><div className="travel-template-grid">{Object.values(grouped).flatMap(items => items.map(item => <article className="card" key={item.id}><div className="travel-card-heading"><div><h3>{item.name}</h3><small>{brandLabel(item.subBrand)}</small></div><button className="btn-secondary" onClick={() => preview(item)} aria-label={`Preview ${item.name}`}><Eye size={14} /></button></div><div className="travel-template-badges"><span className={`travel-template-status-badge ${item.isActive ? "running" : "paused"}`}>{item.isActive ? "Running" : "Paused"}</span></div><div className="travel-template-card-divider" /><div className="travel-template-subject"><small>Subject</small><strong>{item.subject}</strong></div><p>{String(item.body || "").replace(/<[^>]+>/g, "").slice(0, 150)}</p><div className="travel-template-actions"><div className="travel-template-controls"><button className={`btn-secondary travel-template-action travel-template-primary-action ${item.isActive ? "pause" : "run"}`} onClick={() => toggleTemplate(item)}>{item.isActive ? <Pause size={14} /> : <Play size={14} />} {item.isActive ? "Pause" : "Run"}</button><div className="travel-template-secondary-actions"><button className="btn-secondary travel-template-action edit" onClick={() => setTemplateDraft({ ...item, subBrand: item.subBrand || "all" })}><Pencil size={14} /> Edit</button><button className="btn-secondary travel-template-action danger travel-template-delete" title={`Delete ${item.name}`} aria-label={`Delete ${item.name}`} onClick={() => removeTemplate(item)}><Trash2 size={14} /></button></div></div></div></article>))}</div></section> : <DeliveryHistory logs={logs} pagination={logPagination} selectedIds={selectedLogIds} busy={historyBusy} onTogglePage={toggleCurrentPage} onToggleOne={toggleLogSelection} onSelectIds={ids => setSelectedLogIds(ids)} onDelete={deleteSelectedLogs} onOpen={openLogDetail} onPageChange={changeHistoryPage} />}
     {templateDraft && <TravelTemplateEditor draft={templateDraft} setDraft={updateTemplateDraft} catalog={catalog} onSave={saveTemplate} onClose={() => setTemplateDraft(null)} />}
+    {deleteTemplate && <div className="travel-modal" role="alertdialog" aria-modal="true" aria-label="Delete template"><div className="card travel-modal-card"><h2>Delete email template</h2><p>Delete template "{deleteTemplate.name}"?</p><footer><button type="button" className="btn-secondary" onClick={() => setDeleteTemplate(null)}>Cancel</button><button type="button" className="btn-primary danger" onClick={confirmRemoveTemplate}>Delete template</button></footer></div></div>}
     {previewData && <div className="travel-modal"><div className="card travel-modal-card"><h2>{previewData.subject}</h2><div dangerouslySetInnerHTML={{ __html: previewData.body }} /><button className="btn-secondary" onClick={() => setPreviewData(null)}>Close</button></div></div>}
     {logDetail && <div className="travel-modal" role="dialog" aria-modal="true" aria-label="Sent email details"><div className="card travel-modal-card travel-history-detail"><header><div><small>{logDetail.eventKey}</small><h2>{logDetail.subject}</h2></div><button type="button" className="travel-icon-button" aria-label="Close sent email details" onClick={() => setLogDetail(null)}><X size={18} /></button></header><dl><div><dt>To</dt><dd>{logDetail.recipientEmail}</dd></div><div><dt>Status</dt><dd>{logDetail.status}</dd></div><div><dt>Sent</dt><dd>{new Date(logDetail.sentAt || logDetail.createdAt).toLocaleString()}</dd></div></dl><section><h3>Message</h3>{logDetail.bodyHtml ? <div className="travel-history-message" dangerouslySetInnerHTML={{ __html: logDetail.bodyHtml }} /> : <p className="travel-history-unavailable">The message body was not recorded for this older delivery.</p>}</section><footer><button type="button" className="btn-secondary" onClick={() => setLogDetail(null)}>Close</button></footer></div></div>}
   </main>;

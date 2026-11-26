@@ -1121,13 +1121,6 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'school_terms', action: 'read' }],
   },
   {
-    path: '/travel/email-automation',
-    label: 'Email Automation',
-    description: 'Travel email templates, delivery rules, and history',
-    category: 'Travel Marketing',
-    requiredPermissions: [{ module: 'marketing', action: 'read' }],
-  },
-  {
     path: '/travel/brochures',
     label: 'Brochure Engine',
     description: 'AI brochure PDF composer (cover, itinerary, pricing)',

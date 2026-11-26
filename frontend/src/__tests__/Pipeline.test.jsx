@@ -49,7 +49,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-function mockApi({ deals = DEALS, stages = STAGES, pipelines = [] } = {}) {
+function mockApi({ deals = DEALS, stages = STAGES, pipelines = [], pipelineStagesById = {} } = {}) {
   fetchApi.mockImplementation((url, options) => {
     if (options?.method === 'DELETE') return Promise.resolve({ ok: true });
     if (options?.method === 'PUT') return Promise.resolve({ ok: true });
@@ -67,7 +67,12 @@ function mockApi({ deals = DEALS, stages = STAGES, pipelines = [] } = {}) {
       return Promise.resolve({ data: filtered, total: filtered.length, page: 1, limit: 50, totalPages: 1 });
     }
     if (url.startsWith('/api/deals/')) return Promise.resolve(deals.find((deal) => String(deal.id) === url.split('/').pop()) || deals[0]);
-    if (url.startsWith('/api/pipeline_stages')) return Promise.resolve(stages);
+    if (url.startsWith('/api/pipeline_stages')) {
+      const selectedPipelineId = new URL(url, 'http://localhost').searchParams.get('pipelineId');
+      return Promise.resolve(selectedPipelineId && pipelineStagesById[selectedPipelineId]
+        ? pipelineStagesById[selectedPipelineId]
+        : stages);
+    }
     if (url.startsWith('/api/pipelines')) return Promise.resolve(pipelines);
     if (url.startsWith('/api/staff')) return Promise.resolve([{ id: 11, name: 'Anita' }, { id: 12, name: 'Vikram' }]);
     return Promise.resolve([]);
@@ -151,6 +156,35 @@ describe('Deals and Pipelines page', () => {
     expect(screen.getByRole('heading', { name: 'Lost' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'closed-won' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'closed-lost' })).not.toBeInTheDocument();
+  });
+
+  it('maps the legacy Generic CRM winner stage into the configured Won column', async () => {
+    mockApi({ deals: [{ ...DEALS[1], stage: 'winner' }] });
+
+    renderGenericPipeline();
+
+    expect(await screen.findByText('Globex Expansion')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Won' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'winner' })).not.toBeInTheDocument();
+  });
+
+  it('preserves distinct configured Closed Won and won labels in Generic CRM', async () => {
+    mockApi({
+      stages: [
+        { id: 1, name: 'Closed Won', color: '#10b981', position: 0 },
+        { id: 2, name: 'won', color: '#4f6df5', position: 1 },
+      ],
+      deals: [
+        { ...DEALS[0], id: 51, title: 'Configured closed-won deal', stage: 'closed-won' },
+        { ...DEALS[1], id: 52, title: 'Lowercase won deal', stage: 'won' },
+      ],
+    });
+
+    renderGenericPipeline();
+
+    expect(await screen.findByRole('heading', { name: 'Closed Won' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'won' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Won' })).not.toBeInTheDocument();
   });
   it('defaults to All time for deals and totals', async () => {
     renderPipeline();
@@ -277,6 +311,26 @@ describe('Deals and Pipelines page', () => {
     expect(fetchApi).toHaveBeenCalledWith(expect.stringMatching(/^\/api\/deals\?(?!.*pipelineId=)/));
   });
 
+  it('loads the dynamic assigned-stage union for Generic CRM when All pipelines is selected', async () => {
+    const allStages = [
+      { id: 1, name: 'New Lead', color: '#3b82f6', position: 0 },
+      { id: 2, name: 'Proposal Sent', color: '#a855f7', position: 1 },
+      { id: 3, name: 'Won', color: '#10b981', position: 2 },
+      { id: 4, name: 'Lost', color: '#ef4444', position: 3 },
+    ];
+    mockApi({
+      stages: allStages,
+      pipelines: [{ id: 41, name: 'Default Sales', isDefault: true }],
+      pipelineStagesById: { 41: allStages.filter((stage) => stage.name !== 'Proposal Sent') },
+    });
+
+    renderGenericPipeline();
+
+    expect(await screen.findByRole('heading', { name: 'Proposal Sent' })).toBeInTheDocument();
+    expect(fetchApi).toHaveBeenCalledWith('/api/pipeline_stages?assigned=true');
+    expect(fetchApi.mock.calls.some(([url]) => url === '/api/pipeline_stages?pipelineId=41')).toBe(true);
+  });
+
   it('preserves an explicitly selected pipeline from the URL', async () => {
     mockApi({ pipelines: [
       { id: 41, name: 'Default Sales', isDefault: true },
@@ -347,6 +401,7 @@ describe('Deals and Pipelines page', () => {
       const urls = fetchApi.mock.calls.map(([url]) => url);
       expect(urls.some((url) => url.startsWith('/api/deals?') && new URL(url, 'http://localhost').searchParams.get('pipelineId') === '7')).toBe(true);
       expect(urls.some((url) => url.startsWith('/api/deals/stats?') && new URL(url, 'http://localhost').searchParams.get('pipelineId') === '7')).toBe(true);
+      expect(urls).toContain('/api/pipeline_stages?pipelineId=7');
     });
     expect(screen.getByText('Acme Corp Renewal')).toBeInTheDocument();
   });
@@ -371,7 +426,7 @@ describe('Deals and Pipelines page', () => {
     fireEvent.change(screen.getByRole('textbox', { name: /search deals/i }), { target: { value: 'legacy' } });
     await waitFor(() => expect(screen.getByText('Legacy contacted deal')).toBeInTheDocument());
     expect(screen.getAllByRole('heading', { name: /.+/ })).toEqual(expect.arrayContaining([
-      screen.getByRole('heading', { name: 'New Deal' }),
+      screen.getByRole('heading', { name: 'New Lead' }),
       screen.getByRole('heading', { name: 'Contracted' }),
       screen.getByRole('heading', { name: 'Negotiation' }),
       screen.getByRole('heading', { name: 'Won' }),
@@ -483,6 +538,8 @@ describe('Deals and Pipelines page', () => {
     expect(slugifyStageName('WON')).toBe('won');
     expect(slugifyStageName(null)).toBe('');
     expect(normalizePipelineStages([{ id: 1, name: 'New Lead' }, { id: 2, name: ' new lead ' }])).toHaveLength(1);
+    expect(normalizePipelineStages([{ id: 3, name: 'Closed Won' }], true)[0].title).toBe('Closed Won');
+    expect(normalizePipelineStages([{ id: 3, name: 'Closed Won' }])[0].title).toBe('Won');
     expect(VIRTUALIZATION_THRESHOLD).toBe(100);
   });
 });

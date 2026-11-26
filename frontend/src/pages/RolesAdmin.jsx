@@ -23,6 +23,12 @@ import RoleHistoryDialog from '../components/RoleHistoryDialog';
 import SearchableSelect from '../components/ui/SearchableSelect';
 import { SUB_BRAND_LABEL, subBrandShortLabel } from '../utils/travelSubBrand';
 import { useActiveSubBrand } from '../utils/subBrand';
+import {
+  GENERIC_SIDEBAR_PAGE_SPECS,
+  TRAVEL_SIDEBAR_PAGE_SPECS,
+  TRAVEL_SIDEBAR_PERMISSION_BY_PATH,
+  TRAVEL_SIDEBAR_DESCRIPTION_BY_PATH,
+} from '../utils/sidebarSearch';
 
 const DATA_SCOPE_OPTIONS = ['OWN', 'TEAM', 'ALL'];
 const SUB_BRAND_OPTIONS = Object.entries(SUB_BRAND_LABEL);
@@ -238,11 +244,21 @@ const MODULE_DESCRIPTIONS = {
 // go here ONLY when the description's phrasing actually changes
 // based on the tenant's audience.
 const MODULE_DESCRIPTION_OVERRIDES = {
+  generic: Object.fromEntries(
+    GENERIC_SIDEBAR_PAGE_SPECS
+      .filter((page) => !page.sidebarHidden && page.requiredPermission?.module)
+      .map((page) => [page.requiredPermission.module, page.description]),
+  ),
   wellness: {
     invoices: 'Patient + customer invoice records and the Invoices page.',
   },
   travel: {
-    invoices: 'Customer + traveler invoice records and the Invoices page.',
+    ...Object.fromEntries(
+      Object.entries(TRAVEL_SIDEBAR_PERMISSION_BY_PATH).map(([path, permission]) => [
+        permission.module,
+        TRAVEL_SIDEBAR_DESCRIPTION_BY_PATH[path],
+      ]),
+    ),
   },
 };
 
@@ -260,6 +276,100 @@ function getModuleDescription(module, vertical) {
   return MODULE_DESCRIPTIONS[module] || '';
 }
 
+// Generic CRM permission cards use the same product names as the Generic
+// sidebar. Permission keys stay unchanged for API/backward compatibility;
+// this is presentation only and does not affect Wellness or Travel.
+const GENERIC_MODULE_LABELS = {
+  home: 'Home',
+  adsgpt: 'AdsGPT',
+  callified: 'Callified',
+  notification_settings: 'Notification Settings',
+  contacts: 'Contacts',
+  deals: 'Deals',
+  leads: 'All Leads',
+  lead_reports: 'Lead Reports',
+  field_config: 'Field Config',
+  tasks: 'Task Queue',
+  projects: 'Projects',
+  pipeline: 'Pipelines',
+  quotes: 'Quotes',
+  inbox: 'Inbox',
+  whatsapp: 'WhatsApp',
+  marketing: 'Marketing Campaign',
+  landing_sites: 'Landing Sites',
+  sequences: 'Sequences',
+  tickets: 'Tickets',
+  knowledge_base: 'Knowledge Base',
+  surveys: 'Surveys',
+  chatbots: 'Chatbots',
+  invoices: 'Invoices',
+  payments: 'Payments',
+  expenses: 'Expenses',
+  commissions: 'Commissions',
+  reports: 'Reports',
+  agent_reports: 'Agent Reports',
+  revenue_goals: 'Revenue Goals',
+  dashboards: 'Dashboard',
+  web_visitors: 'Web Visitors',
+  workflows: 'Workflows',
+  contracts: 'Contracts',
+  signatures: 'E-Signatures',
+  staff: 'Staff',
+  sales_teams: 'Teams',
+  roles: 'Roles',
+  settings: 'Settings',
+  audit: 'Audit Log',
+  channels: 'Channels',
+  zapier: 'Zapier',
+  developer: 'Developers',
+  transport_workspace: 'Transport Work',
+  site_visits: 'Site Visits',
+  customer_workflows: 'Customer Workflows',
+  pickup_plot_inventory: 'Plot Inventory',
+  pickup_inventory: 'Pickup Inventory',
+  transport_persons: 'Transport Persons',
+  sales_executives: 'Sales Executives',
+  billing_persons: 'Billing Persons',
+  work_assignments: 'Assign Staff Work',
+  playbooks: 'Playbooks',
+  territories: 'Territories',
+  live_chat: 'Live Chat',
+  sla: 'SLA Policies',
+  social: 'Social Media',
+  sandbox: 'Sandbox',
+  document_templates: 'Doc Templates',
+  custom_objects: 'App Builder',
+  deal_insights: 'Deal Insights',
+  calendar: 'Calendar Sync',
+  ab_tests: 'A/B Tests',
+  web_forms: 'Web Forms',
+  privacy: 'Privacy',
+  csp_violations: 'CSP Violations',
+  embed_allowlist: 'Embed Allowlist',
+  admin_status: 'Status',
+  commission_profiles: 'Commission Profiles',
+  commission_data: 'Commission Data',
+  industry_templates: 'Industry Templates',
+  currencies: 'Currencies',
+  data_import_export: 'Import / Export',
+};
+
+const TRAVEL_MODULE_LABELS = Object.fromEntries(
+  TRAVEL_SIDEBAR_PAGE_SPECS
+    .map((page) => [TRAVEL_SIDEBAR_PERMISSION_BY_PATH[page.path]?.module, page.label])
+    .filter(([module]) => Boolean(module)),
+);
+
+function getModuleLabel(module, vertical) {
+  if (vertical === 'generic' && GENERIC_MODULE_LABELS[module]) {
+    return GENERIC_MODULE_LABELS[module];
+  }
+  if (vertical === 'travel' && TRAVEL_MODULE_LABELS[module]) {
+    return TRAVEL_MODULE_LABELS[module];
+  }
+  return module.replaceAll('_', ' ');
+}
+
 // RBAC Hardening Phase 3 — client mirror of backend/lib/rbacLockoutGuard.js
 // CRITICAL_RBAC_PERMISSIONS. The frontend uses this set to surface a
 // "Critical permission removal" warning when the admin's save would
@@ -267,6 +377,39 @@ function getModuleDescription(module, vertical) {
 // the load-bearing security gate; this modal is a UX courtesy that
 // gives the admin a chance to reconsider before the 409 fires.
 const CRITICAL_RBAC_KEYS = new Set(['roles.read', 'roles.manage']);
+const WELLNESS_PERMISSION_LEGACY_MODULES = {
+  wellness_roles: 'roles',
+  wellness_staff: 'staff',
+  wellness_commission_profiles: 'staff',
+  wellness_approvals: 'staff',
+  wellness_resources: 'settings',
+  wellness_holidays: 'settings',
+  wellness_working_hours: 'settings',
+  wellness_currencies: 'settings',
+  wellness_locations: 'settings',
+  wellness_privacy: 'settings',
+  wellness_settings: 'settings',
+  wellness_data_import_export: 'settings',
+  wellness_adsgpt: 'integrations',
+  wellness_callified: 'integrations',
+  wellness_callified_data: 'integrations',
+  wellness_invoices: 'invoices',
+  wellness_giftcards: 'gift_cards',
+  wellness_wallet: 'patient_wallets',
+  wellness_patients: 'patients',
+  wellness_prescriptions: 'prescriptions',
+  wellness_drugs: 'prescriptions',
+  wellness_signatures: 'consents',
+};
+
+function canonicalSecurityPermissionKey(key) {
+  const separator = key.lastIndexOf('.');
+  if (separator < 1) return key;
+  const module = key.slice(0, separator);
+  const action = key.slice(separator + 1);
+  const legacyModule = WELLNESS_PERMISSION_LEGACY_MODULES[module];
+  return legacyModule ? `${legacyModule}.${action}` : key;
+}
 // Human-readable affected areas — drives the bullet list inside the
 // warning modal so the admin sees the consequence in product terms,
 // not catalog identifiers.
@@ -361,8 +504,9 @@ const SENSITIVE_PERMISSION_REASONS = {
 // constants — no new UI-only allow-list. Adding a new sensitive perm
 // upstream automatically lights up its caution badge here.
 function getPermissionSeverity(key) {
-  if (CRITICAL_RBAC_KEYS.has(key)) return 'critical';
-  if (SENSITIVE_PERMISSIONS_CLIENT.has(key)) return 'caution';
+  const securityKey = canonicalSecurityPermissionKey(key);
+  if (CRITICAL_RBAC_KEYS.has(securityKey)) return 'critical';
+  if (SENSITIVE_PERMISSIONS_CLIENT.has(securityKey)) return 'caution';
   return null;
 }
 
@@ -468,8 +612,8 @@ const ACTION_DESCRIPTIONS = {
   manage: 'Full administrative control — settings, bulk ops, and destructive admin actions.',
 };
 
-function getPermissionTooltip(module, action, vertical, pages = []) {
-  const scope = getModuleDescription(module, vertical);
+function getPermissionTooltip(module, action, vertical, pages = [], descriptionOverride = '') {
+  const scope = descriptionOverride || getModuleDescription(module, vertical);
   const effect = ACTION_DESCRIPTIONS[action] || `Perform ${action} actions in this module.`;
   const pageImpact = pages.length ? ` Required for: ${pages.map((page) => page.label).join(', ')}.` : '';
   return `${module}.${action}: ${effect}${scope ? ` ${scope}` : ''}${pageImpact}`;
@@ -1604,23 +1748,8 @@ function validateLandingPathClient(value) {
 function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMode = false, onClose, onSaved, onApply }) {
   const matrix = useMemo(() => (Array.isArray(modules) ? modules : []), [modules]);
   const domainList = useMemo(() => (Array.isArray(domains) ? domains : []), [domains]);
-  // The Generic CRM standalone Workflows page is hidden, but the underlying
-  // permission must stay in `matrix` and `selected`: Marketing Sequences uses
-  // it for its embedded webhook workflows. Filter only the rendered cards so
-  // saving any other permission cannot silently remove an existing grant.
-  const displayMatrix = useMemo(
-    () => matrix.filter(({ module }) => !(vertical === 'generic' && module === 'workflows')),
-    [matrix, vertical],
-  );
-  const displayDomainList = useMemo(
-    () => domainList
-      .map((domain) => ({
-        ...domain,
-        modules: (domain.modules || []).filter((module) => !(vertical === 'generic' && module === 'workflows')),
-      }))
-      .filter((domain) => domain.modules.length > 0),
-    [domainList, vertical],
-  );
+  const displayMatrix = matrix;
+  const displayDomainList = domainList;
   // Build the set of currently-catalogued "module.action" strings so we
   // can filter the role's stored grants through it. A grant whose module
   // is no longer in the catalog (e.g. `billing.delete` after the v3.8.x
@@ -1710,6 +1839,37 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
     };
   }, []);
 
+  const wellnessPresentationByModule = useMemo(() => {
+    if (vertical !== 'wellness') return {};
+    const result = {
+      wellness_adsgpt: {
+        label: 'AdsGPT',
+        description: 'Open the connected AdsGPT marketing workspace.',
+      },
+      wellness_callified: {
+        label: 'Callified',
+        description: 'Open the connected Callified calling workspace.',
+      },
+    };
+    for (const page of pageCatalog) {
+      const permission = Array.isArray(page?.requiredPermissions)
+        ? page.requiredPermissions[0]
+        : null;
+      if (!permission?.module) continue;
+      result[permission.module] = {
+        label: page.label,
+        description: page.description,
+      };
+    }
+    return result;
+  }, [pageCatalog, vertical]);
+  const moduleLabelFor = useCallback((module) =>
+    wellnessPresentationByModule[module]?.label || getModuleLabel(module, vertical),
+  [vertical, wellnessPresentationByModule]);
+  const moduleDescriptionFor = useCallback((module) =>
+    wellnessPresentationByModule[module]?.description || getModuleDescription(module, vertical),
+  [vertical, wellnessPresentationByModule]);
+
   // A page depends on exact module.action grants. Keep the whole requirement
   // list so the editor can distinguish access already granted from partial access.
   const pagesByPermission = useMemo(() => {
@@ -1735,9 +1895,10 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
     for (const { module, actions } of displayMatrix) {
       const parts = [
         module,
+        moduleLabelFor(module),
         // Vertical-aware description — same source the tooltip + body
         // text below read from, so search hits stay consistent.
-        getModuleDescription(module, vertical),
+        moduleDescriptionFor(module),
         (actions || []).flatMap((action) =>
           (pagesByPermission.get(`${module}.${action}`) || []).map((page) => `${page.label} ${page.path}`)
         ).join(' '),
@@ -1746,7 +1907,7 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
       map.set(module, parts.join(' ').toLowerCase());
     }
     return map;
-  }, [displayMatrix, pagesByPermission, vertical]);
+  }, [displayMatrix, moduleDescriptionFor, moduleLabelFor, pagesByPermission]);
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
   const matchesQuery = (module) => {
@@ -1841,7 +2002,7 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
     const newlySensitive = [];
     for (const key of selected) {
       if (initial.has(key)) continue;
-      if (SENSITIVE_PERMISSIONS_CLIENT.has(key)) newlySensitive.push(key);
+      if (SENSITIVE_PERMISSIONS_CLIENT.has(canonicalSecurityPermissionKey(key))) newlySensitive.push(key);
     }
     if (newlySensitive.length > 0) {
       setPendingSensitiveGrants(newlySensitive);
@@ -1859,7 +2020,7 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
     const removingCritical = [];
     for (const key of initial) {
       if (selected.has(key)) continue; // still granted, no removal
-      if (CRITICAL_RBAC_KEYS.has(key)) removingCritical.push(key);
+      if (CRITICAL_RBAC_KEYS.has(canonicalSecurityPermissionKey(key))) removingCritical.push(key);
     }
     if (removingCritical.length > 0) {
       setPendingCriticalRemovals(removingCritical);
@@ -2126,7 +2287,7 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
                         }}
                       >
                         <span
-                          title={getModuleDescription(module, vertical) || module}
+                          title={moduleDescriptionFor(module) || module}
                           style={{
                             fontSize: '0.75rem',
                             fontWeight: 700,
@@ -2134,7 +2295,7 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
                             letterSpacing: '0.04em',
                           }}
                         >
-                          {module}
+                          {moduleLabelFor(module)}
                         </span>
                         {!readOnly && (
                           <button
@@ -2156,7 +2317,7 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
                         )}
                       </div>
                       <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', lineHeight: 1.35 }}>
-                        {getModuleDescription(module, vertical) || `Controls ${module.replaceAll('_', ' ')} records and actions.`}
+                        {moduleDescriptionFor(module) || `Controls ${module.replaceAll('_', ' ')} records and actions.`}
                       </div>
                       <div
                         style={{
@@ -2179,7 +2340,13 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
                                  .filter((requiredKey) => !selected.has(requiredKey)),
                              }))
                              .filter(({ missing }) => missing.length > 0);
-                            const tooltip = getPermissionTooltip(module, a, vertical, pages);
+                            const tooltip = getPermissionTooltip(
+                              module,
+                              a,
+                              vertical,
+                              pages,
+                              moduleDescriptionFor(module),
+                            );
                            const severity = getPermissionSeverity(key);
                           // RBAC Hardening Phase 2 — severity badge.
                           // Derived from CRITICAL_RBAC_KEYS +
@@ -2464,7 +2631,7 @@ function CriticalPermsConfirmModal({ roleName, removedKeys, isLoading, onCancel,
         <strong>Users assigned to this role may lose access to:</strong>
         <ul style={{ margin: '0.45rem 0 0 1.1rem', padding: 0, color: 'var(--text-primary)' }}>
           {removedKeys.map((key) => {
-            const area = CRITICAL_PERMISSION_AREAS[key] || { name: key, impact: 'Powerful administration permission' };
+            const area = CRITICAL_PERMISSION_AREAS[canonicalSecurityPermissionKey(key)] || { name: key, impact: 'Powerful administration permission' };
             return (
               <li key={key} style={{ marginBottom: '0.35rem', fontSize: '0.85rem' }}>
                 <strong>{area.name}</strong>
@@ -2737,7 +2904,7 @@ function SensitiveGrantsConfirmModal({ roleName, grants, isLoading, onCancel, on
               {key}
             </div>
             <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>
-              {SENSITIVE_PERMISSION_REASONS[key] || 'Powerful permission — review carefully.'}
+              {SENSITIVE_PERMISSION_REASONS[canonicalSecurityPermissionKey(key)] || 'Powerful permission — review carefully.'}
             </div>
           </li>
         ))}

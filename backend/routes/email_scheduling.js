@@ -37,7 +37,7 @@ async function resolveTravelProvider(tenantId) {
   } catch (_error) {
     return null;
   }
-  return String(tenant?.vertical || "").toLowerCase() === "travel"
+  return ["generic", "travel"].includes(String(tenant?.vertical || "").toLowerCase())
     ? resolveSendGridConfig(tenantId)
     : null;
 }

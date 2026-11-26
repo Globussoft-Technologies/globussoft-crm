@@ -101,6 +101,8 @@ prisma.$queryRaw = vi.fn().mockResolvedValue([{ id: 55 }]);
 // Stub the surface so the route doesn't try to hit a real DB.
 prisma.tenant = prisma.tenant || {};
 prisma.tenant.findUnique = vi.fn().mockResolvedValue({ emailRetention: true });
+prisma.tenantSetting = prisma.tenantSetting || {};
+prisma.tenantSetting.findUnique = vi.fn().mockResolvedValue(null);
 
 import express from 'express';
 import request from 'supertest';
@@ -140,6 +142,7 @@ beforeEach(() => {
   prisma.$transaction.mockReset().mockImplementation(callback => callback(prisma));
   prisma.$queryRaw.mockReset().mockResolvedValue([{ id: 55 }]);
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ emailRetention: true, vertical: 'generic' });
+  prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
   prisma.emailMessage.create.mockReset();
   prisma.emailMessage.findMany.mockReset();
   prisma.emailMessage.findFirst.mockReset();

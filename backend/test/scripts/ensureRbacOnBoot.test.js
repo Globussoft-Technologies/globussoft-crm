@@ -56,6 +56,10 @@ const mockPrisma = {
     findUnique: vi.fn(),
     findMany: vi.fn(),
   },
+  tenantSetting: {
+    findUnique: vi.fn(),
+    upsert: vi.fn(),
+  },
   user: {
     findMany: vi.fn(),
   },
@@ -71,6 +75,7 @@ beforeEach(() => {
     rolePermission: mockPrisma.rolePermission,
     userRole: mockPrisma.userRole,
     tenant: mockPrisma.tenant,
+    tenantSetting: mockPrisma.tenantSetting,
     user: mockPrisma.user,
     roleWidget: mockPrisma.roleWidget,
   });
@@ -81,10 +86,13 @@ beforeEach(() => {
   // Default find-* responses: nothing exists yet, so ensureRole always
   // takes the create branch.
   mockPrisma.role.findFirst.mockResolvedValue(null);
+  mockPrisma.role.findMany.mockResolvedValue([]);
   mockPrisma.rolePermission.findFirst.mockResolvedValue(null);
   mockPrisma.userRole.findUnique.mockResolvedValue(null);
   mockPrisma.userRole.count.mockResolvedValue(0);
   mockPrisma.tenant.findUnique.mockResolvedValue({ vertical: null });
+  mockPrisma.tenantSetting.findUnique.mockResolvedValue(null);
+  mockPrisma.tenantSetting.upsert.mockResolvedValue({});
   mockPrisma.user.findMany.mockResolvedValue([]);
 
   // role.create returns a stub with an id so downstream calls don't blow up
@@ -155,6 +163,83 @@ describe('provisionTenantRbac - vertical-aware role provisioning', () => {
         `generic tenant must not receive wellness clinical role ${cliniKey}`,
       ).not.toContain(cliniKey);
     }
+  });
+
+  test('generic migration copies shared grants into separate sidebar modules once', async () => {
+    mockPrisma.role.findMany.mockResolvedValue([{
+      id: 501,
+      permissions: [
+        { module: 'reports', action: 'read' },
+        { module: 'reports', action: 'export' },
+        { module: 'integrations', action: 'read' },
+      ],
+    }]);
+
+    await provisionTenantRbac(20, { vertical: 'generic' });
+
+    const grants = mockPrisma.rolePermission.create.mock.calls
+      .filter((call) => call[0].data.roleId === 501)
+      .map((call) => `${call[0].data.module}.${call[0].data.action}`);
+    expect(grants).toContain('lead_reports.read');
+    expect(grants).toContain('agent_reports.export');
+    expect(grants).toContain('adsgpt.read');
+    expect(grants).toContain('home.read');
+    expect(grants).toContain('notification_settings.read');
+    expect(mockPrisma.tenantSetting.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  test('travel migration copies legacy grants into separate sidebar modules once', async () => {
+    mockPrisma.role.findMany.mockResolvedValue([{
+      id: 502,
+      permissions: [
+        { module: 'reports', action: 'read' },
+        { module: 'marketing', action: 'read' },
+        { module: 'quotes', action: 'read' },
+        { module: 'visa', action: 'read' },
+      ],
+    }]);
+
+    await provisionTenantRbac(21, { vertical: 'travel' });
+
+    const grants = mockPrisma.rolePermission.create.mock.calls
+      .filter((call) => call[0].data.roleId === 502)
+      .map((call) => `${call[0].data.module}.${call[0].data.action}`);
+    expect(grants).toContain('travel_dashboard.read');
+    expect(grants).toContain('travel_reviews.read');
+    expect(grants).toContain('email_automation.read');
+    expect(grants).toContain('brochure_engine.read');
+    expect(grants).toContain('travel_web_forms.read');
+    expect(grants).toContain('quote_builder.read');
+    expect(grants).toContain('visa_applications.read');
+    expect(grants).toContain('visa_checklists.read');
+    expect(grants).toContain('embassy_rules.read');
+    expect(mockPrisma.tenantSetting.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  test('wellness migration copies shared grants into separate sidebar modules once', async () => {
+    mockPrisma.role.findMany.mockResolvedValue([{
+      id: 503,
+      permissions: [
+        { module: 'reports', action: 'read' },
+        { module: 'services', action: 'read' },
+        { module: 'integrations', action: 'read' },
+      ],
+    }]);
+
+    await provisionTenantRbac(22, { vertical: 'wellness' });
+
+    const grants = mockPrisma.rolePermission.create.mock.calls
+      .filter((call) => call[0].data.roleId === 503)
+      .map((call) => `${call[0].data.module}.${call[0].data.action}`);
+    expect(grants).toContain('wellness_home.read');
+    expect(grants).toContain('wellness_owner_dashboard.read');
+    expect(grants).toContain('wellness_recommendations.read');
+    expect(grants).toContain('wellness_services.read');
+    expect(grants).toContain('wellness_service_categories.read');
+    expect(grants).toContain('wellness_memberships.read');
+    expect(grants).toContain('wellness_adsgpt.read');
+    expect(grants).toContain('wellness_callified.read');
+    expect(mockPrisma.tenantSetting.upsert).toHaveBeenCalledTimes(1);
   });
 
   test('unknown vertical does NOT create wellness clinical roles', async () => {

@@ -12,6 +12,7 @@ const {
 const {
   getTenantPageVisibility,
   getTenantPageVisibilityCatalog,
+  getAccessibleTenantSidebarPages,
   isPathHidden,
 } = require("../lib/tenantPageVisibility");
 const { getCatalogForVertical, getAccessiblePages } = require("../lib/pageCatalog");
@@ -144,16 +145,16 @@ function isSearchEntityAvailable(entityKey, visibility, accessiblePaths = null) 
 // from changing role editors, landing-page choices, or another vertical.
 const GENERIC_SEARCH_ONLY_PATH_PERMISSIONS = {
   "/signatures": "signatures.read",
-  "/commission-profiles": "staff.manage",
-  "/sales-teams": "staff.manage",
-  "/pickup-inventory": "settings.manage",
-  "/pickup-plot-inventory": "settings.manage",
-  "/transport-persons": "settings.manage",
-  "/plot-brokers": "settings.manage",
-  "/billing-persons": "settings.manage",
+  "/commission-profiles": "commission_profiles.read",
+  "/sales-teams": "sales_teams.read",
+  "/pickup-inventory": "pickup_inventory.read",
+  "/pickup-plot-inventory": "pickup_plot_inventory.read",
+  "/transport-persons": "transport_persons.read",
+  "/plot-brokers": "sales_executives.read",
+  "/billing-persons": "billing_persons.read",
   "/reports": "reports.read",
-  "/revenue-goals": "reports.write",
-  "/pickup-work-assignments": "staff.manage",
+  "/revenue-goals": "revenue_goals.read",
+  "/pickup-work-assignments": "work_assignments.read",
 };
 
 async function getGenericAccessibleSearchPaths(req, visibility) {
@@ -180,6 +181,22 @@ async function getGenericAccessibleSearchPaths(req, visibility) {
     }
   }
   return accessiblePaths;
+}
+
+async function getWellnessAccessibleSearchPaths(req, visibility) {
+  const permissions = req.user.isOwner
+    ? null
+    : await getUserPermissions(req.user.tenantId, req.user.userId);
+  const pages = getAccessibleTenantSidebarPages(
+    "wellness",
+    permissions,
+    { isOwner: Boolean(req.user.isOwner) },
+  );
+  return new Set(
+    pages
+      .filter((page) => !isPathHidden(page.path, visibility?.hiddenPaths))
+      .map((page) => page.path),
+  );
 }
 
 function normalizeSearchText(value) {
@@ -457,9 +474,11 @@ router.get("/", verifyToken, async (req, res) => {
 
     const canAccessConditional = await canAccessConditionalEntities(req);
     const visibility = await getTenantPageVisibility(tenantId, { vertical });
-    const genericAccessiblePaths = vertical === "generic"
+    const accessibleSearchPaths = vertical === "generic"
       ? await getGenericAccessibleSearchPaths(req, visibility)
-      : null;
+      : vertical === "wellness"
+        ? await getWellnessAccessibleSearchPaths(req, visibility)
+        : null;
     const searchFilter = searchContains(query);
     const normalizedQuery = normalizeSearchText(query);
 
@@ -497,7 +516,7 @@ router.get("/", verifyToken, async (req, res) => {
         continue;
       }
 
-      if (!isSearchEntityAvailable(entity.key, visibility, genericAccessiblePaths)) {
+      if (!isSearchEntityAvailable(entity.key, visibility, accessibleSearchPaths)) {
         queryPromises[entity.key] = Promise.resolve([]);
         continue;
       }

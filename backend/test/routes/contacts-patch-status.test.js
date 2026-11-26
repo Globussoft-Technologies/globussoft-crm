@@ -151,11 +151,11 @@ const TENANT_ID = 1;
 const USER_ID = 7;
 const CONTACT_ID = 4242;
 
-function makeApp({ role = 'ADMIN' } = {}) {
+function makeApp({ role = 'ADMIN', vertical = 'generic' } = {}) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.user = { userId: USER_ID, tenantId: TENANT_ID, role };
+    req.user = { userId: USER_ID, tenantId: TENANT_ID, role, vertical };
     next();
   });
   app.use('/api/contacts', contactsRouter);
@@ -557,6 +557,12 @@ describe('GET /api/contacts/:id/activities — deterministic pagination', () => 
 describe('GET /api/contacts/:id/lifecycle-history', () => {
   test('returns tenant-scoped lifecycle changes with actor and from/to details', async () => {
     prisma.contact.findFirst.mockResolvedValueOnce(prospect);
+    prisma.activity.findMany.mockResolvedValueOnce([{
+      id: 91,
+      userId: USER_ID,
+      description: 'Updated from Prospect to Churned. Reason: Budget was withdrawn',
+      createdAt: new Date('2026-10-22T07:29:58.000Z'),
+    }]);
     prisma.auditLog.findMany.mockResolvedValueOnce([
       {
         id: 88,
@@ -565,14 +571,14 @@ describe('GET /api/contacts/:id/lifecycle-history', () => {
         user: { id: USER_ID, name: 'Rajesh Sharma', email: 'rajesh@example.com' },
         details: JSON.stringify({
           changedFields: {
-            status: { from: 'Lead', to: 'Prospect' },
-            lifecycleStageKey: { from: 'new', to: 'contacted' },
+            status: { from: 'Prospect', to: 'Churned' },
+            lifecycleStageKey: { from: 'qualified', to: 'churned' },
           },
           lifecycleTransition: {
-            fromStage: 'New',
-            toStage: 'Contacted',
-            fromStatus: 'Lead',
-            toStatus: 'Prospect',
+            fromStage: 'Qualified',
+            toStage: 'Churned',
+            fromStatus: 'Prospect',
+            toStatus: 'Churned',
           },
         }),
       },
@@ -584,8 +590,9 @@ describe('GET /api/contacts/:id/lifecycle-history', () => {
     expect(res.body.total).toBe(1);
     expect(res.body.data[0]).toMatchObject({
       changedBy: { id: USER_ID, name: 'Rajesh Sharma', email: 'rajesh@example.com' },
-      from: { stageKey: 'new', stage: 'New', status: 'Lead' },
-      to: { stageKey: 'contacted', stage: 'Contacted', status: 'Prospect' },
+      from: { stageKey: 'qualified', stage: 'Qualified', status: 'Prospect' },
+      to: { stageKey: 'churned', stage: 'Churned', status: 'Churned' },
+      reason: 'Budget was withdrawn',
     });
     expect(prisma.auditLog.findMany.mock.calls[0][0].where).toMatchObject({
       tenantId: TENANT_ID,
@@ -593,6 +600,29 @@ describe('GET /api/contacts/:id/lifecycle-history', () => {
       entityId: CONTACT_ID,
       action: 'UPDATE',
     });
+    expect(prisma.activity.findMany).toHaveBeenCalledWith({
+      where: { tenantId: TENANT_ID, contactId: CONTACT_ID, type: 'Lead Status updated' },
+      select: { id: true, userId: true, description: true, createdAt: true },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: 200,
+    });
+  });
+
+  test('does not read Generic status activities for another CRM vertical', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(prospect);
+    prisma.auditLog.findMany.mockResolvedValueOnce([{
+      id: 89,
+      createdAt: new Date('2026-10-22T07:30:00.000Z'),
+      userId: USER_ID,
+      user: { id: USER_ID, name: 'Wellness User', email: 'wellness@example.com' },
+      details: JSON.stringify({ changedFields: { status: { from: 'Lead', to: 'Prospect' } } }),
+    }]);
+
+    const res = await request(makeApp({ vertical: 'wellness' })).get(`/api/contacts/${CONTACT_ID}/lifecycle-history`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data[0].reason).toBeNull();
+    expect(prisma.activity.findMany).not.toHaveBeenCalled();
   });
 });
 

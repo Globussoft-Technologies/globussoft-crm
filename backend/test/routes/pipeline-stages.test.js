@@ -68,6 +68,7 @@ prisma.pipelineStage = {
 prisma.pipeline = { findFirst: vi.fn() };
 prisma.pipelineStageAssignment = {
   findMany: vi.fn(),
+  findFirst: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
   delete: vi.fn(),
@@ -111,6 +112,7 @@ beforeEach(() => {
   prisma.pipelineStage.delete.mockReset();
   prisma.pipeline.findFirst.mockReset();
   prisma.pipelineStageAssignment.findMany.mockReset();
+  prisma.pipelineStageAssignment.findFirst.mockReset();
   prisma.pipelineStageAssignment.create.mockReset();
   prisma.pipelineStageAssignment.update.mockReset();
   prisma.pipelineStageAssignment.delete.mockReset();
@@ -182,6 +184,27 @@ describe('GET / — list pipeline stages', () => {
     // Tenant-scoped + ordered by position ascending
     expect(prisma.pipelineStage.findMany).toHaveBeenCalledWith({
       where: { tenantId: 1 },
+      orderBy: { position: 'asc' },
+    });
+  });
+
+  test('Generic CRM can list only stages dynamically assigned to at least one pipeline', async () => {
+    prisma.pipelineStage.findMany.mockResolvedValue([
+      { id: 11, name: 'New Lead', color: '#3b82f6', position: 0, tenantId: 1 },
+      { id: 13, name: 'Won', color: '#10b981', position: 2, tenantId: 1 },
+    ]);
+
+    const res = await request(makeApp())
+      .get('/api/pipeline-stages?assigned=true')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(res.body.map((stage) => stage.name)).toEqual(['New Lead', 'Won']);
+    expect(prisma.pipelineStage.findMany).toHaveBeenCalledWith({
+      where: {
+        tenantId: 1,
+        assignments: { some: { tenantId: 1, pipeline: { tenantId: 1 } } },
+      },
       orderBy: { position: 'asc' },
     });
   });
@@ -397,6 +420,7 @@ describe('PUT /:id — update pipeline stage', () => {
 describe('DELETE /:id — delete pipeline stage', () => {
   test('Generic CRM removes only the pipeline assignment', async () => {
     prisma.pipeline.findFirst.mockResolvedValue({ id: 42 });
+    prisma.pipelineStage.findFirst.mockResolvedValue({ id: 7, name: 'Qualified', tenantId: 1 });
     prisma.pipelineStageAssignment.deleteMany.mockResolvedValue({ count: 1 });
 
     const res = await request(makeApp())
@@ -408,6 +432,35 @@ describe('DELETE /:id — delete pipeline stage', () => {
       where: { tenantId: 1, pipelineId: 42, stageId: 7 },
     });
     expect(prisma.pipelineStage.delete).not.toHaveBeenCalled();
+  });
+
+  test.each(['Won', 'Lost'])('Generic CRM does not remove the required %s stage', async (name) => {
+    prisma.pipeline.findFirst.mockResolvedValue({ id: 42, isDefault: true });
+    prisma.pipelineStage.findFirst.mockResolvedValue({ id: 7, name, tenantId: 1 });
+
+    const res = await request(makeApp())
+      .delete('/api/pipeline-stages/7?pipelineId=42')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: 'Won and Lost stages are required and cannot be removed',
+      code: 'REQUIRED_PIPELINE_STAGE',
+    });
+    expect(prisma.pipelineStageAssignment.deleteMany).not.toHaveBeenCalled();
+  });
+
+  test.each(['Won', 'Lost'])('Generic CRM can remove %s from a non-default pipeline', async (name) => {
+    prisma.pipeline.findFirst.mockResolvedValue({ id: 42, isDefault: false });
+    prisma.pipelineStage.findFirst.mockResolvedValue({ id: 7, name, tenantId: 1 });
+    prisma.pipelineStageAssignment.deleteMany.mockResolvedValue({ count: 1 });
+
+    const res = await request(makeApp())
+      .delete('/api/pipeline-stages/7?pipelineId=42')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(204);
+    expect(prisma.pipelineStageAssignment.deleteMany).toHaveBeenCalledOnce();
   });
 
   test('deletes a tenant-owned stage and returns 204 No Content (#550 sweep)', async () => {

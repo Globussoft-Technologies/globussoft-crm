@@ -933,6 +933,10 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     const currentStageIndex = contact?.lifecycleStageKey
       ? statusPipelineSegments.findIndex((segment) => segment.options.some((option) => option.id === contact.lifecycleStageKey))
       : segIndexOf(currentStageLabel, statusPipelineSegments);
+    const currentStageOption = contact?.lifecycleStageKey
+      ? segOptionById(contact.lifecycleStageKey, statusPipelineSegments)
+      : segOption(currentStageLabel, statusPipelineSegments);
+    if (isGeneric && currentStageOption?.negative && nextStageIndex > currentStageIndex) return;
     const isBackward = isGeneric && currentStageIndex >= 0 && nextStageIndex >= 0 && nextStageIndex < currentStageIndex;
     if (isGeneric && (opt.negative || isBackward)) {
       setPendingStageTransition({ option: opt, isBackward, reason: '', currentStageIndex, nextStageIndex });
@@ -1735,7 +1739,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
       setLifecycleHistory(Array.isArray(result?.data) ? result.data : []);
     } catch {
       setLifecycleHistory([]);
-      notify.error('Could not load lifecycle history.');
+      notify.error(`Could not load ${isGeneric ? 'status' : 'lifecycle'} history.`);
     } finally {
       setLifecycleHistoryLoading(false);
     }
@@ -2275,12 +2279,17 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                       // placeholder (for example, Interested / Unqualified).
                       const displayTitle = selectedSegmentOption?.label || segmentDisplayTitle(seg);
                       const selectedSegmentIsNegative = Boolean(selectedSegmentOption?.negative);
+                      const isBlockedAfterNegative = isGeneric && activeNegative && i > activeSeg;
+                      const stageButtonTitle = isBlockedAfterNegative
+                        ? `Choose a positive status before moving to ${displayTitle}`
+                        : `Move to ${displayTitle}`;
                       return (
                       <div className="cp-chev-wrap" key={seg.id || seg.title}>
                         {seg.options.length === 1 ? (
                           <button
                             type="button"
-                            title={`Move to ${displayTitle}`}
+                            title={stageButtonTitle}
+                            disabled={isBlockedAfterNegative}
                             onClick={() => pickStage(seg.options[0].id || seg.options[0].label)}
                             className={`cp-chev${stageClass}${i < activeSeg ? ' done' : ''}${i === activeSeg ? ' current' : ''}${selectedSegmentIsNegative ? ' lost' : ''}`}
                           ><span className="cp-chev-label">{displayTitle}</span></button>
@@ -2288,7 +2297,8 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                           <>
                             <button
                               type="button"
-                              title={`Move to ${displayTitle}`}
+                              title={stageButtonTitle}
+                              disabled={isBlockedAfterNegative}
                               onClick={() => setOpenSeg(openSeg === seg.id ? null : seg.id)}
                               className={`cp-chev${stageClass}${i < activeSeg ? ' done' : ''}${i === activeSeg ? ' current' : ''}${selectedSegmentIsNegative || (i === activeSeg && activeNegative) ? ' lost' : ''}`}
                             ><span className="cp-chev-label">{displayTitle}</span> <ChevronDown size={12} /></button>
@@ -2601,16 +2611,16 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
       {modal === 'activity' && <ActivityModal contact={contact} presetType={activityPreset} onClose={() => setModal(null)} onDone={refresh} />}
       {lifecycleHistoryOpen && (
         <div className="cp-overlay" onClick={() => setLifecycleHistoryOpen(false)}>
-          <div className="cp-modal cp-lifecycle-history-modal" role="dialog" aria-modal="true" aria-label="Lifecycle history" onClick={(event) => event.stopPropagation()}>
+          <div className="cp-modal cp-lifecycle-history-modal" role="dialog" aria-modal="true" aria-label={isGeneric ? 'Status history' : 'Lifecycle history'} onClick={(event) => event.stopPropagation()}>
             <div className="cp-modal-head">
-              <div className="cp-lifecycle-history-title"><span><History size={17} /></span><div><h3>Lifecycle history</h3><p>Every recorded stage and status change for {contact.name}.</p></div></div>
-              <button type="button" className="cp-icon-btn" onClick={() => setLifecycleHistoryOpen(false)} aria-label="Close lifecycle history"><X size={16} /></button>
+              <div className="cp-lifecycle-history-title"><span><History size={17} /></span><div><h3>{isGeneric ? 'Status history' : 'Lifecycle history'}</h3><p>Every recorded stage and status change for {contact.name}.</p></div></div>
+              <button type="button" className="cp-icon-btn" onClick={() => setLifecycleHistoryOpen(false)} aria-label={`Close ${isGeneric ? 'status' : 'lifecycle'} history`}><X size={16} /></button>
             </div>
             <div className="cp-modal-body cp-lifecycle-history-body">
               {lifecycleHistoryLoading ? (
                 <div className="cp-lifecycle-history-empty">Loading history…</div>
               ) : lifecycleHistory.length === 0 ? (
-                <div className="cp-lifecycle-history-empty"><History size={24} /><strong>No lifecycle changes yet</strong><span>Changes will appear here after a stage or status is updated.</span></div>
+                <div className="cp-lifecycle-history-empty"><History size={24} /><strong>No {isGeneric ? 'status' : 'lifecycle'} changes yet</strong><span>Changes will appear here after a stage or status is updated.</span></div>
               ) : (
                 <div className="cp-lifecycle-history-list">
                   {lifecycleHistory.map((entry) => (
@@ -2642,7 +2652,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
               <h3>{editingNote ? 'Edit note' : 'Add note'}</h3>
               <button type="button" className="cp-icon-btn" onClick={() => { setNoteComposerOpen(false); setEditingNote(null); }} aria-label="Close"><X size={16} /></button>
             </div>
-            <div className="cp-note-related">Contact: <strong>{contact.name}</strong></div>
+            <div className="cp-note-related">{isGeneric ? 'Lead' : 'Contact'}: <strong>{contact.name}</strong></div>
             <input ref={noteImageInputRef} type="file" accept="image/*" onChange={handleNoteImageFile} hidden aria-hidden="true" />
             <div
               ref={noteComposerRef}
@@ -2681,7 +2691,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
           onClose={() => setFieldPickerOpen(false)}
         />
       )}
-      {dealModal.open && <DealModal contact={contact} deal={dealModal.deal} onClose={() => setDealModal({ open: false, deal: null })} onDone={refresh} />}
+      {dealModal.open && <DealModal contact={contact} deal={dealModal.deal} defaultToWon onClose={() => setDealModal({ open: false, deal: null })} onDone={refresh} />}
       {seqPicker && (
         <Modal title={isWellness ? 'Add to estimate' : 'Add to sequence'} onClose={() => setSeqPicker(false)}>
           {seqLoading ? (

@@ -294,7 +294,7 @@ describe('Omnibar (inline top-bar)', () => {
     fireEvent.change(input, { target: { value: 'commission' } });
 
     expect(await screen.findByText(/^Pages$/i, {}, { timeout: 2000 })).toBeInTheDocument();
-    const row = await screen.findByRole('option', { name: /Commissions/i }, { timeout: 2000 });
+    const row = await screen.findByRole('option', { name: /^Commissions\b/i }, { timeout: 2000 });
     expect(row).toBeInTheDocument();
     fireEvent.click(row);
     expect(navigateMock).toHaveBeenCalledWith('/commissions');
@@ -350,7 +350,7 @@ describe('Omnibar (inline top-bar)', () => {
     expect(screen.queryByRole('option', { name: /Shared Inbox/i })).not.toBeInTheDocument();
   });
 
-  it('shows Marketing Sequences but suppresses the separate hidden sequence builder in Generic CRM', async () => {
+  it('shows Marketing Sequences, the standalone Sequences page, and matching sequence records in Generic CRM', async () => {
     fetchApi.mockImplementation((url) => {
       if (url.startsWith('/api/pages/me')) {
         return Promise.resolve({
@@ -382,7 +382,8 @@ describe('Omnibar (inline top-bar)', () => {
 
     expect(await screen.findByRole('option', { name: /Holiday nurture sequence/i }, { timeout: 2000 })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /Marketing Sequences/i })).toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: /Hidden visual sequence/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /^Sequences/i })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /Hidden visual sequence/i })).toBeInTheDocument();
   });
 
   it('launches searchable external integrations through their canonical sidebar action', async () => {

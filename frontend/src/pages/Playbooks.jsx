@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useContext } from 'react';
 import {
   FileText, Plus, Edit, Trash2, Check, GripVertical,
   Copy, X, Power, PowerOff, Target, ListChecks,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { AuthContext } from '../appContexts';
 
 const STAGES = [
   { value: 'lead',      label: 'Lead',      color: '#94a3b8' },
@@ -14,8 +15,36 @@ const STAGES = [
   { value: 'lost',      label: 'Lost',      color: '#ef4444' },
 ];
 
-function stageMeta(stage) {
-  return STAGES.find((s) => s.value === stage) || { value: stage, label: stage, color: '#64748b' };
+function resolveConfiguredStageValue(stage, stageOptions) {
+  if (stageOptions.some((option) => option.value === stage)) return stage;
+  const aliases = {
+    lead: ['new-lead', 'new'],
+    contacted: ['contacted', 'contracted'],
+    contracted: ['contracted', 'contacted'],
+    proposal: ['proposal-sent', 'proposal'],
+    'proposal-sent': ['proposal-sent', 'proposal'],
+    won: ['won', 'closed-won'],
+    lost: ['lost', 'closed-lost'],
+    'closed-won': ['closed-won', 'won'],
+    'closed-lost': ['closed-lost', 'lost'],
+  };
+  return (aliases[stage] || []).find((value) => stageOptions.some((option) => option.value === value)) || stage;
+}
+
+function stageMeta(stage, stageOptions = STAGES) {
+  const resolvedStage = resolveConfiguredStageValue(stage, stageOptions);
+  return stageOptions.find((s) => s.value === resolvedStage) || { value: stage, label: stage, color: '#64748b' };
+}
+
+function normalizeStageOptions(stageData) {
+  const seen = new Set();
+  return (Array.isArray(stageData) ? stageData : []).flatMap((stage) => {
+    const label = String(stage?.name || stage?.label || stage?.title || '').trim();
+    const value = label.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+    if (!value || seen.has(value)) return [];
+    seen.add(value);
+    return [{ value, label, color: stage?.color || '#64748b' }];
+  });
 }
 
 // Theme-aware surfaces: every background/border/text here resolves through
@@ -58,8 +87,8 @@ const buttonStyle = (variant = 'primary') => {
   };
 };
 
-function StageBadge({ stage }) {
-  const m = stageMeta(stage);
+function StageBadge({ stage, stageOptions }) {
+  const m = stageMeta(stage, stageOptions);
   return (
     <span style={{
       padding: '0.2rem 0.6rem', borderRadius: '999px', fontSize: '0.72rem',
@@ -73,6 +102,8 @@ const EMPTY_FORM = { name: '', stage: 'lead', steps: [{ title: '', description: 
 
 export default function Playbooks() {
   const notify = useNotify();
+  const { tenant } = useContext(AuthContext) || {};
+  const isGeneric = tenant?.vertical === 'generic';
   const [playbooks, setPlaybooks] = useState([]);
   const [stats, setStats] = useState(null);
   const [stageFilter, setStageFilter] = useState('');
@@ -86,15 +117,33 @@ export default function Playbooks() {
   const [deals, setDeals] = useState([]);
   const [selectedDealId, setSelectedDealId] = useState('');
   const [dealPlaybooks, setDealPlaybooks] = useState([]);
+  const [stageOptions, setStageOptions] = useState(isGeneric ? [] : STAGES);
 
   useEffect(() => { loadAll(); }, []);
   useEffect(() => { loadPlaybooks(); }, [stageFilter]);
   useEffect(() => { if (selectedDealId) loadDealPlaybooks(); }, [selectedDealId]);
+  useEffect(() => {
+    if (!isGeneric || !editorOpen || stageOptions.length === 0) return;
+    const resolvedStage = form.stage
+      ? resolveConfiguredStageValue(form.stage, stageOptions)
+      : stageOptions[0].value;
+    if (resolvedStage !== form.stage) setForm((current) => ({ ...current, stage: resolvedStage }));
+  }, [editorOpen, form.stage, isGeneric, stageOptions]);
 
   const loadAll = async () => {
     setLoading(true);
-    await Promise.all([loadPlaybooks(), loadStats(), loadDeals()]);
+    await Promise.all([loadPlaybooks(), loadStats(), loadDeals(), ...(isGeneric ? [loadStageOptions()] : [])]);
     setLoading(false);
+  };
+
+  const loadStageOptions = async () => {
+    try {
+      const data = await fetchApi('/api/pipeline_stages');
+      setStageOptions(normalizeStageOptions(data));
+    } catch (err) {
+      console.error('loadStageOptions', err);
+      setStageOptions([]);
+    }
   };
 
   const loadPlaybooks = async () => {
@@ -136,7 +185,7 @@ export default function Playbooks() {
 
   const openCreate = () => {
     setEditing(null);
-    setForm({ ...EMPTY_FORM, steps: [{ title: '', description: '' }] });
+    setForm({ ...EMPTY_FORM, stage: isGeneric ? (stageOptions[0]?.value || '') : EMPTY_FORM.stage, steps: [{ title: '', description: '' }] });
     setEditorOpen(true);
   };
 
@@ -144,7 +193,9 @@ export default function Playbooks() {
     setEditing(pb);
     setForm({
       name: pb.name || '',
-      stage: pb.stage || 'lead',
+      stage: isGeneric
+        ? resolveConfiguredStageValue(pb.stage || '', stageOptions)
+        : (pb.stage || 'lead'),
       steps: (pb.steps && pb.steps.length ? pb.steps : [{ title: '', description: '' }])
         .map((s) => ({ title: s.title || '', description: s.description || '' })),
       isActive: !!pb.isActive,
@@ -247,6 +298,14 @@ export default function Playbooks() {
   };
 
   const filteredPlaybooks = useMemo(() => playbooks, [playbooks]);
+  const editorStageOptions = useMemo(() => {
+    const resolvedStage = isGeneric ? resolveConfiguredStageValue(form.stage, stageOptions) : form.stage;
+    if (!editing || !form.stage || stageOptions.some((stage) => stage.value === resolvedStage)) return stageOptions;
+    return [...stageOptions, stageMeta(form.stage, stageOptions)];
+  }, [editing, form.stage, isGeneric, stageOptions]);
+  const editorInputStyle = isGeneric
+    ? { ...inputStyle, background: '#fff', color: '#111827', colorScheme: 'light' }
+    : inputStyle;
 
   return (
     <div style={{ padding: '2rem', color: 'var(--text-primary, #e2e8f0)' }}>
@@ -300,7 +359,7 @@ export default function Playbooks() {
         <select value={stageFilter} onChange={(e) => setStageFilter(e.target.value)}
           style={{ ...inputStyle, width: 'auto', minWidth: '180px' }}>
           <option value="">All stages</option>
-          {STAGES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+          {stageOptions.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
       </div>
 
@@ -322,7 +381,7 @@ export default function Playbooks() {
                   <div style={{ fontWeight: 700, fontSize: '1.05rem', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {pb.name}
                   </div>
-                  <div style={{ marginTop: '0.4rem' }}><StageBadge stage={pb.stage} /></div>
+                  <div style={{ marginTop: '0.4rem' }}><StageBadge stage={pb.stage} stageOptions={stageOptions} /></div>
                 </div>
                 <button
                   onClick={() => toggleActive(pb)}
@@ -399,7 +458,7 @@ export default function Playbooks() {
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem', gap: '0.5rem', flexWrap: 'wrap' }}>
                       <div style={{ fontWeight: 700 }}>{playbook.name}</div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <StageBadge stage={playbook.stage} />
+                        <StageBadge stage={playbook.stage} stageOptions={stageOptions} />
                         <span style={{
                           fontSize: '0.8rem', fontWeight: 700, color: '#10b981',
                           background: 'rgba(16,185,129,0.12)', padding: '0.2rem 0.55rem',
@@ -476,10 +535,11 @@ export default function Playbooks() {
           backdropFilter: 'blur(6px)', display: 'flex', alignItems: 'center', justifyContent: 'center',
           zIndex: 1000, padding: '1rem',
         }} onClick={closeEditor}>
-          <div onClick={(e) => e.stopPropagation()} style={{
-            background: 'var(--surface-color, rgba(15,23,42,0.95))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
+          <div data-testid="playbook-editor-surface" onClick={(e) => e.stopPropagation()} style={{
+            background: isGeneric ? '#fff' : 'var(--surface-color, rgba(15,23,42,0.95))', border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
             borderRadius: '14px', width: '100%', maxWidth: '640px', maxHeight: '90vh',
-            overflow: 'auto', padding: '1.5rem', colorScheme: 'light dark',
+            overflow: 'auto', padding: '1.5rem', colorScheme: isGeneric ? 'light' : 'light dark',
+            opacity: 1, backdropFilter: 'none', WebkitBackdropFilter: 'none',
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
               <h2 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 700 }}>
@@ -492,17 +552,21 @@ export default function Playbooks() {
 
             <div style={{ display: 'grid', gap: '0.85rem' }}>
               <div>
-                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>Name</label>
-                <input style={inputStyle} value={form.name}
+                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>
+                  Name{isGeneric && <span aria-hidden="true" className="required-mark" style={{ color: 'var(--danger-color, #ef4444)', marginLeft: '0.2rem' }}>*</span>}
+                </label>
+                <input style={editorInputStyle} value={form.name}
                   onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                   placeholder="e.g., Discovery Call Playbook" />
               </div>
 
               <div>
-                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>Stage</label>
-                <select style={inputStyle} value={form.stage}
+                <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.3rem' }}>
+                  Stage{isGeneric && <span aria-hidden="true" className="required-mark" style={{ color: 'var(--danger-color, #ef4444)', marginLeft: '0.2rem' }}>*</span>}
+                </label>
+                <select aria-label="Stage" style={editorInputStyle} value={form.stage}
                   onChange={(e) => setForm((f) => ({ ...f, stage: e.target.value }))}>
-                  {STAGES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+                  {editorStageOptions.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
                 </select>
               </div>
 
@@ -516,7 +580,9 @@ export default function Playbooks() {
 
               <div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                  <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Steps (drag to reorder)</label>
+                  <label style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                    Steps (drag to reorder){isGeneric && <span aria-hidden="true" className="required-mark" style={{ color: 'var(--danger-color, #ef4444)', marginLeft: '0.2rem' }}>*</span>}
+                  </label>
                   <button style={buttonStyle('secondary')} onClick={addStep}>
                     <Plus size={14} /> Add Step
                   </button>
@@ -531,7 +597,7 @@ export default function Playbooks() {
                       onDrop={() => onDrop(idx)}
                       style={{
                         display: 'flex', gap: '0.5rem', alignItems: 'flex-start',
-                        background: 'var(--surface-hover, rgba(15,23,42,0.6))',
+                        background: isGeneric ? '#fff' : 'var(--surface-hover, rgba(15,23,42,0.6))',
                         border: '1px solid var(--border-color, rgba(255,255,255,0.08))',
                         borderRadius: '8px', padding: '0.6rem',
                       }}>
@@ -539,10 +605,10 @@ export default function Playbooks() {
                         <GripVertical size={16} />
                       </div>
                       <div style={{ flex: 1, display: 'grid', gap: '0.4rem' }}>
-                        <input style={inputStyle} placeholder={`Step ${idx + 1} title`}
+                        <input style={editorInputStyle} placeholder={`Step ${idx + 1} title`}
                           value={step.title}
                           onChange={(e) => updateStep(idx, 'title', e.target.value)} />
-                        <textarea style={{ ...inputStyle, minHeight: '50px', resize: 'vertical' }}
+                        <textarea style={{ ...editorInputStyle, minHeight: '50px', resize: 'vertical' }}
                           placeholder="Description (optional)"
                           value={step.description}
                           onChange={(e) => updateStep(idx, 'description', e.target.value)} />

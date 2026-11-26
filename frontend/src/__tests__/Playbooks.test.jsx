@@ -47,8 +47,9 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
+import { AuthContext } from '../appContexts';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -105,6 +106,14 @@ const sampleDeals = [
   { id: 'd-2', title: 'Globex Expansion', stage: 'proposal' },
 ];
 
+const samplePipelineStages = [
+  { id: 21, name: 'New Lead', color: '#4f6df5', position: 0 },
+  { id: 22, name: 'Contracted', color: '#f59e0b', position: 1 },
+  { id: 23, name: 'Proposal Sent', color: '#a855f7', position: 2 },
+  { id: 24, name: 'Negotiation', color: '#ec4899', position: 3 },
+  { id: 25, name: 'Closed Won', color: '#10b981', position: 4 },
+];
+
 const sampleDealPlaybooks = [
   {
     playbook: {
@@ -126,6 +135,7 @@ function defaultMock(url, _opts) {
   }
   if (url === '/api/playbooks/stats') return Promise.resolve(sampleStats);
   if (url === '/api/deals') return Promise.resolve(sampleDeals);
+  if (url === '/api/pipeline_stages') return Promise.resolve(samplePipelineStages);
   if (url.startsWith('/api/playbooks/deal/')) return Promise.resolve(sampleDealPlaybooks);
   return Promise.resolve(null);
 }
@@ -135,6 +145,16 @@ function renderPlaybooks() {
     <MemoryRouter>
       <Playbooks />
     </MemoryRouter>
+  );
+}
+
+function renderGenericPlaybooks() {
+  return render(
+    <AuthContext.Provider value={{ tenant: { id: 1, vertical: 'generic' } }}>
+      <MemoryRouter>
+        <Playbooks />
+      </MemoryRouter>
+    </AuthContext.Provider>
   );
 }
 
@@ -250,6 +270,42 @@ describe('<Playbooks /> — page surface', () => {
     expect(screen.getByPlaceholderText(/Step 1 title/i)).toBeInTheDocument();
   });
 
+  it('Generic CRM uses the complete dynamic stage library and an opaque white editor surface', async () => {
+    renderGenericPlaybooks();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/pipeline_stages'));
+
+    const filterSelect = screen.getByDisplayValue('All stages');
+    expect(Array.from(filterSelect.options).map((option) => option.textContent)).toEqual([
+      'All stages', 'New Lead', 'Contracted', 'Proposal Sent', 'Negotiation', 'Closed Won',
+    ]);
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Playbook/i }));
+    const stageSelect = await screen.findByRole('combobox', { name: 'Stage' });
+    expect(stageSelect).toHaveValue('new-lead');
+    expect(within(stageSelect).getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'New Lead', 'Contracted', 'Proposal Sent', 'Negotiation', 'Closed Won',
+    ]);
+    expect(within(stageSelect).queryByRole('option', { name: 'Lead' })).not.toBeInTheDocument();
+    expect(within(stageSelect).queryByRole('option', { name: 'Proposal' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('playbook-editor-surface')).toHaveStyle({
+      background: '#fff',
+      opacity: '1',
+      backdropFilter: 'none',
+    });
+    expect(screen.getByTestId('playbook-editor-surface').querySelectorAll('.required-mark')).toHaveLength(3);
+  });
+
+  it('shows required-field asterisks only for generic CRM', async () => {
+    renderPlaybooks();
+    await waitFor(() => expect(screen.getByText('Discovery Call Playbook')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Create Playbook/i }));
+
+    await screen.findByTestId('playbook-editor-surface');
+    expect(document.querySelectorAll('.required-mark')).toHaveLength(0);
+  });
+
+
   it('validation: saving with empty name surfaces "Name is required" notify.error', async () => {
     renderPlaybooks();
     await waitFor(() => expect(screen.getByText('Discovery Call Playbook')).toBeInTheDocument());
@@ -341,6 +397,19 @@ describe('<Playbooks /> — page surface', () => {
         { title: 'Kickoff call', description: '', order: 0 },
       ]);
     });
+  });
+
+  it('Generic CRM maps a legacy lead playbook to the configured New Lead stage', async () => {
+    renderGenericPlaybooks();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/pipeline_stages'));
+    await screen.findByText('Discovery Call Playbook');
+
+    fireEvent.click(screen.getAllByRole('button', { name: /^\s*Edit\s*$/i })[0]);
+    const stageSelect = await screen.findByRole('combobox', { name: 'Stage' });
+
+    expect(stageSelect).toHaveValue('new-lead');
+    expect(within(stageSelect).getByRole('option', { name: 'New Lead' })).toBeInTheDocument();
+    expect(within(stageSelect).queryByRole('option', { name: /^lead$/i })).not.toBeInTheDocument();
   });
 
   it('edit flow: clicking Edit opens "Edit Playbook" modal pre-filled and PUTs on save', async () => {

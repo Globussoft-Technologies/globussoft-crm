@@ -83,9 +83,11 @@ describe('filterSidebarPages', () => {
     expect(getGenericAccessByPath('/settings')).toMatchObject({ requiredPermission: { module: 'settings', action: 'read' } });
     expect(genericRoleGuardProps('/settings')).toEqual({ requiredPermission: { module: 'settings', action: 'read' } });
     expect(genericRoleGuardProps('/data-import-export')).toEqual({
-      requiredPermission: { module: 'settings', action: 'manage' },
+      requiredPermission: { module: 'data_import_export', action: 'read' },
     });
-    expect(genericRoleGuardProps('/revenue-goals')).toEqual({});
+    expect(genericRoleGuardProps('/revenue-goals')).toEqual({
+      requiredPermission: { module: 'revenue_goals', action: 'read' },
+    });
     expect(getGenericAccessForLocation('/settings/lead-capture')?.path).toBe('/settings');
     expect(getGenericAccessForLocation('/settings/roles')?.path).toBe('/settings/roles');
 
@@ -112,6 +114,17 @@ describe('filterSidebarPages', () => {
     })).toBe(true);
   });
 
+  it('uses separate matching permissions for Deals and Pipelines', () => {
+    expect(getGenericAccessByPath('/pipeline')).toMatchObject({
+      label: 'Deals',
+      requiredPermission: { module: 'deals', action: 'read' },
+    });
+    expect(getGenericAccessByPath('/pipelines')).toMatchObject({
+      label: 'Pipelines',
+      requiredPermission: { module: 'pipeline', action: 'write' },
+    });
+  });
+
   it('uses canonical permissions for forms, calendar, and document templates', () => {
     expect(genericRoleGuardProps('/forms')).toEqual({
       requiredPermission: { module: 'web_forms', action: 'read' },
@@ -126,7 +139,7 @@ describe('filterSidebarPages', () => {
       requiredPermission: { module: 'transport_workspace', action: 'read' },
     });
     expect(genericRoleGuardProps('/sales-workspace')).toEqual({
-      requiredPermission: { module: 'broker_workspace', action: 'read' },
+      requiredPermission: { module: 'site_visits', action: 'read' },
     });
   });
 
@@ -141,12 +154,14 @@ describe('filterSidebarPages', () => {
       expect.objectContaining({ id: 'callified', actionTarget: '[data-tour-feature="callified"]' }),
     ]));
     expect(manager.some((page) => page.path === '/commissions')).toBe(true);
-    expect(getGenericSidebarPages({ isAdmin: false, isManager: false, permissionsReady: true, hasPermission: () => true }).some((page) => page.path === '/commissions')).toBe(false);
-    expect(manager).not.toContainEqual(expect.objectContaining({ path: '/workflows' }));
-    expect(genericRoleGuardProps('/workflows')).toEqual({});
+    expect(getGenericSidebarPages({ isAdmin: false, isManager: false, permissionsReady: true, hasPermission: () => true }).some((page) => page.path === '/commissions')).toBe(true);
+    expect(manager).toContainEqual(expect.objectContaining({ path: '/workflows' }));
+    expect(genericRoleGuardProps('/workflows')).toEqual({
+      requiredPermission: { module: 'workflows', action: 'read' },
+    });
   });
 
-  it('keeps Field Config in Generic admin search only and respects tenant page visibility', () => {
+  it('uses the Field Config permission and respects tenant page visibility', () => {
     const hasPermission = () => true;
     const adminPages = getGenericSidebarPages({ isAdmin: true, isManager: true, permissionsReady: true, hasPermission });
     const userPages = getGenericSidebarPages({ isAdmin: false, isManager: false, permissionsReady: true, hasPermission });
@@ -158,7 +173,7 @@ describe('filterSidebarPages', () => {
       hiddenPagePaths: ['/field-config'],
     });
     expect(adminPages.some((page) => page.path === '/field-config')).toBe(true);
-    expect(userPages.some((page) => page.path === '/field-config')).toBe(false);
+    expect(userPages.some((page) => page.path === '/field-config')).toBe(true);
     expect(hiddenPages.some((page) => page.path === '/field-config')).toBe(false);
   });
 
@@ -334,6 +349,7 @@ describe('filterSidebarPages', () => {
       '/travel/religious-packets',
       '/travel/curriculum-mappings',
       '/travel/school-terms',
+      '/travel/email-automation',
       '/travel/brochures',
       '/travel/forms',
       '/travel/meeting-forms',

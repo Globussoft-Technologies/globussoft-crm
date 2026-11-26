@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { readFileSync } from 'fs';
+import path from 'path';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -472,6 +474,10 @@ describe('ContactDetail — current profile contract', () => {
       method: 'PATCH',
       body: JSON.stringify({ status: 'Unqualified', lifecycleStageKey: 'unqualified', lifecycleTransitionReason: 'Duplicate enquiry' }),
     })));
+
+    await waitFor(() => expect(within(pipeline).getByRole('button', { name: /Qualified \/ Lost/ })).toBeDisabled());
+    expect(within(pipeline).getByRole('button', { name: /Won \/ Churned/ })).toBeDisabled();
+    expect(within(pipeline).getByRole('button', { name: 'Unqualified' })).toBeEnabled();
   });
 
   it('asks for confirmation before moving a Generic CRM lead backward', async () => {
@@ -717,6 +723,7 @@ describe('ContactDetail — current profile contract', () => {
     const profile = await getProfile();
 
     fireEvent.click(profile.getByRole('button', { name: 'Contact details' }));
+    fireEvent.click(profile.getByRole('checkbox', { name: 'Show empty fields' }));
 
     expect(profile.getByText('Page URL')).toBeInTheDocument();
     expect(profile.getByText('https://example.com/pricing')).toBeInTheDocument();
@@ -880,12 +887,89 @@ describe('ContactDetail — current profile contract', () => {
     const editor = within(dialog).getByRole('textbox', { name: 'Note content' });
     await user.type(editor, 'Follow up tomorrow');
 
+    expect(within(dialog).getByText('Lead:')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Contact:')).toBeNull();
     expect(editor).toHaveTextContent('Follow up tomorrow');
     expect(editor).toHaveFocus();
+  });
+
+  it.each(['wellness', 'travel'])('keeps the Contact label in the %s note composer', async (vertical) => {
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({ vertical });
+    const profile = await getProfile();
+
+    fireEvent.click(profile.getByRole('button', { name: /^Note$/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add note' });
+
+    expect(within(dialog).getByText('Contact:')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Lead:')).toBeNull();
   });
 });
 
 describe('Generic CRM contact details', () => {
+  it('hides empty fields by default and lets the user show them', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/lead-custom-fields') return Promise.resolve([]);
+      if (url === '/api/contacts/tags') return Promise.resolve({ tags: [] });
+      return Promise.resolve({});
+    });
+
+    render(
+      <AuthContext.Provider value={{ tenant: { vertical: 'generic' } }}>
+        <ContactDetailsDrawer inline genericTagsEnabled contact={BASE_CONTACT} />
+      </AuthContext.Provider>,
+    );
+
+    const showEmptyToggle = await screen.findByRole('checkbox', { name: 'Show empty fields' });
+    expect(showEmptyToggle).not.toBeChecked();
+    expect(screen.queryByText('External ID')).toBeNull();
+
+    fireEvent.click(showEmptyToggle);
+
+    expect(showEmptyToggle).toBeChecked();
+    expect(screen.getByText('External ID')).toBeInTheDocument();
+  });
+
+  it('keeps an empty section header visible until empty fields are shown', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/lead-custom-fields') return Promise.resolve([]);
+      if (url === '/api/contacts/tags') return Promise.resolve({ tags: [] });
+      return Promise.resolve({});
+    });
+
+    render(
+      <AuthContext.Provider value={{ tenant: { vertical: 'generic' } }}>
+        <ContactDetailsDrawer inline genericTagsEnabled contact={BASE_CONTACT} />
+      </AuthContext.Provider>,
+    );
+
+    fireEvent.click(await screen.findByRole('tab', { name: 'UTM Tracker' }));
+
+    expect(screen.getByRole('button', { name: 'Collapse UTM Tracker' })).toBeInTheDocument();
+    expect(screen.getByText('No data available')).toBeInTheDocument();
+    expect(screen.queryByText('UTM Campaign')).toBeNull();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Show empty fields' }));
+
+    expect(screen.queryByText('No data available')).toBeNull();
+    expect(screen.getByText('UTM Campaign')).toBeInTheDocument();
+  });
+
+  it.each(['wellness', 'travel'])('keeps empty fields visible by default for %s CRM', async (vertical) => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/lead-custom-fields') return Promise.resolve([]);
+      return Promise.resolve({});
+    });
+
+    render(
+      <AuthContext.Provider value={{ tenant: { vertical } }}>
+        <ContactDetailsDrawer inline contact={BASE_CONTACT} />
+      </AuthContext.Provider>,
+    );
+
+    expect(await screen.findByRole('checkbox', { name: 'Show empty fields' })).toBeChecked();
+  });
+
   it('opens the eight-option Status dropdown from New and persists its canonical value', async () => {
     const saveField = vi.fn().mockResolvedValue(undefined);
     fetchApiMock.mockImplementation((url) => {
@@ -988,6 +1072,41 @@ describe('Generic CRM contact details', () => {
     expect(screen.getByText('October Lead Form')).toBeInTheDocument();
     expect(screen.getByText('SEO')).toBeInTheDocument();
     expect(screen.getByText('https://example.com/offer')).toBeInTheDocument();
+  });
+
+  it('wraps long generic tracking values inside their field instead of overlapping adjacent data', async () => {
+    const longCampaign = 'TEST_ONLY_CAMPAIGN_20261123_WITH_A_VERY_LONG_UNBROKEN_PROVIDER_IDENTIFIER';
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/lead-custom-fields') return Promise.resolve([]);
+      if (url === '/api/contacts/tags') return Promise.resolve({ tags: [] });
+      return Promise.resolve({});
+    });
+
+    render(
+      <AuthContext.Provider value={{ tenant: { vertical: 'generic' } }}>
+        <ContactDetailsDrawer
+          inline
+          genericTagsEnabled
+          contact={{
+            ...BASE_CONTACT,
+            webFormSubmissions: [{
+              id: 93,
+              payloadJson: JSON.stringify({ _meta: { tracking: { utm_campaign: longCampaign } } }),
+            }],
+          }}
+        />
+      </AuthContext.Provider>,
+    );
+
+    const value = await screen.findByText(longCampaign);
+    const css = readFileSync(path.resolve(__dirname, '../components/contact/ContactDetailsDrawer.css'), 'utf8');
+    const genericValueRule = css.match(/\.cd-generic-sections \.cd-filled-value\s*\{([^}]*)\}/)?.[1] || '';
+
+    expect(value).toHaveClass('cd-filled-value');
+    expect(value.closest('.cd-generic-sections')).not.toBeNull();
+    expect(genericValueRule).toMatch(/white-space:\s*normal/);
+    expect(genericValueRule).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(genericValueRule).toMatch(/word-break:\s*break-word/);
   });
 
   it('selects an existing tag and creates a new tag without duplicates', async () => {

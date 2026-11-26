@@ -62,6 +62,7 @@ vi.mock('../utils/notify', () => ({
 }));
 
 import Pipelines from '../pages/Pipelines';
+import { AuthContext } from '../appContexts';
 
 const samplePipelines = [
   {
@@ -87,6 +88,11 @@ const samplePipelines = [
   },
 ];
 
+const sampleStages = [
+  { id: 21, name: 'New Lead', color: '#3b82f6', position: 0 },
+  { id: 22, name: 'Qualified', color: '#10b981', position: 1 },
+];
+
 function defaultFetchMock(url, opts) {
   if (url === '/api/pipelines' && (!opts || !opts.method || opts.method === 'GET')) {
     return Promise.resolve(samplePipelines);
@@ -101,6 +107,18 @@ function defaultFetchMock(url, opts) {
     return Promise.resolve({ ok: true });
   }
   if (/^\/api\/pipelines\/\d+\/set-default$/.test(url) && opts?.method === 'POST') {
+    return Promise.resolve({ ok: true });
+  }
+  if (url === '/api/pipeline_stages' && (!opts || !opts.method || opts.method === 'GET')) {
+    return Promise.resolve(sampleStages);
+  }
+  if (url === '/api/pipeline_stages' && opts?.method === 'POST') {
+    return Promise.resolve({ id: 23, ...JSON.parse(opts.body || '{}') });
+  }
+  if (url === '/api/pipeline_stages/reorder' && opts?.method === 'PUT') {
+    return Promise.resolve(null);
+  }
+  if (/^\/api\/pipeline_stages\/\d+$/.test(url) && opts?.method === 'DELETE') {
     return Promise.resolve({ ok: true });
   }
   return Promise.resolve(null);
@@ -120,9 +138,11 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
   it('renders the heading + Create Pipeline header button', async () => {
     render(<Pipelines />);
     expect(await screen.findByRole('heading', { name: /Sales Pipelines/i })).toBeInTheDocument();
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/pipelines/ensure-default', { method: 'POST' });
     // Header CTA — there are two "Create Pipeline" buttons total (header +
     // empty-state); on the populated path only the header one renders.
     expect(screen.getByRole('button', { name: /Create Pipeline/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Remove Default/i })).not.toBeInTheDocument();
   });
 
   it('initial mount fires GET /api/pipelines exactly once and renders one card per row', async () => {
@@ -144,6 +164,118 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
       ([u, o]) => u === '/api/pipelines' && (!o || !o.method || o.method === 'GET'),
     );
     expect(getCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('disables the pipeline-card hover effect only in Generic CRM', async () => {
+    const genericView = render(<Pipelines />);
+    const genericCard = (await screen.findByText('Enterprise Sales')).closest('.card');
+    expect(genericCard).toHaveClass('generic-pipeline-card');
+    expect(genericView.container.querySelector('style')?.textContent).toContain('.generic-pipeline-card:hover');
+    expect(genericView.container.querySelector('style')?.textContent).toContain('box-shadow: none !important');
+    expect(genericView.container.querySelector('style')?.textContent).toContain('transition: none !important');
+
+    genericView.unmount();
+    render(
+      <AuthContext.Provider value={{ tenant: { vertical: 'travel' } }}>
+        <Pipelines />
+      </AuthContext.Provider>,
+    );
+    const travelCard = (await screen.findByText('Enterprise Sales')).closest('.card');
+    expect(travelCard).not.toHaveClass('generic-pipeline-card');
+  });
+
+  it('opens the global Pipeline Stages manager from View all stages', async () => {
+    render(<Pipelines />);
+    await screen.findByText('Enterprise Sales');
+    expect(screen.queryByRole('heading', { name: 'Pipeline Stages' })).not.toBeInTheDocument();
+    const stagesButton = screen.getByRole('button', { name: 'View all stages' });
+    expect(stagesButton.closest('header')).not.toBeNull();
+    fireEvent.click(stagesButton);
+    const stagesDialog = await screen.findByRole('dialog', { name: 'Pipeline stages' });
+    expect(stagesDialog).toBeInTheDocument();
+    expect(stagesDialog.style.background).toBe('');
+    expect(stagesDialog.style.backdropFilter).toBe('');
+    expect(stagesDialog.querySelectorAll('.card')).toHaveLength(1);
+    const stageManager = stagesDialog.querySelector('.pipelines-stage-manager');
+    expect(stageManager).toHaveStyle({ background: 'var(--modal-bg, #fff)', opacity: '1', backdropFilter: 'none' });
+    expect(stageManager).toHaveStyle({ height: '100%', display: 'flex', overflow: 'hidden' });
+    expect(screen.getByTestId('generic-pipeline-stage-list')).toHaveStyle({ overflowY: 'auto', minHeight: '0' });
+    expect(document.body).toHaveStyle({ overflow: 'hidden' });
+    expect(screen.queryByText('All pipeline stages')).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Pipeline Stages' })).toBeInTheDocument();
+    expect(await screen.findByText('New Lead')).toBeInTheDocument();
+    const addStageForm = screen.getByRole('textbox', { name: 'New pipeline stage name' }).closest('form');
+    expect(addStageForm.compareDocumentPosition(screen.getByText('New Lead')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText('Qualified')).toBeInTheDocument();
+    expect(screen.getByText('Position 1')).toBeInTheDocument();
+    expect(screen.getByText('Position 2')).toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(([url]) => url === '/api/pipeline_stages')).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Close pipeline stages' }));
+    expect(screen.queryByRole('dialog', { name: 'Pipeline stages' })).not.toBeInTheDocument();
+    expect(document.body.style.overflow).toBe('');
+  });
+
+  it('keeps the existing inline stage manager outside Generic CRM', async () => {
+    render(
+      <AuthContext.Provider value={{ tenant: { vertical: 'travel' } }}>
+        <Pipelines />
+      </AuthContext.Provider>,
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Pipeline Stages' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'View all stages' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Pipeline stages' })).not.toBeInTheDocument();
+    const firstStage = await screen.findByText('New Lead');
+    const addStageForm = screen.getByRole('textbox', { name: 'New pipeline stage name' }).closest('form');
+    expect(firstStage.compareDocumentPosition(addStageForm) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.change(screen.getByRole('textbox', { name: 'New pipeline stage name' }), { target: { value: 'Travel Follow-up' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add Stage' }));
+    await waitFor(() => expect(fetchApiMock.mock.calls.some(([url, opts]) => (
+      url === '/api/pipeline_stages' && opts?.method === 'POST'
+    ))).toBe(true));
+    expect(notifySuccess).not.toHaveBeenCalled();
+  });
+
+  it('adds a stage with the existing API contract and refreshes the stage list', async () => {
+    render(<Pipelines />);
+    await screen.findByText('Enterprise Sales');
+    fireEvent.click(screen.getByRole('button', { name: 'View all stages' }));
+    await screen.findByText('New Lead');
+    fireEvent.change(screen.getByRole('textbox', { name: 'New pipeline stage name' }), { target: { value: 'Negotiation' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add Stage' }));
+
+    await waitFor(() => {
+      const post = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/pipeline_stages' && opts?.method === 'POST');
+      expect(JSON.parse(post[1].body)).toEqual({ name: 'Negotiation', color: '#3b82f6', position: 2 });
+    });
+    await waitFor(() => {
+      const gets = fetchApiMock.mock.calls.filter(([url, opts]) => url === '/api/pipeline_stages' && (!opts || !opts.method || opts.method === 'GET'));
+      expect(gets.length).toBeGreaterThanOrEqual(2);
+    });
+    expect(notifySuccess).toHaveBeenCalledWith('Stage added successfully');
+  });
+
+  it('reorders and deletes stages from the Sales Pipelines page', async () => {
+    render(<Pipelines />);
+    await screen.findByText('Enterprise Sales');
+    fireEvent.click(screen.getByRole('button', { name: 'View all stages' }));
+    await screen.findByText('New Lead');
+
+    expect(screen.getByRole('button', { name: 'Move New Lead up' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Move New Lead down' }));
+    await waitFor(() => {
+      const reorder = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/pipeline_stages/reorder' && opts?.method === 'PUT');
+      expect(JSON.parse(reorder[1].body).stages).toEqual([
+        { id: 22, position: 0 },
+        { id: 21, position: 1 },
+      ]);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete New Lead' }));
+    await waitFor(() => expect(confirmMock).toHaveBeenCalledWith('Delete this pipeline stage?'));
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url, opts]) => url === '/api/pipeline_stages/21' && opts?.method === 'DELETE')).toBe(true);
+    });
   });
 
   it('default-flagged pipeline shows the "Default" badge and hides Set-Default + Delete buttons', async () => {
@@ -187,6 +319,8 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     // Inputs render with placeholders.
     expect(screen.getByPlaceholderText(/e\.g\. Enterprise Sales/i)).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/Describe what this pipeline is for/i)).toBeInTheDocument();
+    expect(await screen.findByText('Add at least one stage.')).toBeInTheDocument();
+    expect(screen.queryByText('Required')).not.toBeInTheDocument();
     // Submit-action button label is "Create Pipeline" (modal footer) — there
     // will be both the header CTA and modal footer CTA bearing that label.
     expect(screen.getAllByRole('button', { name: /Create Pipeline/i }).length).toBeGreaterThanOrEqual(2);
@@ -210,6 +344,22 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     expect(postCall).toBeUndefined();
   });
 
+  it('does not create a Generic pipeline until at least one stage is added', async () => {
+    render(<Pipelines />);
+    await screen.findByText('Enterprise Sales');
+    fireEvent.click(screen.getByRole('button', { name: /Create Pipeline/i }));
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. Enterprise Sales/i), {
+      target: { value: 'Stage-less Pipeline' },
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: /Create Pipeline/i }).at(-1));
+
+    expect(await screen.findByText(/Add at least one stage before creating a pipeline/i)).toBeInTheDocument();
+    expect(fetchApiMock.mock.calls.some(
+      ([url, options]) => url === '/api/pipelines' && options?.method === 'POST',
+    )).toBe(false);
+  });
+
   it('saving a valid Create fires POST /api/pipelines with the form body and then refetches', async () => {
     render(<Pipelines />);
     await screen.findByText('Enterprise Sales');
@@ -221,7 +371,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     fireEvent.change(screen.getByPlaceholderText(/Describe what this pipeline is for/i), {
       target: { value: 'Cold-list AE pursuits' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Add Stage/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /Add Stage/i }).at(-1));
     fireEvent.change(screen.getByPlaceholderText(/Stage name/i), {
       target: { value: 'New Lead' },
     });
@@ -256,12 +406,12 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     await screen.findByText('Enterprise Sales');
     fireEvent.click(screen.getByRole('button', { name: /Create Pipeline/i }));
 
-    const addStageButton = screen.getByRole('button', { name: /Add Stage/i });
+    const addStageButton = screen.getAllByRole('button', { name: /Add Stage/i }).at(-1);
     fireEvent.click(addStageButton);
     fireEvent.click(addStageButton);
     fireEvent.click(addStageButton);
 
-    const stageInputs = screen.getAllByPlaceholderText(/Stage name/i);
+    const stageInputs = screen.getAllByPlaceholderText(/Stage name/i).filter((input) => !input.disabled);
     fireEvent.change(stageInputs[0], { target: { value: 'Stage 1' } });
     fireEvent.change(stageInputs[1], { target: { value: 'Stage 2' } });
     fireEvent.change(stageInputs[2], { target: { value: 'Stage 3' } });
@@ -270,7 +420,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     fireEvent.click(removeButtons[1]);
 
     await waitFor(() => {
-      const remainingInputs = screen.getAllByPlaceholderText(/Stage name/i);
+      const remainingInputs = screen.getAllByPlaceholderText(/Stage name/i).filter((input) => !input.disabled);
       expect(remainingInputs).toHaveLength(2);
       expect(remainingInputs.map((input) => input.value)).toEqual(['Stage 1', 'Stage 3']);
     });
@@ -319,6 +469,95 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     expect(descTextarea.value).toBe('Self-serve + low-touch inbound');
     // Footer button now reads "Save Changes" (not "Create Pipeline").
     expect(screen.getByRole('button', { name: /Save Changes/i })).toBeInTheDocument();
+  });
+
+  it('protects Won and Lost only when editing the Generic CRM default pipeline', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/pipeline_stages?pipelineId=11') return Promise.resolve([
+        { id: 31, name: 'Won', color: '#10b981' },
+        { id: 32, name: 'Lost', color: '#ef4444' },
+        { id: 33, name: 'Review', color: '#3b82f6' },
+      ]);
+      if (url === '/api/pipeline_stages?reusable=true') return Promise.resolve([]);
+      return defaultFetchMock(url, opts);
+    });
+
+    render(<Pipelines />);
+    await screen.findByText('Enterprise Sales');
+    fireEvent.click(screen.getAllByRole('button', { name: /^Edit$/i })[0]);
+    const modal = (await screen.findByRole('heading', { name: 'Edit Pipeline' })).closest('.card');
+    await waitFor(() => expect(within(modal).getAllByText('Required')).toHaveLength(2));
+    expect(within(modal).getAllByRole('button', { name: 'Remove stage' })).toHaveLength(1);
+    expect(within(modal).getByText('Review')).toBeInTheDocument();
+  });
+
+  it('allows Won and Lost to be edited or removed from a non-default Generic CRM pipeline', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/pipeline_stages?pipelineId=12') return Promise.resolve([
+        { id: 31, name: 'Won', color: '#10b981' },
+        { id: 32, name: 'Lost', color: '#ef4444' },
+      ]);
+      if (url === '/api/pipeline_stages?reusable=true') return Promise.resolve([]);
+      return defaultFetchMock(url, opts);
+    });
+
+    render(<Pipelines />);
+    await screen.findByText('Enterprise Sales');
+    fireEvent.click(screen.getAllByRole('button', { name: /^Edit$/i })[1]);
+    const modal = (await screen.findByRole('heading', { name: 'Edit Pipeline' })).closest('.card');
+    await waitFor(() => expect(within(modal).getAllByRole('button', { name: 'Remove stage' })).toHaveLength(2));
+    expect(within(modal).queryByText('Required')).not.toBeInTheDocument();
+    expect(within(modal).getAllByRole('button', { name: 'Edit' })).toHaveLength(2);
+  });
+
+  it('inserts a new Generic CRM stage at the top and persists it as position 0', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/pipeline_stages?pipelineId=12') return Promise.resolve([
+        { id: 21, name: 'Discovery', color: '#3b82f6', position: 0 },
+        { id: 22, name: 'Qualified', color: '#10b981', position: 1 },
+      ]);
+      if (url === '/api/pipeline_stages?reusable=true') return Promise.resolve([
+        { id: 21, name: 'Discovery', color: '#3b82f6' },
+        { id: 22, name: 'Qualified', color: '#10b981' },
+      ]);
+      if (url === '/api/pipeline_stages' && opts?.method === 'POST') {
+        return Promise.resolve({ id: 23, ...JSON.parse(opts.body) });
+      }
+      if (url === '/api/pipeline_stages/reorder' && opts?.method === 'PUT') return Promise.resolve([]);
+      return defaultFetchMock(url, opts);
+    });
+
+    render(<Pipelines />);
+    await screen.findByText('Enterprise Sales');
+    fireEvent.click(screen.getAllByRole('button', { name: /^Edit$/i })[1]);
+    const modal = screen.getByRole('heading', { name: /^Edit Pipeline$/i }).closest('.card');
+    await within(modal).findByText('Discovery');
+
+    fireEvent.click(within(modal).getByRole('button', { name: /Add Stage/i }));
+    const newStageInput = within(modal).getByPlaceholderText('Stage name');
+    expect(newStageInput.compareDocumentPosition(within(modal).getByText('Discovery')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    fireEvent.change(newStageInput, { target: { value: 'Initial Contact' } });
+    fireEvent.click(within(modal).getByRole('button', { name: /Save Changes/i }));
+
+    await waitFor(() => {
+      const createStage = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/pipeline_stages' && opts?.method === 'POST');
+      expect(JSON.parse(createStage[1].body)).toEqual({
+        pipelineId: 12,
+        name: 'Initial Contact',
+        color: '#3b82f6',
+        position: 0,
+      });
+    });
+    const reorder = fetchApiMock.mock.calls.find(([url, opts]) => url === '/api/pipeline_stages/reorder' && opts?.method === 'PUT');
+    expect(JSON.parse(reorder[1].body)).toEqual({
+      pipelineId: 12,
+      stages: [
+        { id: 23, position: 0 },
+        { id: 21, position: 1 },
+        { id: 22, position: 2 },
+      ],
+    });
+    expect(notifySuccess).toHaveBeenCalledWith('Stage added successfully');
   });
 
   it('disables existing-stage selection when every stage is already selected', async () => {

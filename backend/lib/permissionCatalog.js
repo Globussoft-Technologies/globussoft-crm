@@ -36,6 +36,10 @@
  * route-decoration partner-spec by partner-spec.
  */
 
+const {
+  WELLNESS_SIDEBAR_PERMISSION_SPECS,
+} = require('./wellnessSidebarPermissions');
+
 // ─────────────────────────────────────────────────────────────────────
 // COMMON_MODULES — shared by every vertical (generic / wellness / travel).
 // Anything an admin can grant on EVERY tenant goes here.
@@ -103,6 +107,43 @@ const COMMON_MODULES = {
 // Keep this separate from COMMON_MODULES so adding a generic page never
 // changes another vertical's permission matrix.
 const GENERIC_MODULES = {
+  // One independently grantable module per Generic CRM sidebar destination.
+  // Existing shared modules remain the route-level compatibility surface;
+  // these page modules control navigation and page access independently.
+  home: ['read'],
+  adsgpt: ['read'],
+  callified: ['read'],
+  notification_settings: ['read'],
+  lead_reports: ['read', 'write', 'delete', 'export'],
+  field_config: ['read', 'manage'],
+  inbox: ['read', 'write', 'delete', 'export'],
+  landing_sites: ['read', 'write', 'update', 'delete', 'export', 'manage'],
+  web_visitors: ['read', 'export'],
+  commissions: ['read', 'export'],
+  agent_reports: ['read', 'write', 'delete', 'export'],
+  revenue_goals: ['read', 'write', 'delete', 'export'],
+  sales_teams: ['read', 'write', 'update', 'delete', 'manage'],
+  pickup_plot_inventory: ['read', 'write', 'update', 'delete', 'manage'],
+  pickup_inventory: ['read', 'write', 'update', 'delete', 'manage'],
+  customer_workflows: ['read', 'update'],
+  transport_persons: ['read', 'write', 'update', 'delete', 'manage'],
+  sales_executives: ['read', 'write', 'update', 'delete', 'manage'],
+  billing_persons: ['read', 'write', 'update', 'delete', 'manage'],
+  work_assignments: ['read', 'write', 'update', 'delete', 'manage'],
+  site_visits: ['read', 'update'],
+  privacy: ['read', 'manage'],
+  csp_violations: ['read', 'manage'],
+  embed_allowlist: ['read', 'manage'],
+  admin_status: ['read', 'manage'],
+  // `commission_profiles` is also a Travel module. Reusing the key keeps the
+  // permission name stable while each vertical receives only its own catalog.
+  commission_profiles: ['read', 'write', 'update', 'delete', 'manage'],
+  commission_data: ['read', 'export'],
+  channels: ['read', 'write', 'update', 'delete', 'manage'],
+  industry_templates: ['read', 'manage'],
+  currencies: ['read', 'manage'],
+  data_import_export: ['read', 'manage'],
+  zapier: ['read', 'write', 'update', 'delete', 'manage'],
   workflows: ['read', 'write', 'update', 'delete', 'manage'],
   // Pickup/plot operational workspaces. These are deliberately independent
   // of role keys/names: a tenant admin can grant any custom role one or more
@@ -277,6 +318,27 @@ const WELLNESS_MODULES = {
 // requirePermission() per-route.
 // ─────────────────────────────────────────────────────────────────────
 const TRAVEL_MODULES = {
+  // Page-specific Travel sidebar modules. Existing shared modules stay valid
+  // as the route-level compatibility surface, but do not render as extra
+  // Travel permission cards.
+  travel_dashboard: ['read', 'export'],
+  travel_knowledge: ['read', 'write', 'update', 'delete', 'export'],
+  travel_reviews: ['read', 'write', 'update', 'delete'],
+  quote_builder: ['read', 'write', 'update', 'delete', 'export', 'manage'],
+  supplier_credentials: ['read', 'write', 'update', 'delete', 'manage'],
+  brochure_engine: ['read', 'write', 'update', 'delete', 'manage'],
+  email_automation: ['read', 'write', 'update', 'delete', 'manage'],
+  travel_web_forms: ['read', 'write', 'update', 'delete'],
+  meeting_forms: ['read', 'write', 'update', 'delete', 'manage'],
+  landing_pages: ['read', 'write', 'update', 'delete', 'manage'],
+  travel_inbox: ['read', 'write', 'delete', 'export'],
+  travel_calendar: ['read', 'write', 'update', 'delete'],
+  gmail: ['read', 'write', 'delete'],
+  travel_privacy: ['read', 'manage'],
+  brand_kits: ['read', 'write', 'update', 'delete', 'manage'],
+  visa_applications: ['read', 'write', 'update', 'delete', 'manage'],
+  visa_checklists: ['read', 'write', 'update', 'delete', 'manage'],
+  embassy_rules: ['read', 'write', 'update', 'delete', 'manage'],
   // Sales & inbound funnel
   // `inbound_leads` gates the webhook-ingested operator queue at
   // /travel/inbound-leads (#904). Distinct from common `leads` because
@@ -344,6 +406,16 @@ const TRAVEL_MODULES = {
 };
 
 // ─────────────────────────────────────────────────────────────────────
+// Give every Wellness sidebar destination its own permission card while
+// preserving the legacy module's action surface. Ungated personal pages use
+// a read-only card because their visibility is page-level, not API-level.
+for (const [, targetModule, legacyModule, targetAction] of WELLNESS_SIDEBAR_PERMISSION_SPECS) {
+  const sourceActions = legacyModule
+    ? (WELLNESS_MODULES[legacyModule] || COMMON_MODULES[legacyModule] || [targetAction])
+    : [targetAction];
+  WELLNESS_MODULES[targetModule] = [...sourceActions];
+}
+
 // Per-vertical catalogs (what the matrix renders for each tenant type)
 // ─────────────────────────────────────────────────────────────────────
 const PERMISSION_CATALOG_GENERIC = { ...COMMON_MODULES, ...GENERIC_MODULES };

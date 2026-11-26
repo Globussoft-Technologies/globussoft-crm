@@ -690,6 +690,7 @@ const reportsRoutes = require("./routes/reports");
 const developerRoutes = require("./routes/developer");
 const settingsRoutes = require("./routes/settings");
 const googleMapsSettingsRoutes = require("./routes/google_maps_settings");
+const genericEmailProviderRoutes = require("./routes/generic_email_provider");
 // G009 (PRD_TRAVEL_MULTICHANNEL_LEADS FR-3.7) — admin surface for per-channel
 // toggles + cooldowns + Meta form-ID → sub-brand routing mappings. Distinct
 // from the generic settings route above (which owns webhook signing creds).
@@ -1346,6 +1347,7 @@ app.use("/api/landing-sites", landingSitesRoutes);
 app.use("/api/tenants", tenantsRoutes);
 app.use("/api/travel/promotional-website", travelPromotionalWebsiteRoutes);
 app.use("/api/travel/email-provider", travelEmailProviderRoutes);
+app.use("/api/generic/email-provider", genericEmailProviderRoutes);
 app.use("/api/travel/email-automation", travelEmailAutomationRoutes);
 // /api/tenant-settings — operator-writable cap-override surface backing the
 // per-tenant cap pattern (helper at backend/lib/tenantSettings.js). Mounted

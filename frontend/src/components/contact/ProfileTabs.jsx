@@ -426,6 +426,7 @@ export function DealsTab({ contact, refresh, onOpenDeal, isWellness = false, isT
   const total = deals.reduce((n, d) => n + (Number(d.amount) || 0), 0);
   const [savingId, setSavingId] = useState(null);
   const [dealTypeConfigs, setDealTypeConfigs] = useState([]);
+  const [pipelineStagesById, setPipelineStagesById] = useState({});
 
   useEffect(() => {
     if (!isWellness) return undefined;
@@ -445,6 +446,23 @@ export function DealsTab({ contact, refresh, onOpenDeal, isWellness = false, isT
     }).catch(() => { if (active) setDealTypeConfigs([]); });
     return () => { active = false; };
   }, [isGeneric]);
+
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    const pipelineIds = [...new Set((contact.deals || []).map((deal) => deal.pipelineId).filter(Boolean).map(String))];
+    if (!pipelineIds.length) {
+      setPipelineStagesById({});
+      return undefined;
+    }
+    let active = true;
+    Promise.all(pipelineIds.map(async (pipelineId) => {
+      const rows = await fetchApi(`/api/pipeline_stages?pipelineId=${encodeURIComponent(pipelineId)}`, { silent: true }).catch(() => []);
+      return [pipelineId, Array.isArray(rows) ? rows : []];
+    })).then((entries) => {
+      if (active) setPipelineStagesById(Object.fromEntries(entries));
+    });
+    return () => { active = false; };
+  }, [contact.deals, isGeneric]);
 
   if (isWellness) {
     return (
@@ -479,6 +497,10 @@ export function DealsTab({ contact, refresh, onOpenDeal, isWellness = false, isT
   };
   const stagesForDeal = (deal) => {
     if (!isGeneric) return DEAL_STAGES.map((name) => ({ value: name, label: name }));
+    if (deal.pipelineId) {
+      return (pipelineStagesById[String(deal.pipelineId)] || [])
+        .map((stage) => ({ value: dealStageId(stage.name), label: stage.name }));
+    }
     const config = dealTypeConfigs.find((type) => type.name === deal.dealType) || dealTypeConfigs.find((type) => type.isDefault) || dealTypeConfigs[0];
     const stages = Array.isArray(config?.stages) && config.stages.length ? config.stages : DEFAULT_GENERIC_DEAL_STAGES.map((name) => ({ name }));
     return stages.map((stage) => ({ value: stage.id || dealStageId(stage.name), label: stage.name }));

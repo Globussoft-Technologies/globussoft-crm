@@ -21,6 +21,7 @@ const { resolveTenantVertical } = require('../lib/tenantVertical');
 const {
   getTenantPageVisibility,
   filterPagesByTenantVisibility,
+  getAccessibleTenantSidebarPages,
 } = require('../lib/tenantPageVisibility');
 
 function filterPageSearch(pages, rawQuery) {
@@ -82,7 +83,9 @@ router.get('/me', verifyToken, async (req, res) => {
     const visibility = await getTenantPageVisibility(req.user.tenantId, { vertical });
     if (req.user.isOwner) {
       const catalogPages = filterPagesByTenantVisibility(
-        getCatalogForVertical(vertical),
+        vertical === 'wellness'
+          ? getAccessibleTenantSidebarPages(vertical, null, { isOwner: true })
+          : getCatalogForVertical(vertical),
         visibility,
       );
       return res.json({
@@ -92,7 +95,9 @@ router.get('/me', verifyToken, async (req, res) => {
     }
     const perms = await getUserPermissions(req.user.tenantId, req.user.userId);
     const pages = filterPagesByTenantVisibility(
-      getAccessiblePages(perms, { isOwner: false, vertical }),
+      vertical === 'wellness'
+        ? getAccessibleTenantSidebarPages(vertical, perms)
+        : getAccessiblePages(perms, { isOwner: false, vertical }),
       visibility,
     );
     res.json({

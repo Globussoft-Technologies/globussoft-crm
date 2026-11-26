@@ -31,7 +31,7 @@ const INTEGRATIONS = {
   whatsapp: { label: "WhatsApp / Meta", icon: Mail, description: "Connect your organization’s WhatsApp Business account.", category: "Messaging", color: "green" },
   twilio: { label: "Twilio", icon: PhoneCall, description: "Manage your calling and SMS provider configuration.", category: "Communication", color: "rose" },
   maps: { label: "Google Maps", icon: MapPin, description: "Configure maps and location services for your workspace.", category: "Location", color: "amber" },
-  sendgrid: { label: "SendGrid", icon: Mail, description: "Configure your own email account and sender for Travel CRM.", category: "Email delivery", color: "green" },
+  sendgrid: { label: "SendGrid", icon: Mail, description: "Configure your own email delivery account and verified sender.", category: "Email delivery", color: "green" },
 };
 
 const VERTICAL_COPY = {

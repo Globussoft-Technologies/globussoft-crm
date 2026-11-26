@@ -916,7 +916,7 @@ describe('GET /diagnostics/notification-settings', () => {
     const priorKey = process.env.SENDGRID_API_KEY;
     delete process.env.SENDGRID_API_KEY;
     prisma.tenantSetting.findUnique.mockImplementation(({ where }) => (
-      where?.tenantId_key?.key === 'travel.email.sendgrid'
+      ['generic.email.sendgrid', 'travel.email.sendgrid'].includes(where?.tenantId_key?.key)
         ? null
         : { value: JSON.stringify({ recipients: [{ userId: 7, channels: ['db', 'email'] }] }) }
     ));
@@ -937,9 +937,11 @@ describe('GET /diagnostics/notification-settings', () => {
   });
 
   test('drops a saved recipient whose user no longer exists in the tenant', async () => {
-    prisma.tenantSetting.findUnique.mockResolvedValue({
-      value: JSON.stringify({ recipients: [{ userId: 999, channels: ['db'] }] }),
-    });
+    prisma.tenantSetting.findUnique.mockImplementation(({ where }) => (
+      ['generic.email.sendgrid', 'travel.email.sendgrid'].includes(where?.tenantId_key?.key)
+        ? null
+        : { value: JSON.stringify({ recipients: [{ userId: 999, channels: ['db'] }] }) }
+    ));
     prisma.user.findMany.mockResolvedValue([]); // stale id — not found
     const res = await request(makeApp())
       .get('/api/travel/diagnostics/notification-settings?subBrand=tmc')

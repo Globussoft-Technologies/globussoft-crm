@@ -22,6 +22,21 @@ const {
 } = require('../lib/permissionCatalog');
 const { resolveTenantVerticalDetailed } = require('../lib/tenantVertical');
 const { isPermissionAvailableForTenant } = require('../lib/tenantPageVisibility');
+const {
+  GENERIC_SIDEBAR_PERMISSION_SPECS,
+  GENERIC_SIDEBAR_PERMISSION_BY_PATH,
+  GENERIC_SIDEBAR_LEGACY_PERMISSION_BY_PATH,
+} = require('../lib/genericSidebarPermissions');
+const {
+  TRAVEL_SIDEBAR_PERMISSION_SPECS,
+  TRAVEL_SIDEBAR_PERMISSION_BY_PATH,
+  TRAVEL_SIDEBAR_LEGACY_PERMISSION_BY_PATH,
+} = require('../lib/travelSidebarPermissions');
+const {
+  WELLNESS_SIDEBAR_PERMISSION_SPECS,
+  WELLNESS_SIDEBAR_PERMISSION_BY_PATH,
+  WELLNESS_SIDEBAR_LEGACY_PERMISSION_BY_PATH,
+} = require('../lib/wellnessSidebarPermissions');
 
 // REVERTED v3.8.x ADMIN runtime shortcut. Earlier work added a
 // short-circuit that returned the entire catalogue whenever the user
@@ -135,12 +150,68 @@ function isVitestRuntime() {
 function filterPermissionsForVertical(permissions, vertical) {
   if (!vertical) return permissions;
   const catalog = getCatalogForVertical(vertical);
-  return new Set(
+  const filtered = new Set(
     Array.from(permissions).filter((permission) => {
       const [module, action] = permission.split('.');
       return Boolean(catalog[module] && catalog[module].includes(action));
     }),
   );
+  if (vertical === 'wellness') {
+    // Wellness page cards are independent, while existing page controls and
+    // API helpers still ask for their legacy capability names. Add runtime
+    // aliases only to the effective set (never to RolePermission rows), so
+    // internal write/manage buttons keep working after a role is saved with
+    // page-specific grants.
+    for (const [path] of WELLNESS_SIDEBAR_PERMISSION_SPECS) {
+      const target = WELLNESS_SIDEBAR_PERMISSION_BY_PATH[path];
+      const legacy = WELLNESS_SIDEBAR_LEGACY_PERMISSION_BY_PATH[path];
+      if (!target || !legacy) continue;
+      for (const action of catalog[target.module] || []) {
+        if (filtered.has(`${target.module}.${action}`)) {
+          filtered.add(`${legacy.module}.${action}`);
+        }
+      }
+    }
+  }
+  return filtered;
+}
+
+// Generic sidebar cards are intentionally independent, while many existing
+// API routes still use the older shared capability names. Accept a new page
+// grant as an alias only inside route authorization; never add the legacy key
+// to the effective permission Set, because doing so would make sibling sidebar
+// pages visible again and defeat the one-card-per-page split.
+function hasPermissionForRoute(permissions, module, action, vertical) {
+  const requiredKey = `${module}.${action}`;
+  if (permissions.has(requiredKey)) return true;
+  const config = vertical === 'generic'
+    ? {
+        specs: GENERIC_SIDEBAR_PERMISSION_SPECS,
+        targets: GENERIC_SIDEBAR_PERMISSION_BY_PATH,
+        legacy: GENERIC_SIDEBAR_LEGACY_PERMISSION_BY_PATH,
+      }
+    : vertical === 'travel'
+      ? {
+          specs: TRAVEL_SIDEBAR_PERMISSION_SPECS,
+          targets: TRAVEL_SIDEBAR_PERMISSION_BY_PATH,
+          legacy: TRAVEL_SIDEBAR_LEGACY_PERMISSION_BY_PATH,
+        }
+      : vertical === 'wellness'
+        ? {
+            specs: WELLNESS_SIDEBAR_PERMISSION_SPECS,
+            targets: WELLNESS_SIDEBAR_PERMISSION_BY_PATH,
+            legacy: WELLNESS_SIDEBAR_LEGACY_PERMISSION_BY_PATH,
+          }
+        : null;
+  if (!config) return false;
+
+  return config.specs.some(([path]) => {
+    const target = config.targets[path];
+    const legacy = config.legacy[path];
+    if (!target || !legacy || legacy.module !== module) return false;
+    if (permissions.has(`${target.module}.${action}`)) return true;
+    return legacy.action === action && permissions.has(`${target.module}.${target.action}`);
+  });
 }
 
 // Central whitelist of permissions whose routes are safe for CUSTOMER
@@ -505,6 +576,7 @@ function requirePermission(module, action, opts = {}) {
 
       // Load user's merged permissions (with cache)
       let userPermissions;
+      let permissionVertical = null;
       try {
         const verifiedVertical =
           req.travelTenant?.id === req.user.tenantId
@@ -512,10 +584,13 @@ function requirePermission(module, action, opts = {}) {
             : req.permissionTenant?.id === req.user.tenantId
               ? req.permissionTenant.vertical
               : null;
+        permissionVertical = verifiedVertical || (
+          await resolveTenantVerticalDetailed(req.user.tenantId)
+        ).vertical;
         userPermissions = await getUserPermissions(
           req.user.tenantId,
           req.user.userId,
-          verifiedVertical,
+          permissionVertical,
         );
       } catch (err) {
         // Test-mode fallback for fixtures that forgot to mock prisma.userRole.
@@ -541,7 +616,7 @@ function requirePermission(module, action, opts = {}) {
       }
 
       // Check if user has the required permission
-      if (userPermissions.has(requiredPerm)) {
+      if (hasPermissionForRoute(userPermissions, module, action, permissionVertical)) {
         return next();
       }
 
@@ -587,11 +662,18 @@ async function userHasPermission(user, module, action) {
   }
 
   try {
+    const verticalResolution = await resolveTenantVerticalDetailed(user.tenantId);
     const permissions = await getUserPermissions(
       user.tenantId,
       user.userId,
+      verticalResolution.vertical,
     );
-    return permissions.has(`${module}.${action}`);
+    return hasPermissionForRoute(
+      permissions,
+      module,
+      action,
+      verticalResolution.vertical,
+    );
   } catch (err) {
     console.error('[userHasPermission] error:', err);
     return false; // Fail-safe
@@ -708,6 +790,7 @@ function requireAnyPermission(perms, opts = {}) {
         console.error('[requireAnyPermission] tenant page visibility check failed:', visibilityError);
       }
       let userPermissions;
+      let permissionVertical = null;
       try {
         const verifiedVertical =
           req.travelTenant?.id === req.user.tenantId
@@ -715,10 +798,13 @@ function requireAnyPermission(perms, opts = {}) {
             : req.permissionTenant?.id === req.user.tenantId
               ? req.permissionTenant.vertical
               : null;
+        permissionVertical = verifiedVertical || (
+          await resolveTenantVerticalDetailed(req.user.tenantId)
+        ).vertical;
         userPermissions = await getUserPermissions(
           req.user.tenantId,
           req.user.userId,
-          verifiedVertical,
+          permissionVertical,
         );
       } catch (err) {
         // Keep legacy route fixtures usable when they do not mock the RBAC
@@ -738,7 +824,8 @@ function requireAnyPermission(perms, opts = {}) {
         throw err;
       }
       for (const key of availableKeys) {
-        if (userPermissions.has(key)) return next();
+        const [module, action] = key.split('.');
+        if (hasPermissionForRoute(userPermissions, module, action, permissionVertical)) return next();
       }
       return res.status(403).json({
         error: `Access denied: requires one of ${requiredKeys.join(', ')}`,
@@ -766,4 +853,5 @@ module.exports = {
   PERMISSION_CACHE,
   loadUserPermissions,
   getUserPermissions,
+  hasPermissionForRoute,
 };

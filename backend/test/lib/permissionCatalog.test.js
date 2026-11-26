@@ -210,6 +210,7 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
       const cat = getCatalogForVertical(vertical);
       for (const module of Object.keys(GENERIC_MODULES)) {
         if (vertical === 'wellness' && module === 'calendar') continue;
+        if (vertical === 'travel' && module === 'commission_profiles') continue;
         expect(cat[module], `${module} leaked into ${vertical}`).toBeUndefined();
       }
     }

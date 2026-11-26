@@ -21,6 +21,7 @@ vi.mock('../utils/date', async (importOriginal) => ({
 }));
 
 import ContactDetail from '../pages/ContactDetail';
+import { DealsTab } from '../components/contact/ProfileTabs';
 
 const baseContact = {
   id: 7,
@@ -71,6 +72,34 @@ beforeEach(() => {
 });
 
 describe('ContactDetail profile', () => {
+  it('uses the assigned pipeline stages in the Generic CRM deal-row dropdown', async () => {
+    fetchApiMock.mockImplementation((url) => {
+      if (url === '/api/pipeline_stages?pipelineId=9') return Promise.resolve([
+        { id: 31, name: 'New Lead' },
+        { id: 32, name: 'Qualified' },
+        { id: 33, name: 'Won' },
+      ]);
+      if (url === '/api/tenant-settings/generic.dealTypes') return Promise.resolve({
+        value: JSON.stringify([{ name: 'New Business', isDefault: true, stages: [{ name: 'New Deal' }, { name: 'Contracted' }, { name: 'Negotiation' }, { name: 'Won' }, { name: 'Lost' }] }]),
+      });
+      return Promise.resolve([]);
+    });
+    render(
+      <MemoryRouter>
+        <DealsTab
+          contact={{ ...baseContact, deals: [{ ...baseContact.deals[0], pipelineId: 9, stage: 'qualified' }] }}
+          refresh={vi.fn()}
+          onOpenDeal={vi.fn()}
+          isGeneric
+        />
+      </MemoryRouter>,
+    );
+    const stageSelect = await screen.findByRole('combobox');
+    await waitFor(() => expect(within(stageSelect).getAllByRole('option').map((option) => option.textContent)).toEqual(['New Lead', 'Qualified', 'Won']));
+    expect(within(stageSelect).queryByRole('option', { name: 'Contracted' })).toBeNull();
+    expect(fetchApiMock).toHaveBeenCalledWith('/api/pipeline_stages?pipelineId=9', { silent: true });
+  });
+
   it('renders header, sidebar tabs and overview by default', async () => {
     renderProfile();
     const panel = within(await screen.findByLabelText('Contact profile'));
@@ -360,12 +389,14 @@ describe('ContactDetail profile', () => {
     });
     await waitFor(() => expect(panel.getByRole('button', { name: 'Unqualified' }).className).toMatch(/lost/));
 
-    fireEvent.click(panel.getByRole('button', { name: 'Won / Churned' }));
-    fireEvent.click(panel.getByRole('button', { name: 'Won' }));
-
-    await waitFor(() => expect(panel.getByRole('button', { name: 'Won' }).className).toMatch(/current/));
+    expect(panel.getByRole('button', { name: 'Qualified / Lost' })).toBeDisabled();
+    expect(panel.getByRole('button', { name: 'Won / Churned' })).toBeDisabled();
     fireEvent.click(panel.getByRole('button', { name: 'Unqualified' }));
-    expect(panel.getAllByRole('button', { name: 'Unqualified' })).toHaveLength(2);
+    fireEvent.click(panel.getByRole('button', { name: 'Interested' }));
+
+    await waitFor(() => expect(panel.getByRole('button', { name: 'Interested' }).className).toMatch(/current/));
+    expect(panel.getByRole('button', { name: 'Qualified / Lost' })).toBeEnabled();
+    expect(panel.getByRole('button', { name: 'Won / Churned' })).toBeEnabled();
   });
 
   it('updates Generic CRM status directly when returning to an earlier stage', async () => {
@@ -443,8 +474,10 @@ describe('ContactDetail profile', () => {
     const panel = within(await screen.findByLabelText('Contact profile'));
     fireEvent.click(panel.getByRole('button', { name: 'More actions' }));
     fireEvent.click(await panel.findByRole('menuitem', { name: 'View status history' }));
-    const dialog = within(await screen.findByRole('dialog', { name: 'Lifecycle history' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Status history' }));
 
+    expect(dialog.getByRole('heading', { name: 'Status history' })).toBeInTheDocument();
+    expect(dialog.queryByRole('heading', { name: 'Lifecycle history' })).toBeNull();
     expect(await dialog.findByText('Rajesh Sharma')).toBeInTheDocument();
     expect(dialog.getByText('rajesh@example.com')).toBeInTheDocument();
     expect(dialog.getByText('New')).toBeInTheDocument();

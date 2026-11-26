@@ -43,6 +43,23 @@
  */
 
 const prisma = require("./prisma");
+const {
+  WELLNESS_SIDEBAR_PERMISSION_SPECS,
+} = require("./wellnessSidebarPermissions");
+
+const WELLNESS_CRITICAL_MODULE_ALIASES = new Map(
+  WELLNESS_SIDEBAR_PERMISSION_SPECS.filter(
+    ([, , legacyModule]) => legacyModule === "roles",
+  ).map(([, module, legacyModule]) => [module, legacyModule]),
+);
+
+function canonicalCriticalKey(permission) {
+  if (!permission || !permission.module || !permission.action) return null;
+  const module =
+    WELLNESS_CRITICAL_MODULE_ALIASES.get(permission.module) ||
+    permission.module;
+  return `${module}.${permission.action}`;
+}
 
 // Critical permissions. Frozen so callers can't accidentally mutate
 // the set. To extend (e.g. add staff.manage), update this list AND
@@ -75,7 +92,7 @@ function getCriticalPermissions() {
 function intersectCritical(proposedPermissions) {
   return CRITICAL_RBAC_PERMISSIONS.filter((c) =>
     proposedPermissions.some(
-      (p) => p.module === c.module && p.action === c.action,
+      (p) => canonicalCriticalKey(p) === `${c.module}.${c.action}`,
     ),
   );
 }
@@ -104,7 +121,13 @@ function intersectCritical(proposedPermissions) {
 async function simulateAdminCount({ tenantId, roleId, proposedPermissions }) {
   // Build a fast lookup for what the role being saved WILL grant.
   const proposedSet = new Set(
-    proposedPermissions.map((p) => `${p.module}.${p.action}`),
+    proposedPermissions.flatMap((p) => {
+      const original = `${p.module}.${p.action}`;
+      const canonical = canonicalCriticalKey(p);
+      return canonical && canonical !== original
+        ? [original, canonical]
+        : [original];
+    }),
   );
 
   // Pull every active user in the tenant + their role assignments +
@@ -146,7 +169,11 @@ async function simulateAdminCount({ tenantId, roleId, proposedPermissions }) {
       if (r.id === roleId) {
         for (const k of proposedSet) effective.add(k);
       } else {
-        for (const p of r.permissions) effective.add(`${p.module}.${p.action}`);
+        for (const p of r.permissions) {
+          effective.add(`${p.module}.${p.action}`);
+          const canonical = canonicalCriticalKey(p);
+          if (canonical) effective.add(canonical);
+        }
       }
     }
 

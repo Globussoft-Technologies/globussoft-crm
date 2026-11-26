@@ -2842,6 +2842,24 @@ router.patch('/tags/:tagName', async (req, res) => {
 // Generic CRM lifecycle history. AuditLog is the tenant-scoped source of
 // truth for who changed a contact and when; this projection exposes only
 // lifecycle/status transitions for the contact profile timeline.
+function parseGenericLifecycleActivity(activity) {
+  const description = String(activity?.description || "");
+  const match = /^Updated from (.+?) to (.+?)\. Reason: ([\s\S]+)$/.exec(description);
+  if (!match) return null;
+  return {
+    id: activity.id,
+    userId: activity.userId ?? null,
+    changedAt: activity.createdAt,
+    from: match[1].trim(),
+    to: match[2].trim(),
+    reason: match[3].trim(),
+  };
+}
+
+function sameLifecycleValue(left, right) {
+  return String(left || "").trim().toLowerCase() === String(right || "").trim().toLowerCase();
+}
+
 router.get('/:id/lifecycle-history', async (req, res) => {
   try {
     const contactId = Number(req.params.id);
@@ -2884,6 +2902,23 @@ router.get('/:id/lifecycle-history', async (req, res) => {
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: 200,
     });
+    // Generic CRM historically wrote the operator-authored negative reason
+    // to the atomic status Activity as well as the audit payload. Use that
+    // tenant-scoped Activity as a fallback for older/incomplete audit rows so
+    // Lifecycle History never drops a reason the user already supplied.
+    const activityReasons = isGenericCrmRequest(req)
+      ? (await prisma.activity.findMany({
+          where: {
+            tenantId: req.user.tenantId,
+            contactId,
+            type: 'Lead Status updated',
+          },
+          select: { id: true, userId: true, description: true, createdAt: true },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take: 200,
+        })).map(parseGenericLifecycleActivity).filter(Boolean)
+      : [];
+    const usedActivityReasonIds = new Set();
 
     const history = rows.flatMap((row) => {
       let details;
@@ -2898,6 +2933,33 @@ router.get('/:id/lifecycle-history', async (req, res) => {
       if (!statusChange && !stageChange) return [];
       const fromStageKey = stageChange?.from == null ? null : String(stageChange.from);
       const toStageKey = stageChange?.to == null ? null : String(stageChange.to);
+      const fromStage = details?.lifecycleTransition?.fromStage
+        || (fromStageKey ? stageLabels.get(fromStageKey) : null)
+        || statusChange?.from
+        || '(not set)';
+      const toStage = details?.lifecycleTransition?.toStage
+        || (toStageKey ? stageLabels.get(toStageKey) : null)
+        || statusChange?.to
+        || '(not set)';
+      const fromStatus = statusChange?.from ?? details?.lifecycleTransition?.fromStatus ?? null;
+      const toStatus = statusChange?.to ?? details?.lifecycleTransition?.toStatus ?? null;
+      let reason = details?.lifecycleTransition?.reason || null;
+      if (!reason && isGenericCrmRequest(req)) {
+        const auditTime = new Date(row.createdAt).getTime();
+        const fallback = activityReasons.find((activity) => {
+          if (usedActivityReasonIds.has(activity.id) || activity.userId !== (row.userId ?? null)) return false;
+          const activityTime = new Date(activity.changedAt).getTime();
+          if (!Number.isFinite(auditTime) || !Number.isFinite(activityTime) || Math.abs(auditTime - activityTime) > 60_000) return false;
+          return (
+            sameLifecycleValue(activity.from, fromStatus || fromStage)
+            && sameLifecycleValue(activity.to, toStatus || toStage)
+          );
+        });
+        if (fallback?.reason) {
+          usedActivityReasonIds.add(fallback.id);
+          reason = fallback.reason;
+        }
+      }
       return [{
         id: row.id,
         changedAt: row.createdAt,
@@ -2906,21 +2968,15 @@ router.get('/:id/lifecycle-history', async (req, res) => {
           : { id: row.userId, name: row.userId ? `User #${row.userId}` : 'System', email: null },
         from: {
           stageKey: fromStageKey,
-          stage: details?.lifecycleTransition?.fromStage
-            || (fromStageKey ? stageLabels.get(fromStageKey) : null)
-            || statusChange?.from
-            || '(not set)',
-          status: statusChange?.from ?? details?.lifecycleTransition?.fromStatus ?? null,
+          stage: fromStage,
+          status: fromStatus,
         },
         to: {
           stageKey: toStageKey,
-          stage: details?.lifecycleTransition?.toStage
-            || (toStageKey ? stageLabels.get(toStageKey) : null)
-            || statusChange?.to
-            || '(not set)',
-          status: statusChange?.to ?? details?.lifecycleTransition?.toStatus ?? null,
+          stage: toStage,
+          status: toStatus,
         },
-        reason: details?.lifecycleTransition?.reason || null,
+        reason,
       }];
     });
     return res.json({ data: history, total: history.length });

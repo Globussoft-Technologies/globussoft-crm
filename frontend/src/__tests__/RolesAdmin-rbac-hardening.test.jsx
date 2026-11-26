@@ -293,10 +293,10 @@ describe('permission review', () => {
     expect(dialog.style.width).toBe('100vw');
     expect(dialog.style.placeItems).toBe('center');
     await within(dialog).findAllByText(/Required for: Contact workspace/);
-    const contactCard = within(dialog).getByText('contacts').closest('div[style*="border-radius"]');
+    const contactCard = within(dialog).getByText('Contacts').closest('div[style*="border-radius"]');
     const writeTooltip = within(contactCard).getByRole('checkbox', { name: /write/i }).closest('label').getAttribute('title');
     expect(writeTooltip).toMatch(/contacts\.write: Create new records in this module/i);
-    expect(writeTooltip).toMatch(/People and companies stored in your CRM/i);
+    expect(writeTooltip).toMatch(/Traveller, customer, and partner contact directory/i);
     expect(writeTooltip).toMatch(/Required for: Contact workspace/i);
     expect(writeTooltip).toMatch(/Create new records in this module/i);
     const touchButton = within(contactCard).getByLabelText('Details for contacts.write', { selector: 'button' });
@@ -310,7 +310,7 @@ describe('permission review', () => {
     fireEvent.click(within(contactCard).getByRole('button', { name: 'contacts.read' }));
     expect(within(contactCard).queryByText(/also needs/i)).toBeNull();
     fireEvent.click(within(dialog).getByRole('button', { name: /Changed \(2\)/i }));
-    expect(within(dialog).getByText('contacts')).toBeTruthy();
+    expect(within(dialog).getByText('Contacts')).toBeTruthy();
     fireEvent.click(within(dialog).getByRole('button', { name: /Collapse all/i }));
     expect(within(dialog).queryByRole('checkbox')).toBeNull();
   });
@@ -785,19 +785,19 @@ describe('Per-vertical MODULE_DESCRIPTIONS overrides', () => {
     );
   }
 
-  it('travel tenant shows travel-flavoured invoices description (no "Patient")', async () => {
+  it('travel tenant shows the exact Travel sidebar invoices description (no "Patient")', async () => {
     renderWithVertical('travel');
     fireEvent.click(await screen.findByRole('button', { name: /View permissions for Custom/i }));
     await screen.findByText(/Permissions: Custom/i);
     // The matrix renders the description as the text underneath the
     // module name. Find it by partial match.
     expect(
-      await screen.findByText(/Customer \+ traveler invoice records/i),
+      await screen.findByText(/Travel customer invoices and payment links/i),
     ).toBeTruthy();
     expect(screen.queryByText(/Patient \+ customer/i)).toBeNull();
     const dialog = screen.getByRole('dialog', { name: /Permissions: Custom/i });
-    expect(within(dialog).getByText('invoices').closest('div[style*="border-radius"]').querySelector('[aria-describedby="perm-desc-invoices-read"]').closest('label').getAttribute('title'))
-      .toMatch(/invoices\.read:.*Customer \+ traveler invoice records/i);
+    expect(within(dialog).getByText('Invoices').closest('div[style*="border-radius"]').querySelector('[aria-describedby="perm-desc-invoices-read"]').closest('label').getAttribute('title'))
+      .toMatch(/invoices\.read:.*Travel customer invoices and payment links/i);
   });
 
   it('wellness tenant keeps its existing wellness-flavoured invoices description', async () => {
@@ -810,13 +810,13 @@ describe('Per-vertical MODULE_DESCRIPTIONS overrides', () => {
     expect(screen.queryByText(/Customer \+ traveler/i)).toBeNull();
   });
 
-  it('generic tenant falls through to the neutral base description', async () => {
+  it('generic tenant uses the exact Generic sidebar description', async () => {
     renderWithVertical('generic');
     fireEvent.click(await screen.findByRole('button', { name: /View permissions for Custom/i }));
     await screen.findByText(/Permissions: Custom/i);
-    // Neutral base — no "Patient", no "traveler", just "Customer invoice records …"
+    // Generic uses the same wording as its sidebar search catalogue.
     expect(
-      await screen.findByText(/^Customer invoice records and the Invoices page\.$/i),
+      await screen.findByText(/^Invoice ledger \+ payment links$/i),
     ).toBeTruthy();
     expect(screen.queryByText(/Patient/i)).toBeNull();
     expect(screen.queryByText(/traveler/i)).toBeNull();
@@ -824,7 +824,102 @@ describe('Per-vertical MODULE_DESCRIPTIONS overrides', () => {
 });
 
 describe('tenant page visibility in the permission matrix', () => {
-  it('hides the Workflows permission card while retaining it in the server catalog', async () => {
+  it('uses separate Wellness sidebar names and descriptions for Wellness modules', async () => {
+    const catalog = {
+      catalog: {
+        wellness_services: ['read'],
+        wellness_service_categories: ['read'],
+        wellness_memberships: ['read'],
+      },
+      modules: [
+        { module: 'wellness_services', actions: ['read'] },
+        { module: 'wellness_service_categories', actions: ['read'] },
+        { module: 'wellness_memberships', actions: ['read'] },
+      ],
+      domains: [{
+        domain: 'Catalog',
+        modules: [
+          { module: 'wellness_services', actions: ['read'] },
+          { module: 'wellness_service_categories', actions: ['read'] },
+          { module: 'wellness_memberships', actions: ['read'] },
+        ],
+      }],
+      vertical: 'wellness',
+    };
+    const pageCatalog = {
+      catalog: [
+        {
+          path: '/wellness/services',
+          label: 'Service Catalog',
+          description: 'Service catalogue + packages',
+          requiredPermissions: [{ module: 'wellness_services', action: 'read' }],
+        },
+        {
+          path: '/wellness/service-categories',
+          label: 'Service Categories',
+          description: 'Hierarchical taxonomy of services',
+          requiredPermissions: [{ module: 'wellness_service_categories', action: 'read' }],
+        },
+        {
+          path: '/wellness/memberships',
+          label: 'Memberships',
+          description: 'Membership plans + tiers',
+          requiredPermissions: [{ module: 'wellness_memberships', action: 'read' }],
+        },
+      ],
+    };
+
+    renderPage([ADMIN_ROLE], {
+      '/api/roles/catalog': catalog,
+      '/api/pages/catalog': pageCatalog,
+    }, 'wellness');
+    fireEvent.click(await screen.findByRole('button', { name: /View permissions for Administrator/i }));
+    const dialog = screen.getByRole('dialog', { name: /Permissions: Administrator/i });
+
+    expect(await within(dialog).findByText('Service Catalog')).toBeInTheDocument();
+    expect(within(dialog).getByText('Service Categories')).toBeInTheDocument();
+    expect(within(dialog).getByText('Memberships')).toBeInTheDocument();
+    expect(within(dialog).getByText('Service catalogue + packages')).toBeInTheDocument();
+    expect(within(dialog).getByText('Hierarchical taxonomy of services')).toBeInTheDocument();
+    expect(within(dialog).getByText('Membership plans + tiers')).toBeInTheDocument();
+  });
+
+  it('uses separate Travel sidebar names and descriptions for Travel modules', async () => {
+    const catalog = {
+      catalog: {
+        travel_dashboard: ['read'],
+        quote_builder: ['read'],
+        supplier_credentials: ['read'],
+      },
+      modules: [
+        { module: 'travel_dashboard', actions: ['read'] },
+        { module: 'quote_builder', actions: ['read'] },
+        { module: 'supplier_credentials', actions: ['read'] },
+      ],
+      domains: [{
+        domain: 'Travel',
+        modules: [
+          { module: 'travel_dashboard', actions: ['read'] },
+          { module: 'quote_builder', actions: ['read'] },
+          { module: 'supplier_credentials', actions: ['read'] },
+        ],
+      }],
+      vertical: 'travel',
+    };
+
+    renderPage([ADMIN_ROLE], { '/api/roles/catalog': catalog }, 'travel');
+    fireEvent.click(await screen.findByRole('button', { name: /View permissions for Administrator/i }));
+    const dialog = screen.getByRole('dialog', { name: /Permissions: Administrator/i });
+
+    expect(within(dialog).getByText('Dashboard')).toBeInTheDocument();
+    expect(within(dialog).getByText('Quote Builder')).toBeInTheDocument();
+    expect(within(dialog).getByText('Supplier Credentials')).toBeInTheDocument();
+    expect(within(dialog).getByText('Travel sales, operations, and performance overview.')).toBeInTheDocument();
+    expect(within(dialog).getByText('Build detailed customer travel quotations.')).toBeInTheDocument();
+    expect(within(dialog).getByText('Supplier integration credentials and access settings.')).toBeInTheDocument();
+  });
+
+  it('shows the Generic Workflows permission card with its sidebar name', async () => {
     const catalog = {
       ...CATALOG,
       vertical: 'generic',
@@ -848,8 +943,8 @@ describe('tenant page visibility in the permission matrix', () => {
     fireEvent.click(await screen.findByRole('button', { name: /View permissions for Administrator/i }));
     await screen.findByText(/Permissions: Administrator/i);
 
-    expect(screen.queryByText('workflows')).not.toBeInTheDocument();
-    expect(screen.queryByText('Trigger-action automation rules across CRM objects.')).not.toBeInTheDocument();
+    expect(screen.getByText('Workflows')).toBeInTheDocument();
+    expect(screen.getByText('Build trigger, condition, and action automations')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Save permissions/i }));
     await waitFor(() => {
@@ -859,6 +954,40 @@ describe('tenant page visibility in the permission matrix', () => {
       expect(saveCall).toBeTruthy();
       expect(JSON.parse(saveCall[1].body).permissions).toContainEqual({ module: 'workflows', action: 'read' });
     });
+  });
+
+  it('uses Generic sidebar names without renaming another vertical', async () => {
+    const catalog = {
+      ...CATALOG,
+      vertical: 'generic',
+      catalog: {
+        deals: ['read'],
+        pipeline: ['read'],
+        inbox: ['read'],
+      },
+      modules: [
+        { module: 'deals', actions: ['read'] },
+        { module: 'pipeline', actions: ['read'] },
+        { module: 'inbox', actions: ['read'] },
+      ],
+      domains: [{
+        domain: 'CRM Core',
+        modules: [
+          { module: 'deals', actions: ['read'] },
+          { module: 'pipeline', actions: ['read'] },
+          { module: 'inbox', actions: ['read'] },
+        ],
+      }],
+      hiddenModules: [],
+    };
+
+    renderPage([ADMIN_ROLE], { '/api/roles/catalog': catalog }, 'generic');
+    fireEvent.click(await screen.findByRole('button', { name: /View permissions for Administrator/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Permissions: Administrator/i });
+
+    expect(within(dialog).getByText('Deals')).toBeInTheDocument();
+    expect(within(dialog).getByText('Pipelines')).toBeInTheDocument();
+    expect(within(dialog).getByText('Inbox')).toBeInTheDocument();
   });
 
   it('does not render a module whose page is disabled for the tenant', async () => {

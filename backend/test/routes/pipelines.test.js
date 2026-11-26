@@ -94,6 +94,8 @@ prisma.pipelineStage = {
 };
 prisma.pipelineStageAssignment = {
   create: vi.fn(),
+  count: vi.fn(),
+  findUnique: vi.fn(),
 };
 prisma.deal = prisma.deal || {};
 prisma.deal.findMany = vi.fn();
@@ -173,12 +175,135 @@ beforeEach(() => {
   prisma.pipelineStage.findFirst.mockReset();
   prisma.pipelineStage.create.mockReset();
   prisma.pipelineStageAssignment.create.mockReset();
+  prisma.pipelineStageAssignment.count.mockReset();
+  prisma.pipelineStageAssignment.findUnique.mockReset();
   prisma.deal.findMany.mockReset();
   prisma.deal.groupBy.mockReset();
   prisma.deal.count.mockReset();
   writeAuditMock.mockReset();
   writeAuditMock.mockResolvedValue(undefined);
   diffFieldsMock.mockClear();
+});
+
+describe('POST /ensure-default — provision Generic CRM default pipeline', () => {
+  test('creates Default Pipeline with required Won and Lost stages when no default exists', async () => {
+    prisma.pipeline.findMany.mockResolvedValue([]);
+    prisma.pipeline.findFirst.mockResolvedValue(null);
+    prisma.pipeline.create.mockResolvedValue({
+      id: 120, name: 'Default Pipeline', description: 'Default sales pipeline', isDefault: true, tenantId: 1,
+    });
+    prisma.pipelineStageAssignment.count.mockResolvedValue(0);
+    prisma.pipelineStage.findFirst.mockResolvedValue(null);
+    prisma.pipelineStage.create
+      .mockResolvedValueOnce({ id: 201, name: 'Won', color: '#10b981', tenantId: 1 })
+      .mockResolvedValueOnce({ id: 202, name: 'Lost', color: '#ef4444', tenantId: 1 });
+    prisma.pipelineStageAssignment.findUnique.mockResolvedValue(null);
+    prisma.pipelineStageAssignment.create.mockResolvedValue({});
+
+    const res = await request(makeApp())
+      .post('/api/pipelines/ensure-default')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual(expect.objectContaining({ id: 120, name: 'Default Pipeline', isDefault: true }));
+    expect(prisma.pipeline.create).toHaveBeenCalledWith({
+      data: {
+        name: 'Default Pipeline',
+        description: 'Default sales pipeline',
+        isDefault: true,
+        tenantId: 1,
+      },
+    });
+    expect(prisma.pipelineStage.create).toHaveBeenNthCalledWith(1, {
+      data: { name: 'Won', color: '#10b981', position: 0, tenantId: 1 },
+    });
+    expect(prisma.pipelineStage.create).toHaveBeenNthCalledWith(2, {
+      data: { name: 'Lost', color: '#ef4444', position: 1, tenantId: 1 },
+    });
+    expect(prisma.pipelineStageAssignment.create).toHaveBeenNthCalledWith(1, {
+      data: { pipelineId: 120, stageId: 201, tenantId: 1, position: 0 },
+    });
+    expect(prisma.pipelineStageAssignment.create).toHaveBeenNthCalledWith(2, {
+      data: { pipelineId: 120, stageId: 202, tenantId: 1, position: 1 },
+    });
+  });
+
+  test('reuses an existing default and its terminal assignments without duplicates', async () => {
+    prisma.pipeline.findMany.mockResolvedValue([{ id: 121, name: 'Existing Default', isDefault: true, tenantId: 1 }]);
+    prisma.pipelineStageAssignment.count.mockResolvedValue(2);
+    prisma.pipelineStage.findFirst
+      .mockResolvedValueOnce({ id: 201, name: 'Won', tenantId: 1 })
+      .mockResolvedValueOnce({ id: 202, name: 'Lost', tenantId: 1 });
+    prisma.pipelineStageAssignment.findUnique.mockResolvedValue({ pipelineId: 121 });
+
+    const res = await request(makeApp())
+      .post('/api/pipelines/ensure-default')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(prisma.pipeline.create).not.toHaveBeenCalled();
+    expect(prisma.pipelineStage.create).not.toHaveBeenCalled();
+    expect(prisma.pipelineStageAssignment.create).not.toHaveBeenCalled();
+  });
+
+  test('keeps one default and removes an empty auto-provisioned duplicate', async () => {
+    prisma.pipeline.findMany.mockResolvedValue([
+      { id: 120, name: 'Default Pipeline', isDefault: true, tenantId: 1 },
+      { id: 121, name: 'Default Pipeline', isDefault: true, tenantId: 1 },
+    ]);
+    prisma.deal.count.mockResolvedValue(0);
+    prisma.pipelineStageAssignment.count.mockResolvedValue(2);
+    prisma.pipelineStage.findFirst
+      .mockResolvedValueOnce({ id: 201, name: 'Won', tenantId: 1 })
+      .mockResolvedValueOnce({ id: 202, name: 'Lost', tenantId: 1 });
+    prisma.pipelineStageAssignment.findUnique.mockResolvedValue({ pipelineId: 120 });
+
+    const res = await request(makeApp())
+      .post('/api/pipelines/ensure-default')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(prisma.pipeline.update).toHaveBeenCalledWith({ where: { id: 121 }, data: { isDefault: false } });
+    expect(prisma.pipeline.delete).toHaveBeenCalledWith({ where: { id: 121 } });
+    expect(res.body.id).toBe(120);
+  });
+
+  test('does not provision a default pipeline outside Generic CRM', async () => {
+    const res = await request(makeApp())
+      .post('/api/pipelines/ensure-default')
+      .set('Authorization', makeBearer({ vertical: 'wellness' }));
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('DEFAULT_PIPELINE_UNSUPPORTED_FOR_VERTICAL');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /:id/remove-default - preserve Generic default', () => {
+  test('rejects removing the Generic CRM default pipeline', async () => {
+    const res = await request(makeApp())
+      .post('/api/pipelines/90/remove-default')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: 'Generic CRM must always have a default pipeline',
+      code: 'DEFAULT_PIPELINE_REQUIRED',
+    });
+    expect(prisma.pipeline.update).not.toHaveBeenCalled();
+  });
+
+  test('keeps remove-default behavior unchanged outside Generic CRM', async () => {
+    prisma.pipeline.findFirst.mockResolvedValue({ id: 90, name: 'Clinic', isDefault: true, tenantId: 1 });
+    prisma.pipeline.update.mockResolvedValue({ id: 90, isDefault: false });
+
+    const res = await request(makeApp())
+      .post('/api/pipelines/90/remove-default')
+      .set('Authorization', makeBearer({ vertical: 'wellness' }));
+
+    expect(res.status).toBe(200);
+    expect(prisma.pipeline.update).toHaveBeenCalledWith({ where: { id: 90 }, data: { isDefault: false } });
+  });
 });
 
 // ── GET / — list pipelines tenant-scoped, with deal counts ──────────────
@@ -211,7 +336,7 @@ describe('GET / — list pipelines', () => {
     // Deal-count aggregation is also tenant-scoped + pipeline-id restricted
     expect(prisma.deal.groupBy).toHaveBeenCalledWith({
       by: ['pipelineId'],
-      where: { tenantId: 1, pipelineId: { in: [11, 12] } },
+      where: { tenantId: 1, pipelineId: { in: [11, 12] }, deletedAt: null },
       _count: { _all: true },
     });
   });
@@ -313,6 +438,11 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
     expect(res.body[0]).not.toHaveProperty('tenantId');
     expect(res.body[0]).not.toHaveProperty('createdAt');
     expect(res.body[0]).not.toHaveProperty('updatedAt');
+    expect(prisma.deal.groupBy).toHaveBeenCalledWith({
+      by: ['pipelineId'],
+      where: { tenantId: 1, pipelineId: { in: [11, 12] }, deletedAt: null },
+      _count: { _all: true },
+    });
   });
 
   test('slim-shape branch keeps tenant scope + orderBy isolation guarantees', async () => {
@@ -350,6 +480,11 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
       where: { tenantId: 1 },
       orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
     });
+    expect(prisma.deal.groupBy).toHaveBeenCalledWith({
+      by: ['pipelineId'],
+      where: { tenantId: 1, pipelineId: { in: [] } },
+      _count: { _all: true },
+    });
   });
 });
 
@@ -358,6 +493,7 @@ describe('GET /?fields=summary — slim-shape opt-in', () => {
 describe('POST / — create pipeline', () => {
   test('creates a pipeline, auto-sets isDefault when tenant has zero existing pipelines', async () => {
     prisma.pipeline.count.mockResolvedValue(0); // first pipeline for tenant
+    prisma.pipelineStage.findFirst.mockResolvedValue({ id: 7, name: 'New Lead', tenantId: 1 });
     prisma.pipeline.create.mockResolvedValue({
       id: 99, name: 'My First Pipeline', description: null, isDefault: true, tenantId: 1,
     });
@@ -365,7 +501,7 @@ describe('POST / — create pipeline', () => {
     const res = await request(makeApp())
       .post('/api/pipelines')
       .set('Authorization', makeBearer())
-      .send({ name: '  My First Pipeline  ' }); // padding to verify trim
+      .send({ name: '  My First Pipeline  ', stages: [{ stageId: 7 }] }); // padding to verify trim
 
     expect(res.status).toBe(201);
     expect(res.body).toEqual(expect.objectContaining({
@@ -395,6 +531,7 @@ describe('POST / — create pipeline', () => {
   test('isDefault=true demotes any prior default via updateMany inside the transaction', async () => {
     prisma.pipeline.count.mockResolvedValue(3); // tenant already has 3 pipelines
     prisma.pipeline.updateMany.mockResolvedValue({ count: 1 });
+    prisma.pipelineStage.findFirst.mockResolvedValue({ id: 7, name: 'New Lead', tenantId: 1 });
     prisma.pipeline.create.mockResolvedValue({
       id: 100, name: 'New Hotness', description: 'Replaces old default', isDefault: true, tenantId: 1,
     });
@@ -402,7 +539,7 @@ describe('POST / — create pipeline', () => {
     const res = await request(makeApp())
       .post('/api/pipelines')
       .set('Authorization', makeBearer())
-      .send({ name: 'New Hotness', description: 'Replaces old default', isDefault: true });
+      .send({ name: 'New Hotness', description: 'Replaces old default', isDefault: true, stages: [{ stageId: 7 }] });
 
     expect(res.status).toBe(201);
     expect(res.body.isDefault).toBe(true);
@@ -412,6 +549,47 @@ describe('POST / — create pipeline', () => {
       data: { isDefault: false },
     });
     expect(prisma.pipeline.create).toHaveBeenCalled();
+  });
+
+  test.each([
+    ['missing stages', { name: 'No Stages' }],
+    ['an empty stages array', { name: 'No Stages', stages: [] }],
+  ])('rejects a Generic pipeline with %s', async (_label, body) => {
+    const res = await request(makeApp())
+      .post('/api/pipelines')
+      .set('Authorization', makeBearer())
+      .send(body);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: 'At least one pipeline stage is required',
+      code: 'PIPELINE_STAGES_REQUIRED',
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.pipeline.create).not.toHaveBeenCalled();
+  });
+
+  test('keeps stage-less pipeline creation unchanged outside Generic CRM', async () => {
+    prisma.pipeline.count.mockResolvedValue(1);
+    prisma.pipeline.create.mockResolvedValue({
+      id: 103, name: 'Clinic Pipeline', description: null, isDefault: false, tenantId: 1,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/pipelines')
+      .set('Authorization', makeBearer({ vertical: 'wellness' }))
+      .send({ name: 'Clinic Pipeline' });
+
+    expect(res.status).toBe(201);
+    expect(prisma.pipeline.create).toHaveBeenCalledWith({
+      data: {
+        name: 'Clinic Pipeline',
+        description: null,
+        isDefault: false,
+        tenantId: 1,
+      },
+    });
+    expect(prisma.pipelineStageAssignment.create).not.toHaveBeenCalled();
   });
 
   test('atomically creates a Generic pipeline with existing and new stage assignments', async () => {
@@ -600,6 +778,9 @@ describe('DELETE /:id — delete pipeline', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ success: true });
+    expect(prisma.deal.count).toHaveBeenCalledWith({
+      where: { tenantId: 1, pipelineId: 60, deletedAt: null },
+    });
     expect(prisma.pipeline.delete).toHaveBeenCalledWith({ where: { id: 60 } });
     // #568 audit emitted with the pre-delete name preserved in details
     expect(writeAuditMock).toHaveBeenCalledTimes(1);
@@ -637,8 +818,28 @@ describe('DELETE /:id — delete pipeline', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error).toMatch(/Cannot delete pipeline with 7 deal\(s\)/);
+    expect(prisma.deal.count).toHaveBeenCalledWith({
+      where: { tenantId: 1, pipelineId: 80, deletedAt: null },
+    });
     expect(prisma.pipeline.delete).not.toHaveBeenCalled();
     expect(writeAuditMock).not.toHaveBeenCalled();
+  });
+
+  test('keeps the existing all-deals delete guard outside Generic CRM', async () => {
+    prisma.pipeline.findFirst.mockResolvedValue({
+      id: 81, name: 'Clinic Pipeline', isDefault: false, tenantId: 1,
+    });
+    prisma.deal.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .delete('/api/pipelines/81')
+      .set('Authorization', makeBearer({ vertical: 'wellness' }));
+
+    expect(res.status).toBe(400);
+    expect(prisma.deal.count).toHaveBeenCalledWith({
+      where: { tenantId: 1, pipelineId: 81 },
+    });
+    expect(prisma.pipeline.delete).not.toHaveBeenCalled();
   });
 });
 

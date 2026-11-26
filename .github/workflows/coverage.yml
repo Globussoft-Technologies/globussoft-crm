@@ -183,6 +183,7 @@ jobs:
             tests/communications-api.spec.js \
             tests/notifications-api.spec.js \
             tests/currency-catalog-api.spec.js \
+            tests/generic-email-provider-api.spec.js \
             tests/travel-email-provider-api.spec.js \
             tests/travel-email-automation-api.spec.js \
             tests/travel-meeting-forms-api.spec.js \

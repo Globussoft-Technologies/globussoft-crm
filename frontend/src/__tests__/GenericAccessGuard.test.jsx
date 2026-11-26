@@ -97,7 +97,7 @@ describe('<GenericAccessGuard /> dashboard fallback', () => {
 
 describe('<GenericAccessGuard /> permission precedence', () => {
   it('allows a custom role with the configured permission even when the legacy role tier does not match', () => {
-    renderDataImportExport(['settings.manage']);
+    renderDataImportExport(['data_import_export.read']);
 
     expect(screen.getByTestId('data-import-page')).toBeInTheDocument();
   });

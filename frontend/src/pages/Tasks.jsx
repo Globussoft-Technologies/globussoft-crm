@@ -274,12 +274,21 @@ export default function Tasks() {
   // Load tenant tags from the wellness patients/tags endpoint so the tag
   // picker in the Add Todo modal reuses the same tag set as patients.
   useEffect(() => {
-    if (!isWellness) return;
+    // A read-only Tasks user can view the queue without PHI access. Patient
+    // tags are optional form metadata, so only request them when the user can
+    // mutate tasks AND independently has Patient read access. This prevents
+    // an unrelated PHI 403 toast on an otherwise authorized Task Queue page.
+    if (
+      !isWellness
+      || !permsReady
+      || (!canCreateTasks && !canUpdateTasks)
+      || !hasPermission('patients', 'read')
+    ) return;
     // GET /patients/tags returns { tags: [...] }
-    fetchApi('/api/wellness/patients/tags')
+    fetchApi('/api/wellness/patients/tags', { silent: true })
       .then((d) => setAllTags(Array.isArray(d?.tags) ? d.tags : []))
       .catch(() => {});
-  }, [isWellness]);
+  }, [canCreateTasks, canUpdateTasks, hasPermission, isWellness, permsReady]);
 
   // All task assignees are staff users. Pre-fix the generic path populated
   // this dropdown from contacts, which mixed customers into a Task.userId

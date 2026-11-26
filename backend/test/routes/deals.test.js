@@ -127,6 +127,8 @@ prisma.pipelineStage = {
   findMany: vi.fn().mockResolvedValue([]),
 };
 prisma.tenantSetting = { findUnique: vi.fn() };
+prisma.contact = prisma.contact || {};
+prisma.contact.findFirst = vi.fn();
 
 import express from 'express';
 import request from 'supertest';
@@ -159,6 +161,7 @@ beforeEach(() => {
   prisma.fieldPermission.findMany.mockResolvedValue([]);
   prisma.pipelineStage.findMany.mockReset();
   prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
+  prisma.contact.findFirst.mockReset();
   prisma.pipelineStage.findMany.mockResolvedValue([]);
   // Sensible defaults — happy-path resolves.
   prisma.auditLog.findFirst.mockResolvedValue(null);
@@ -506,6 +509,36 @@ describe('POST /api/deals — create (#162 #168 #173 validation)', () => {
     expect(createArgs.data.tenantId).toBe(1);
     expect(createArgs.data.ownerId).toBe(7);
     expect(createArgs.data.currency).toBe('INR');
+  });
+
+  test('generic lead deals accept non-customer lifecycle statuses', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic', defaultCurrency: 'USD' });
+    prisma.contact.findFirst.mockResolvedValue({ status: 'Prospect' });
+    prisma.deal.create.mockResolvedValue({
+      id: 12, title: 'Kanchan Gupta Deal', amount: 1200, probability: 50,
+      stage: 'lead', currency: 'USD', tenantId: 1, ownerId: 7,
+      contactId: 9, contact: { id: 9, name: 'Kanchan Gupta' }, owner: null,
+    });
+    const res = await request(makeApp()).post('/api/deals').send({
+      title: 'Kanchan Gupta Deal', amount: 1200, contactId: 9, contactType: 'lead',
+    });
+    expect(res.status).toBe(201);
+    expect(prisma.contact.findFirst).toHaveBeenCalledWith({
+      where: { id: 9, tenantId: 1 },
+      select: { status: true },
+    });
+    expect(prisma.deal.create.mock.calls[0][0].data.contactId).toBe(9);
+  });
+
+  test('generic lead deals still reject customer records', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic', defaultCurrency: 'USD' });
+    prisma.contact.findFirst.mockResolvedValue({ status: 'Customer' });
+    const res = await request(makeApp()).post('/api/deals').send({
+      title: 'Wrong type', amount: 1200, contactId: 10, contactType: 'lead',
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('CONTACT_TYPE_MISMATCH');
+    expect(prisma.deal.create).not.toHaveBeenCalled();
   });
 
   test('missing title → 400', async () => {

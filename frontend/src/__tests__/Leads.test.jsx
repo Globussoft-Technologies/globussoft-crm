@@ -1430,6 +1430,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(JSON.parse(location.getAttribute('data-state'))).toEqual(expect.objectContaining({
       leadsListState: { pageIndex: 0, pageSize: 10 },
     }));
+    expect(JSON.parse(location.getAttribute('data-state'))).not.toHaveProperty('openFullPage');
     expect(navigateMock).not.toHaveBeenCalled();
     expect(screen.getByLabelText('Edit Name for Alice Lead')).toHaveAttribute('type', 'button');
   });
@@ -1649,7 +1650,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     }
   });
 
-  it('opens full lead detail from the Generic eye action without showing preview', async () => {
+  it('opens the contact profile from the Generic eye action', async () => {
     renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
@@ -1661,9 +1662,9 @@ describe('Leads Freshsales-style list UI affordances', () => {
       state: expect.objectContaining({
         returnTo: '/leads?page=1&limit=10',
         leadsListState: { pageIndex: 0, pageSize: 10 },
-        openFullPage: true,
       }),
     });
+    expect(navigateMock.mock.calls[0][1].state).not.toHaveProperty('openFullPage');
   });
 
   it('keeps the Travel Convert to Prospect row action unchanged', async () => {

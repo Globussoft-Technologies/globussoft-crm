@@ -1078,10 +1078,11 @@ ${fields.map(f => {
             onEditLoaded={() => setEditingSequenceId(null)}
             onDirty={() => setSequenceBuilderDirty(true)}
             onViewSequences={showSavedSequences}
+            onConfigure={hasPermission('settings', 'manage') ? () => setChannelConfigOpen('whatsapp') : undefined}
             onSaved={() => { setSequenceBuilderDirty(false); setSequenceBuilderOpen(false); setEditingSequenceId(null); loadCampaigns(); }}
           />}
           {isGeneric && sequenceBuilderOpen && activeTab === 'campaigns' && <GenericChannelTriggerMappings channel="EMAIL" campaigns={campaigns} editCampaignId={editingSequenceId} onEditLoaded={() => setEditingSequenceId(null)} onDirty={() => setSequenceBuilderDirty(true)} onViewSequences={showSavedSequences} onSaved={() => { setSequenceBuilderDirty(false); setSequenceBuilderOpen(false); setEditingSequenceId(null); loadCampaigns(); }} />}
-          {isGeneric && sequenceBuilderOpen && activeTab === 'sms' && <GenericChannelTriggerMappings channel="SMS" campaigns={campaigns} editCampaignId={editingSequenceId} onEditLoaded={() => setEditingSequenceId(null)} onDirty={() => setSequenceBuilderDirty(true)} onViewSequences={showSavedSequences} onSaved={() => { setSequenceBuilderDirty(false); setSequenceBuilderOpen(false); setEditingSequenceId(null); loadCampaigns(); }} />}
+          {isGeneric && sequenceBuilderOpen && activeTab === 'sms' && <GenericChannelTriggerMappings channel="SMS" campaigns={campaigns} editCampaignId={editingSequenceId} onEditLoaded={() => setEditingSequenceId(null)} onDirty={() => setSequenceBuilderDirty(true)} onViewSequences={showSavedSequences} onConfigure={hasPermission('settings', 'manage') ? () => setChannelConfigOpen('sms') : undefined} onSaved={() => { setSequenceBuilderDirty(false); setSequenceBuilderOpen(false); setEditingSequenceId(null); loadCampaigns(); }} />}
           {isGeneric && !sequenceBuilderOpen && <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '1.25rem' }}>
             {['sms', 'whatsapp'].includes(activeTab) && hasPermission('settings', 'manage') && (
               <button

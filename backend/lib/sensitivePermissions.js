@@ -29,6 +29,16 @@
  *      PermissionsModal pick it up automatically — no other changes.
  */
 
+const {
+  WELLNESS_SIDEBAR_PERMISSION_SPECS,
+} = require('./wellnessSidebarPermissions');
+
+const WELLNESS_LEGACY_MODULE_BY_MODULE = new Map(
+  WELLNESS_SIDEBAR_PERMISSION_SPECS
+    .filter(([, , legacyModule]) => legacyModule)
+    .map(([, module, legacyModule]) => [module, legacyModule]),
+);
+
 const SENSITIVE_PERMISSIONS = new Set([
   // ROLES (W/U/D/M) — can change other people's access. `roles.manage`
   // is the only mutating action in the catalogue today; if more are
@@ -85,6 +95,25 @@ const SENSITIVE_PERMISSIONS = new Set([
   'consents.delete',
 ]);
 
+function permissionKeys(perm) {
+  const key =
+    typeof perm === 'string'
+      ? perm
+      : perm && perm.module && perm.action
+        ? `${perm.module}.${perm.action}`
+        : null;
+  if (!key) return null;
+
+  const separator = key.lastIndexOf('.');
+  const module = key.slice(0, separator);
+  const action = key.slice(separator + 1);
+  const legacyModule = WELLNESS_LEGACY_MODULE_BY_MODULE.get(module);
+  return {
+    key,
+    canonicalKey: legacyModule ? `${legacyModule}.${action}` : key,
+  };
+}
+
 /**
  * Returns the subset of an incoming permission list that is sensitive.
  * Accepts either a flat `module.action` string array OR an array of
@@ -96,14 +125,9 @@ function getSensitiveGrants(permissions) {
   const out = [];
   for (const perm of permissions) {
     if (!perm) continue;
-    const key =
-      typeof perm === 'string'
-        ? perm
-        : perm.module && perm.action
-          ? `${perm.module}.${perm.action}`
-          : null;
-    if (!key) continue;
-    if (SENSITIVE_PERMISSIONS.has(key)) out.push(key);
+    const keys = permissionKeys(perm);
+    if (!keys) continue;
+    if (SENSITIVE_PERMISSIONS.has(keys.canonicalKey)) out.push(keys.key);
   }
   return out;
 }
@@ -116,19 +140,18 @@ function getSensitiveGrants(permissions) {
  * sensitive subset of the role.
  */
 function getNewlyGrantedSensitive(previousPermissions, nextPermissions) {
-  const toKey = (p) =>
-    typeof p === 'string'
-      ? p
-      : p && p.module && p.action
-        ? `${p.module}.${p.action}`
-        : null;
   const prevSet = new Set(
     (Array.isArray(previousPermissions) ? previousPermissions : [])
-      .map(toKey)
+      .map(permissionKeys)
+      .filter(Boolean)
+      .map(({ canonicalKey }) => canonicalKey)
       .filter(Boolean),
   );
   const nextSensitive = getSensitiveGrants(nextPermissions);
-  return nextSensitive.filter((k) => !prevSet.has(k));
+  return nextSensitive.filter((key) => {
+    const keys = permissionKeys(key);
+    return keys && !prevSet.has(keys.canonicalKey);
+  });
 }
 
 /**

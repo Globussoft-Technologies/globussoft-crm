@@ -60,6 +60,87 @@ function normalizePipelineStages(rawStages) {
   });
 }
 
+const DEFAULT_TERMINAL_STAGES = [
+  { name: "Won", color: "#10b981" },
+  { name: "Lost", color: "#ef4444" },
+];
+const defaultProvisioningByTenant = new Map();
+
+async function ensureTerminalStages(tx, tenantId, pipelineId) {
+  const assignmentCount = await tx.pipelineStageAssignment.count({ where: { tenantId, pipelineId } });
+  for (const [index, terminal] of DEFAULT_TERMINAL_STAGES.entries()) {
+    let stage = await tx.pipelineStage.findFirst({
+      where: { tenantId, name: { equals: terminal.name } },
+    });
+    if (!stage) {
+      stage = await tx.pipelineStage.create({
+        data: { ...terminal, position: assignmentCount + index, tenantId },
+      });
+    }
+    const assignment = await tx.pipelineStageAssignment.findUnique({
+      where: { pipelineId_stageId: { pipelineId, stageId: stage.id } },
+    });
+    if (!assignment) {
+      await tx.pipelineStageAssignment.create({
+        data: { pipelineId, stageId: stage.id, tenantId, position: assignmentCount + index },
+      });
+    }
+  }
+}
+
+function provisionDefaultPipeline(tenantId) {
+  const existingProvision = defaultProvisioningByTenant.get(tenantId);
+  if (existingProvision) return existingProvision;
+
+  const provision = prisma.$transaction(async (tx) => {
+    const defaults = await tx.pipeline.findMany({
+      where: { tenantId, isDefault: true },
+      orderBy: { id: "asc" },
+    });
+    let pipeline = defaults[0] || null;
+    let created = false;
+
+    // Repair the duplicate produced by simultaneous legacy page loads. Keep
+    // the oldest default and remove only empty auto-provisioned duplicates.
+    for (const duplicate of defaults.slice(1)) {
+      await tx.pipeline.update({ where: { id: duplicate.id }, data: { isDefault: false } });
+      if (duplicate.name === "Default Pipeline") {
+        const dealCount = await tx.deal.count({ where: { tenantId, pipelineId: duplicate.id, deletedAt: null } });
+        if (dealCount === 0) await tx.pipeline.delete({ where: { id: duplicate.id } });
+      }
+    }
+
+    if (!pipeline) {
+      const existingNamedPipeline = await tx.pipeline.findFirst({
+        where: { tenantId, name: { equals: "Default Pipeline" } },
+      });
+      if (existingNamedPipeline) {
+        pipeline = await tx.pipeline.update({ where: { id: existingNamedPipeline.id }, data: { isDefault: true } });
+      } else {
+        pipeline = await tx.pipeline.create({
+          data: {
+            name: "Default Pipeline",
+            description: "Default sales pipeline",
+            isDefault: true,
+            tenantId,
+          },
+        });
+        created = true;
+      }
+    }
+
+    await ensureTerminalStages(tx, tenantId, pipeline.id);
+    return { pipeline, created };
+  });
+
+  defaultProvisioningByTenant.set(tenantId, provision);
+  provision.then(
+    () => defaultProvisioningByTenant.delete(tenantId),
+    () => defaultProvisioningByTenant.delete(tenantId),
+  );
+  return provision;
+}
+
 // ── GET /?fields=summary ─ list all pipelines for tenant (with deal counts) ─
 router.get("/", verifyToken, async (req, res) => {
   try {
@@ -95,10 +176,19 @@ router.get("/", verifyToken, async (req, res) => {
     }
     const pipelines = await prisma.pipeline.findMany(findManyArgs);
 
+    // Generic CRM uses soft-deleted deals. Keep its pipeline counts aligned
+    // with the Deals board, which only shows active deals by default. Other
+    // verticals retain their established counting behaviour.
+    const dealCountWhere = {
+      tenantId,
+      pipelineId: { in: pipelines.map((p) => p.id) },
+    };
+    if (isGenericCrm(req)) dealCountWhere.deletedAt = null;
+
     // Attach deal counts per pipeline
     const counts = await prisma.deal.groupBy({
       by: ["pipelineId"],
-      where: { tenantId, pipelineId: { in: pipelines.map((p) => p.id) } },
+      where: dealCountWhere,
       _count: { _all: true },
     });
     const countMap = Object.fromEntries(counts.map((c) => [c.pipelineId, c._count._all]));
@@ -123,6 +213,9 @@ router.post("/", ...adminOnly, async (req, res) => {
         error: "Pipeline-specific stages are available only in Generic CRM",
         code: "PIPELINE_STAGES_UNSUPPORTED_FOR_VERTICAL",
       });
+    }
+    if (isGenericCrm(req) && rawStages === undefined) {
+      throw pipelineInputError("At least one pipeline stage is required", "PIPELINE_STAGES_REQUIRED");
     }
     const stages = normalizePipelineStages(rawStages);
 
@@ -214,6 +307,38 @@ router.post("/", ...adminOnly, async (req, res) => {
     }
     console.error("[pipelines][POST /]", err);
     res.status(500).json({ error: "Failed to create pipeline" });
+  }
+});
+
+// Generic CRM always has one usable default pipeline. This explicit mutation
+// endpoint lets the Pipelines page repair legacy tenants that have no default
+// without making the read-only GET route write data.
+router.post("/ensure-default", ...adminOnly, async (req, res) => {
+  try {
+    if (!isGenericCrm(req)) {
+      return res.status(400).json({
+        error: "Default pipeline provisioning is available only in Generic CRM",
+        code: "DEFAULT_PIPELINE_UNSUPPORTED_FOR_VERTICAL",
+      });
+    }
+    const tenantId = req.user.tenantId;
+    const result = await provisionDefaultPipeline(tenantId);
+
+    if (result.created) {
+      try {
+        await writeAudit('Pipeline', 'CREATE', result.pipeline.id, req.user.userId, tenantId, {
+          name: result.pipeline.name,
+          isDefault: true,
+          provisioned: true,
+        });
+      } catch (auditErr) {
+        console.warn('[pipelines][POST /ensure-default] audit failed:', auditErr.message);
+      }
+    }
+    return res.status(result.created ? 201 : 200).json(result.pipeline);
+  } catch (err) {
+    console.error("[pipelines][POST /ensure-default]", err);
+    return res.status(500).json({ error: "Failed to ensure default pipeline" });
   }
 });
 
@@ -368,7 +493,9 @@ router.delete("/:id", ...adminOnly, async (req, res) => {
       return res.status(400).json({ error: "Cannot delete the default pipeline. Set another pipeline as default first." });
     }
 
-    const dealCount = await prisma.deal.count({ where: { tenantId, pipelineId: id } });
+    const dealCountWhere = { tenantId, pipelineId: id };
+    if (isGenericCrm(req)) dealCountWhere.deletedAt = null;
+    const dealCount = await prisma.deal.count({ where: dealCountWhere });
     if (dealCount > 0) {
       return res.status(400).json({ error: `Cannot delete pipeline with ${dealCount} deal(s). Move or remove deals first.` });
     }
@@ -421,6 +548,9 @@ router.post("/:id/set-default", ...adminOnly, async (req, res) => {
 
 router.post("/:id/remove-default", ...adminOnly, async (req, res) => {
   try {
+    if (isGenericCrm(req)) {
+      return res.status(400).json({ error: "Generic CRM must always have a default pipeline", code: "DEFAULT_PIPELINE_REQUIRED" });
+    }
     const id = parseInt(req.params.id, 10);
     const existing = await prisma.pipeline.findFirst({ where: { id, tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: "Pipeline not found" });

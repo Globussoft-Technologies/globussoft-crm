@@ -27,6 +27,25 @@ const {
   PERMISSION_CATALOG,
   getCatalogForVertical,
 } = require('../lib/permissionCatalog');
+const {
+  GENERIC_SIDEBAR_PERMISSION_SPECS,
+  GENERIC_SIDEBAR_PERMISSION_BY_PATH,
+  GENERIC_SIDEBAR_LEGACY_PERMISSION_BY_PATH,
+} = require('../lib/genericSidebarPermissions');
+const {
+  TRAVEL_SIDEBAR_PERMISSION_SPECS,
+  TRAVEL_SIDEBAR_PERMISSION_BY_PATH,
+  TRAVEL_SIDEBAR_LEGACY_PERMISSION_BY_PATH,
+} = require('../lib/travelSidebarPermissions');
+const {
+  WELLNESS_SIDEBAR_PERMISSION_SPECS,
+  WELLNESS_SIDEBAR_PERMISSION_BY_PATH,
+  WELLNESS_SIDEBAR_LEGACY_PERMISSION_BY_PATH,
+} = require('../lib/wellnessSidebarPermissions');
+
+const GENERIC_SIDEBAR_PERMISSION_MIGRATION_KEY = 'rbac.genericSidebarPermissions.v1';
+const TRAVEL_SIDEBAR_PERMISSION_MIGRATION_KEY = 'rbac.travelSidebarPermissions.v1';
+const WELLNESS_SIDEBAR_PERMISSION_MIGRATION_KEY = 'rbac.wellnessSidebarPermissions.v1';
 
 const MANAGER_PERMISSIONS = [
   'contacts.read', 'contacts.write', 'contacts.update',
@@ -492,6 +511,192 @@ async function grantPermissionList(stats, roleId, perms) {
   }
 }
 
+/**
+ * Split legacy shared Generic grants into their page-specific equivalents.
+ * A persistent marker makes this a true one-time compatibility migration:
+ * later admin revocations are never silently re-granted on server restart.
+ */
+async function migrateGenericSidebarPermissions(stats, tenantId) {
+  const marker = await prisma.tenantSetting.findUnique({
+    where: {
+      tenantId_key: {
+        tenantId,
+        key: GENERIC_SIDEBAR_PERMISSION_MIGRATION_KEY,
+      },
+    },
+    select: { id: true },
+  });
+  if (marker) return;
+
+  const catalog = getCatalogForVertical('generic');
+  const roles = await prisma.role.findMany({
+    where: { tenantId },
+    include: { permissions: true },
+  });
+
+  for (const role of roles) {
+    const existing = new Set(
+      (role.permissions || []).map((permission) => `${permission.module}.${permission.action}`),
+    );
+
+    for (const [path, targetModule] of GENERIC_SIDEBAR_PERMISSION_SPECS) {
+      const target = GENERIC_SIDEBAR_PERMISSION_BY_PATH[path];
+      const legacy = GENERIC_SIDEBAR_LEGACY_PERMISSION_BY_PATH[path];
+      if (!target || !catalog[targetModule]) continue;
+
+      // Home and personal Notification Settings were intentionally ungated
+      // before this split, so every existing role keeps its previous access.
+      if (!legacy) {
+        await ensureRolePermission(stats, role.id, target.module, target.action);
+        continue;
+      }
+
+      if (existing.has(`${legacy.module}.${legacy.action}`)) {
+        await ensureRolePermission(stats, role.id, target.module, target.action);
+      }
+
+      // Preserve mutation/export scope where the old and new cards expose the
+      // same action name, without inventing broader access.
+      for (const action of catalog[target.module]) {
+        if (existing.has(`${legacy.module}.${action}`)) {
+          await ensureRolePermission(stats, role.id, target.module, action);
+        }
+      }
+    }
+  }
+
+  await prisma.tenantSetting.upsert({
+    where: {
+      tenantId_key: {
+        tenantId,
+        key: GENERIC_SIDEBAR_PERMISSION_MIGRATION_KEY,
+      },
+    },
+    update: { value: '1', category: 'migration' },
+    create: {
+      tenantId,
+      key: GENERIC_SIDEBAR_PERMISSION_MIGRATION_KEY,
+      value: '1',
+      category: 'migration',
+    },
+  });
+}
+
+async function migrateTravelSidebarPermissions(stats, tenantId) {
+  const marker = await prisma.tenantSetting.findUnique({
+    where: {
+      tenantId_key: {
+        tenantId,
+        key: TRAVEL_SIDEBAR_PERMISSION_MIGRATION_KEY,
+      },
+    },
+    select: { id: true },
+  });
+  if (marker) return;
+
+  const catalog = getCatalogForVertical('travel');
+  const roles = await prisma.role.findMany({
+    where: { tenantId },
+    include: { permissions: true },
+  });
+
+  for (const role of roles) {
+    const existing = new Set(
+      (role.permissions || []).map((permission) => `${permission.module}.${permission.action}`),
+    );
+    for (const [path, targetModule] of TRAVEL_SIDEBAR_PERMISSION_SPECS) {
+      const target = TRAVEL_SIDEBAR_PERMISSION_BY_PATH[path];
+      const legacy = TRAVEL_SIDEBAR_LEGACY_PERMISSION_BY_PATH[path];
+      if (!target || !legacy || !catalog[targetModule]) continue;
+
+      if (existing.has(`${legacy.module}.${legacy.action}`)) {
+        await ensureRolePermission(stats, role.id, target.module, target.action);
+      }
+      for (const action of catalog[target.module]) {
+        if (existing.has(`${legacy.module}.${action}`)) {
+          await ensureRolePermission(stats, role.id, target.module, action);
+        }
+      }
+    }
+  }
+
+  await prisma.tenantSetting.upsert({
+    where: {
+      tenantId_key: {
+        tenantId,
+        key: TRAVEL_SIDEBAR_PERMISSION_MIGRATION_KEY,
+      },
+    },
+    update: { value: '1', category: 'migration' },
+    create: {
+      tenantId,
+      key: TRAVEL_SIDEBAR_PERMISSION_MIGRATION_KEY,
+      value: '1',
+      category: 'migration',
+    },
+  });
+}
+
+async function migrateWellnessSidebarPermissions(stats, tenantId) {
+  const marker = await prisma.tenantSetting.findUnique({
+    where: {
+      tenantId_key: {
+        tenantId,
+        key: WELLNESS_SIDEBAR_PERMISSION_MIGRATION_KEY,
+      },
+    },
+    select: { id: true },
+  });
+  if (marker) return;
+
+  const catalog = getCatalogForVertical('wellness');
+  const roles = await prisma.role.findMany({
+    where: { tenantId },
+    include: { permissions: true },
+  });
+
+  for (const role of roles) {
+    const existing = new Set(
+      (role.permissions || []).map((permission) => `${permission.module}.${permission.action}`),
+    );
+    for (const [path, targetModule] of WELLNESS_SIDEBAR_PERMISSION_SPECS) {
+      const target = WELLNESS_SIDEBAR_PERMISSION_BY_PATH[path];
+      const legacy = WELLNESS_SIDEBAR_LEGACY_PERMISSION_BY_PATH[path];
+      if (!target || !catalog[targetModule]) continue;
+
+      // These pages were previously available without a permission grant.
+      if (!legacy) {
+        await ensureRolePermission(stats, role.id, target.module, target.action);
+        continue;
+      }
+      if (existing.has(`${legacy.module}.${legacy.action}`)) {
+        await ensureRolePermission(stats, role.id, target.module, target.action);
+      }
+      for (const action of catalog[target.module]) {
+        if (existing.has(`${legacy.module}.${action}`)) {
+          await ensureRolePermission(stats, role.id, target.module, action);
+        }
+      }
+    }
+  }
+
+  await prisma.tenantSetting.upsert({
+    where: {
+      tenantId_key: {
+        tenantId,
+        key: WELLNESS_SIDEBAR_PERMISSION_MIGRATION_KEY,
+      },
+    },
+    update: { value: '1', category: 'migration' },
+    create: {
+      tenantId,
+      key: WELLNESS_SIDEBAR_PERMISSION_MIGRATION_KEY,
+      value: '1',
+      category: 'migration',
+    },
+  });
+}
+
 // Separate a cross-vertical preset (e.g. MANAGER_PERMISSIONS, which spans
 // common + wellness + travel) into the slice valid for ONE vertical's catalog.
 // COMMON_MODULES survive for every vertical; wellness-only modules survive only
@@ -745,6 +950,13 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
       });
     }
 
+    if (vertical === 'generic') {
+      await migrateGenericSidebarPermissions(stats, tenantId);
+    }
+    if (vertical === 'travel') {
+      await migrateTravelSidebarPermissions(stats, tenantId);
+    }
+
     // Wellness-vertical custom roles. Auto-provisioned only for wellness
     // tenants so a generic CRM tenant doesn't end up with empty Doctor /
     // Nurse roles cluttering its Roles & Permissions matrix. Admins can
@@ -844,6 +1056,10 @@ async function provisionTenantRbacInternal(stats, tenantId, vertical) {
         );
         stats.widgetsSkipped = (stats.widgetsSkipped || 0) + 1;
       }
+    }
+
+    if (isWellness) {
+      await migrateWellnessSidebarPermissions(stats, tenantId);
     }
 
     const users = await prisma.user.findMany({ where: { tenantId } });

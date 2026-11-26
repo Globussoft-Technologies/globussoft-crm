@@ -183,10 +183,10 @@ function renderTravelTasks() {
   );
 }
 
-function renderWellnessTasks() {
+function renderWellnessTasks(user = { id: 1, role: 'ADMIN' }) {
   return render(
     <MemoryRouter initialEntries={['/tasks']}>
-      <AuthContext.Provider value={{ user: { id: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'wellness' } }}>
+      <AuthContext.Provider value={{ user, tenant: { id: 1, vertical: 'wellness' } }}>
         <Tasks />
       </AuthContext.Provider>
     </MemoryRouter>,
@@ -621,6 +621,23 @@ describe('<Tasks /> — wellness assignee source', () => {
     expect(staffOption).toBeInTheDocument();
     const assigneeSelect = staffOption.closest('select');
     expect(within(assigneeSelect).queryByRole('option', { name: /Anita Sharma/ })).not.toBeInTheDocument();
+  });
+
+  it('wellness read-only Tasks access does not probe Patient tags or show a PHI denial', async () => {
+    renderWellnessTasks({
+      id: 1,
+      role: 'USER',
+      permissions: ['wellness_tasks.read', 'tasks.read'],
+    });
+
+    expect(
+      await screen.findByRole('heading', { name: /Agent Task Queue/i }),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/tasks'));
+    expect(fetchApiMock.mock.calls.some(
+      ([url]) => url === '/api/wellness/patients/tags',
+    )).toBe(false);
+    expect(notifyError).not.toHaveBeenCalled();
   });
 
   it('wellness: submitting with a chosen assignee sends the staff user id, not a contact id', async () => {

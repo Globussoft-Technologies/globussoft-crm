@@ -69,6 +69,39 @@ function mockFetch({ status = 200, body = {}, method = 'GET' } = {}) {
   });
 }
 
+describe('accessible page list requests', () => {
+  const readPages = () => fetchApi('/api/pages/me', { silent: true });
+  afterEach(() => {
+    clearAuthToken();
+    localStorage.removeItem('activeTenantId');
+    vi.restoreAllMocks();
+  });
+
+  it('shares concurrent and later reads, and refreshes after permission or identity changes', async () => {
+    setAuthToken('first-user');
+    const network = mockFetch({ body: { pages: [], hiddenPaths: ['/restricted'] } });
+    await Promise.all(Array.from({ length: 5 }, readPages));
+    expect(await readPages()).toEqual({ pages: [], hiddenPaths: ['/restricted'] });
+    expect(network).toHaveBeenCalledTimes(1);
+    window.dispatchEvent(new Event('sidebar:pages-changed'));
+    await Promise.all([readPages(), readPages()]);
+    expect(network).toHaveBeenCalledTimes(2);
+    localStorage.setItem('activeTenantId', '42');
+    await readPages();
+    setAuthToken('second-user');
+    await readPages();
+    expect(network).toHaveBeenCalledTimes(4);
+  });
+
+  it('allows a retry after a failed request', async () => {
+    setAuthToken('first-user');
+    const network = mockFetch({ body: { pages: [] } }).mockRejectedValueOnce(new Error('offline'));
+    await expect(readPages()).rejects.toThrow();
+    await expect(readPages()).resolves.toEqual({ pages: [] });
+    expect(network).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('utils/api — fetchApi', () => {
   beforeEach(() => {
     localStorage.clear();

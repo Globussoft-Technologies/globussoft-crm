@@ -251,7 +251,9 @@ describe('<Diagnostics /> — page chrome + filter bar', () => {
     // diagnostics can recommend trips from your catalog", the Google Drive
     // connect button) also contains "diagnostics" but doesn't END with it —
     // only the count badge's "<N> diagnostics" title does.
-    expect(screen.getByTitle(/diagnostics$/i)).toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Loading diagnostics count' })).toBeInTheDocument();
+    expect(screen.queryByTitle(/diagnostics$/i)).not.toBeInTheDocument();
+    expect(await screen.findByTitle(/diagnostics$/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by sub-brand/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/Filter by classification/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /All time/i })).toBeInTheDocument();

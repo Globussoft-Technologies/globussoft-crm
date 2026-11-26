@@ -19,6 +19,7 @@ import { useNotify } from "../../utils/notify";
 import { AuthContext } from "../../App";
 import CalendarRangePicker from "../../components/CalendarRangePicker";
 import CountBadge from "../../components/CountBadge";
+import Skeleton from "../../components/ui/Skeleton";
 import { DashboardBackLink } from "../../components/PageHeader";
 import TopScrollSync from "../../components/TopScrollSync";
 import { useActiveSubBrand } from "../../utils/subBrand";
@@ -152,7 +153,7 @@ export default function Diagnostics() {
 
   const page = readPageParam(searchParams);
   const [diagnostics, setDiagnostics] = useState([]);
-  const [total, setTotal] = useState(0);
+  const [total, setTotal] = useState(null);
   const [loading, setLoading] = useState(true);
   const [subBrand, setSubBrand] = useState(
     searchParams.get("subBrand") === "all"
@@ -248,7 +249,7 @@ export default function Diagnostics() {
         notify.error(e?.body?.error || "Failed to load diagnostics");
         setDiagnostics([]);
         setSelectedIds(new Set());
-        setTotal(0);
+        setTotal(null);
       } finally {
         if (myReqId === reqIdRef.current) {
           setLoading(false);
@@ -506,7 +507,13 @@ export default function Diagnostics() {
           }}
         >
           <ClipboardCheck size={28} aria-hidden /> <span>Diagnostics</span>
-          <CountBadge count={total} title={`${total.toLocaleString()} diagnostics`} />
+          {loading ? (
+            <span role="status" aria-label="Loading diagnostics count">
+              <Skeleton width="9rem" height={30} style={{ borderRadius: 999 }} />
+            </span>
+          ) : total !== null && (
+            <CountBadge count={total} title={`${total.toLocaleString()} diagnostics`} />
+          )}
         </h1>
         <div className="diagnostics-page__actions" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <Link

@@ -78,7 +78,11 @@ test.describe('Pipelines API — smoke', () => {
     const tag = `E2E_AUDIT_${Date.now()}`;
     const res = await request.post(`${API}/pipelines`, {
       headers: auth(),
-      data: { name: tag, description: 'Aarav Mehta E2E pipeline' },
+      data: {
+        name: tag,
+        description: 'Aarav Mehta E2E pipeline',
+        stages: [{ name: `${tag} stage` }],
+      },
     });
     expect(res.status()).toBe(201);
     const body = await res.json();
@@ -158,7 +162,11 @@ test.describe('Pipelines API — smoke', () => {
     const tag = `E2E_AUDIT_DEFAULT_${Date.now()}`;
     const create = await request.post(`${API}/pipelines`, {
       headers: auth(),
-      data: { name: tag, isDefault: false },
+      data: {
+        name: tag,
+        isDefault: false,
+        stages: [{ name: `${tag} stage` }],
+      },
     });
     expect(create.status()).toBe(201);
     const created = await create.json();

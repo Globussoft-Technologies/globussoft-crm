@@ -344,10 +344,11 @@ describe('tenant page visibility resolution', () => {
       [],
     );
 
-    expect(WELLNESS_SIDEBAR_PERMISSION_SPECS).toHaveLength(78);
-    expect(pages).toHaveLength(78);
-    expect(new Set(pages.map((page) => page.path)).size).toBe(78);
-    expect(new Set(targetModules).size).toBe(78);
+    expect(WELLNESS_SIDEBAR_PERMISSION_SPECS).toHaveLength(77);
+    expect(pages).toHaveLength(77);
+    expect(new Set(pages.map((page) => page.path)).size).toBe(77);
+    expect(new Set(targetModules).size).toBe(77);
+    expect(pages.some((page) => page.path === '/converted-leads')).toBe(false);
     expect(new Set(Object.keys(filtered))).toEqual(new Set(targetModules));
   });
 
@@ -380,7 +381,7 @@ describe('tenant page visibility resolution', () => {
       { isOwner: true },
     );
     expect(pages).toEqual(visibility.getTenantPageVisibilityCatalog('wellness'));
-    expect(pages).toHaveLength(78);
+    expect(pages).toHaveLength(77);
   });
 
   it('removes only the matching Wellness permission module when its page is hidden', () => {

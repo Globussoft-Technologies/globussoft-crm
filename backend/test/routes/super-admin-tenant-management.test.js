@@ -631,7 +631,7 @@ describe('tenant page visibility', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.vertical).toBe('wellness');
-    expect(res.body.pages).toHaveLength(78);
+    expect(res.body.pages).toHaveLength(77);
     expect(res.body.hiddenPaths).toEqual(['/wellness/patients']);
     expect(res.body.pages.find((page) => page.path === '/wellness/patients').enabled).toBe(false);
     expect(res.body.pages.find((page) => page.path === '/wellness/calendar').enabled).toBe(true);

@@ -73,7 +73,8 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 11110,
+    "all-js-maxKB": 11150,
+    "//generic-rbac-pipelines-email-js": "11110 -> 11150 KB: sidebar-aligned RBAC administration, Generic pipeline-stage management, contact workflow refinements, and tenant SendGrid settings bring Linux CI to 11123.5 KB and the local Windows production build to 11129.2 KB. No oversized dependency or individual chunk regression was introduced; retain 20.8 KB against the larger measurement while preserving every per-chunk cap.",
     "//travel-email-automation-js": "10950 -> 10975 KB: the lazy Travel Email Automation workspace adds its route declaration, template editor, delivery-history controls, and API orchestration without a new runtime dependency. Linux CI reported 10954.9 KB total JS and a fresh Node 24 Windows build measures 10960.7 KB; retain 14.3 KB of local headroom while preserving every entry, vendor, and feature-chunk cap.",
     "//merged-leads-js": "The combined Travel Email Automation and Generic Leads calling workspace build measures 11095.3 KB of JS.",
     "//generic-territory-geo-js": "10325 -> 10950 KB: Generic CRM territory creation now includes the complete country/state catalog required for dependent multi-selects. The catalog is isolated to the lazy Territories route; no Travel or Wellness bundle dependency was added.",

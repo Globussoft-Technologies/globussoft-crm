@@ -743,11 +743,11 @@ describe('vertical-scoped permission catalog responses', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.vertical).toBe('wellness');
-    expect(Object.keys(res.body.catalog)).toHaveLength(78);
+    expect(Object.keys(res.body.catalog)).toHaveLength(77);
     expect(res.body.catalog).toHaveProperty('wellness_patients');
     expect(res.body.catalog).not.toHaveProperty('patients');
     expect(res.body.catalog).not.toHaveProperty('itineraries');
-    expect(res.body.domains.flatMap((domain) => domain.modules)).toHaveLength(78);
+    expect(res.body.domains.flatMap((domain) => domain.modules)).toHaveLength(77);
     expect(res.body.domains.map((domain) => domain.domain)).toContain('Clinical');
     expect(res.body.domains.map((domain) => domain.domain)).toContain('Catalog');
     expect(res.body.domains.map((domain) => domain.domain)).not.toContain('Travel Sales');

@@ -37,7 +37,6 @@ const WELLNESS_SIDEBAR_PERMISSION_SPECS = [
   ['/inbox', 'wellness_inbox', 'communications', 'read'],
   ['/wellness/telecaller', 'wellness_telecaller', 'leads', 'read'],
   ['/leads', 'wellness_leads', 'leads', 'read'],
-  ['/converted-leads', 'wellness_converted_leads', 'leads', 'read'],
   ['/callified-data', 'wellness_callified_data', 'integrations', 'read'],
   ['/tasks', 'wellness_tasks', 'tasks', 'read'],
   ['/lead-routing', 'wellness_lead_routing', 'leads', 'read'],

@@ -163,7 +163,7 @@ test.describe('POST /api/roles — landingPath on create', () => {
       description: 'landingPath round-trip',
       userType: 'STAFF',
       landingPath: '/home',
-      permissions: [{ module: 'contacts', action: 'read' }],
+      permissions: [{ module: 'home', action: 'read' }],
     });
     expect(res.status(), await res.text()).toBe(201);
     const body = await res.json();
@@ -247,14 +247,14 @@ test.describe('POST /api/roles — landingPath on create', () => {
 test.describe('PUT /api/roles/:id — landingPath update', () => {
   test('200 updates landingPath on an existing role (after granting required perm)', async ({ request }) => {
     const { token } = await getAdmin(request);
-    // Create with /home (permission-free), then PUT to change it.
+    // Create with the dedicated home.read permission, then PUT to change it.
     const key = `${RUN_TAG}_PUT_OK`;
     const create = await post(request, token, '/api/roles', {
       name: `${RUN_TAG} put-ok`,
       key,
       userType: 'STAFF',
       landingPath: '/home',
-      permissions: [{ module: 'contacts', action: 'read' }],
+      permissions: [{ module: 'home', action: 'read' }],
     });
     expect(create.status()).toBe(201);
     const created = await create.json();
@@ -291,7 +291,7 @@ test.describe('PUT /api/roles/:id — landingPath update', () => {
       key,
       userType: 'STAFF',
       landingPath: '/home',
-      permissions: [{ module: 'contacts', action: 'read' }],
+      permissions: [{ module: 'home', action: 'read' }],
     });
     const created = await create.json();
     createdRoleIds.add(created.id);
@@ -537,7 +537,7 @@ test.describe('POST /api/staff — rbacRoleId at creation', () => {
       key: roleKey,
       userType: 'STAFF',
       landingPath: '/home',
-      permissions: [{ module: 'contacts', action: 'read' }],
+      permissions: [{ module: 'home', action: 'read' }],
     });
     expect(roleRes.status()).toBe(201);
     const newRole = await roleRes.json();

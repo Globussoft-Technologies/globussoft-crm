@@ -21,6 +21,7 @@ const {
   getUserPermissions,
   clearAllCache,
   requirePermission,
+  hasPermissionForRoute,
 } = require('../../middleware/requirePermission');
 
 const originalUserRoleFindMany = prisma.userRole.findMany;
@@ -51,6 +52,51 @@ afterEach(() => {
 });
 
 describe('loadUserPermissions — matrix is authoritative', () => {
+  test('generic page grants authorize legacy APIs without exposing sibling page grants', () => {
+    const permissions = new Set(['lead_reports.read']);
+
+    expect(hasPermissionForRoute(permissions, 'reports', 'read', 'generic')).toBe(true);
+    expect(permissions.has('reports.read')).toBe(false);
+    expect(hasPermissionForRoute(permissions, 'reports', 'read', 'travel')).toBe(false);
+  });
+
+  test('travel page grants authorize their legacy APIs only for Travel CRM', () => {
+    const permissions = new Set(['quote_builder.read']);
+
+    expect(hasPermissionForRoute(permissions, 'quotes', 'read', 'travel')).toBe(true);
+    expect(permissions.has('quotes.read')).toBe(false);
+    expect(hasPermissionForRoute(permissions, 'quotes', 'read', 'generic')).toBe(false);
+    expect(hasPermissionForRoute(permissions, 'quotes', 'read', 'wellness')).toBe(false);
+  });
+
+  test('wellness page grants authorize their legacy APIs only for Wellness CRM', () => {
+    const permissions = new Set(['wellness_service_categories.read']);
+
+    expect(hasPermissionForRoute(permissions, 'services', 'read', 'wellness')).toBe(true);
+    expect(permissions.has('services.read')).toBe(false);
+    expect(hasPermissionForRoute(permissions, 'services', 'read', 'generic')).toBe(false);
+    expect(hasPermissionForRoute(permissions, 'services', 'read', 'travel')).toBe(false);
+  });
+
+  test('wellness effective permissions include runtime legacy aliases for page controls', async () => {
+    prisma.userRole.findMany = vi.fn().mockResolvedValue([{
+      role: {
+        key: 'CUSTOM',
+        permissions: [
+          { module: 'wellness_service_categories', action: 'read' },
+          { module: 'wellness_service_categories', action: 'write' },
+        ],
+      },
+    }]);
+
+    const permissions = await loadUserPermissions(1, 100, 'wellness');
+
+    expect(permissions.has('wellness_service_categories.read')).toBe(true);
+    expect(permissions.has('wellness_service_categories.write')).toBe(true);
+    expect(permissions.has('services.read')).toBe(true);
+    expect(permissions.has('services.write')).toBe(true);
+  });
+
   test('generic operational profiles do not bypass permissions removed from the assigned role', async () => {
     prisma.userRole.findMany = vi.fn().mockResolvedValue([{
       role: { key: 'USER', permissions: [{ module: 'contacts', action: 'read' }] },

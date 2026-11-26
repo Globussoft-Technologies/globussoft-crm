@@ -6,7 +6,7 @@
  * the original card grid. Both layouts reuse the same controls: Organization,
  * Appearance (theme radio group), Email Messages (retention toggle — already
  * pinned by Settings.emailRetention.test.jsx), Branding (logo + brand color),
- * Pipeline Stages, Invite User, Notification Preferences, plus a wellness-only
+ * Invite User, Notification Preferences, plus a wellness-only
  * ConsentTemplates card. The Access Control Roster lives on the separate
  * RolesAdmin page — it is no longer rendered on Settings.
  *
@@ -14,17 +14,15 @@
  *   1. Smoke render — page renders with the "Organization Settings" header
  *      and the high-level subtitle.
  *   2. Initial-mount fetchApi calls — /api/tenants/current, /api/wellness/branding,
- *      /api/pipeline_stages, /api/notifications/preferences all fire on mount.
+ *      /api/notifications/preferences all fire on mount.
  *   3. Organization card renders Name + Slug + Owner Email + Plan inputs
  *      after the tenant load resolves.
  *   4. Organization save — submitting the form PUTs to /api/tenants/current
  *      with { name, ownerEmail } only (slug is read-only).
  *   5. Appearance card — the three theme radio options (Light / Dark / System)
  *      are rendered; clicking one calls setTheme + notify.success.
- *   6. Pipeline Stages card — loading state shown initially, then the loaded
- *      stages render with their position labels.
- *   7. Add pipeline stage — submitting the form POSTs to /api/pipeline_stages
- *      with { name, color, position } and then re-fetches the list.
+ *   6. Pipeline Stages are absent because generic CRM manages them from the
+ *      Sales Pipelines page.
  *   8. Invite user — submitting the invite form POSTs to /api/auth/register
  *      with the form values.
  *   9. Loading state — while initial fetches are in-flight, the Organization
@@ -40,8 +38,6 @@
  *   GET  /api/tenants/current             → tenant row
  *   PUT  /api/tenants/current  { name, ownerEmail }
  *   POST /api/auth/register   { name, email, password, role }
- *   GET  /api/pipeline_stages             → PipelineStage[]
- *   POST /api/pipeline_stages  { name, color, position }
  *   GET  /api/wellness/branding           → { logoUrl, brandColor }
  *   GET  /api/notifications/preferences   → NotificationPreference
  *
@@ -133,11 +129,6 @@ const baseTenant = {
   emailRetention: true,
 };
 
-const baseStages = [
-  { id: "s1", name: "Prospecting", color: "#3b82f6", position: 0 },
-  { id: "s2", name: "Qualification", color: "#10b981", position: 1 },
-];
-
 const basePrefs = {
   categoryToggles: {
     deal: true,
@@ -156,7 +147,6 @@ const basePrefs = {
 
 function buildDefaultFetch(overrides = {}) {
   const tenant = overrides.tenant ?? baseTenant;
-  const stages = overrides.stages ?? baseStages;
   const branding = overrides.branding ?? {
     logoUrl: null,
     brandColor: "",
@@ -180,14 +170,20 @@ function buildDefaultFetch(overrides = {}) {
     }
     if (url === "/api/auth/register" && method === "POST")
       return Promise.resolve({ ok: true });
-    if (url === "/api/pipeline_stages" && method === "GET")
-      return Promise.resolve(stages);
-    if (url === "/api/pipeline_stages" && method === "POST")
-      return Promise.resolve({ ok: true });
     if (url === "/api/notifications/preferences" && method === "GET")
       return Promise.resolve(prefs);
     if (url === "/api/wellness/consent-templates") return Promise.resolve([]);
     if (url === "/api/travel/email-provider" && method === "GET")
+      return Promise.resolve({
+        configured: false,
+        source: "backend",
+        fallback: {
+          configured: true,
+          fromEmail: "noreply@crm.test",
+          fromName: "",
+        },
+      });
+    if (url === "/api/generic/email-provider" && method === "GET")
       return Promise.resolve({
         configured: false,
         source: "backend",
@@ -225,6 +221,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
     expect(within(nav).queryByRole("button", { name: "Consent templates" }) !== null).toBe(vertical === "wellness");
     expect(within(nav).queryByRole("button", { name: "Clinical role types" }) !== null).toBe(vertical === "wellness");
     expect(screen.queryByTestId("travel-email-provider-card") !== null).toBe(vertical === "travel");
+    expect(screen.queryByTestId("generic-email-provider-card") !== null).toBe(vertical === "generic");
     expect(screen.queryByTestId("travel-promotional-website-card") !== null).toBe(vertical === "travel");
     expect(screen.queryByTestId("wellness-role-types-card") !== null).toBe(vertical === "wellness");
     expect(screen.queryByTestId("generic-twilio-settings") !== null).toBe(vertical === "generic");
@@ -237,13 +234,13 @@ describe("<Settings /> — page shell + representative card pin", () => {
       expect(activeSection).toBe("page");
       if (button.textContent === "Integrations") expect(screen.getByLabelText("Available integrations")).toBeVisible();
       else expect(document.querySelectorAll(".gs-section:not([hidden])").length).toBeGreaterThan(0);
-      if (button.textContent !== "General") expect(screen.queryByRole("heading", { name: "Pipeline Stages" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("heading", { name: "Pipeline Stages" })).not.toBeInTheDocument();
     }
     fireEvent.click(within(nav).getByRole("button", { name: "Integrations" }));
     const directory = screen.getByLabelText("Available integrations");
     expect(within(directory).queryByRole("button", { name: /Callified/ }) !== null).toBe(vertical !== "travel");
     expect(screen.queryByRole("heading", { name: "Callified Integration", hidden: true }) !== null).toBe(vertical !== "travel");
-    expect(within(directory).queryByRole("button", { name: /SendGrid/ }) !== null).toBe(vertical === "travel");
+    expect(within(directory).queryByRole("button", { name: /SendGrid/ }) !== null).toBe(vertical !== "wellness");
     expect(within(directory).queryByRole("button", { name: /Google Maps/ }) !== null).toBe(vertical === "generic");
     expect(within(directory).queryByRole("button", { name: /WhatsApp \/ Meta/ }) !== null).toBe(vertical === "generic");
     for (const [label, path] of [["Gmail", "/gmail"], ["Google Drive", "/travel/trip-knowledge"], ["Google Calendar", "/calendar-sync"]]) {
@@ -256,7 +253,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
       expect(fetchApiMock.mock.calls.some(([url]) => url === "/api/wellness/consent-templates" || url === "/api/wellness/role-types")).toBe(false);
     }
     if (vertical !== "travel") {
-      expect(directory.querySelectorAll(".gs-app-connection")).toHaveLength(vertical === "generic" ? 5 : 2);
+      expect(directory.querySelectorAll(".gs-app-connection")).toHaveLength(vertical === "generic" ? 6 : 2);
       expect(fetchApiMock.mock.calls.some(([url]) => url === "/api/travel/email-provider" || url === "/api/travel/promotional-website" || url === "/api/brand-kits" || url === "/api/travel/dashboard/readiness")).toBe(false);
     }
   }, 10000); // Full settings navigation matrix needs headroom on loaded CI workers.
@@ -356,11 +353,12 @@ describe("<Settings /> — page shell + representative card pin", () => {
       if (url === "/api/settings/google-maps") return Promise.resolve({ configured: connected, enabled: connected });
       if (url === "/api/sms/config") return Promise.resolve([{ provider: "twilio", isActive: connected, apiKey: { configured: connected }, authToken: { configured: connected }, senderId: "+15551234567" }]);
       if (url === "/api/whatsapp/config/status") return Promise.resolve({ configured: true, status: { status: connected ? "CONNECTED" : "DISCONNECTED" }, config: {}, ours: {} });
+      if (url === "/api/generic/email-provider") return Promise.resolve({ configured: connected, fallback: { configured: false } });
       return defaults(url, opts);
     });
     renderSettings({ authValue: { tenant, user: { role: "ADMIN" }, setTenant: vi.fn() } });
     fireEvent.click(screen.getByRole("button", { name: "Integrations" }));
-    const names = vertical === "generic" ? ["AdsGPT", "Callified", "WhatsApp / Meta", "Twilio", "Google Maps"] : ["AdsGPT", "Callified"];
+    const names = vertical === "generic" ? ["AdsGPT", "Callified", "WhatsApp / Meta", "Twilio", "Google Maps", "SendGrid"] : ["AdsGPT", "Callified"];
     for (const name of names) {
       const tile = screen.getByRole("button", { name: new RegExp(`${name}.*Manage integration`, "i") });
       expect(await within(tile).findByText(connected ? "Connected" : "Not connected")).toBeInTheDocument();
@@ -374,13 +372,13 @@ describe("<Settings /> — page shell + representative card pin", () => {
     const tenant = baseTenant;
     const defaults = buildDefaultFetch({ tenant });
     fetchApiMock.mockImplementation((url, opts) => {
-      if (["/api/integrations/adsgpt/config", "/api/integrations/callified/config", "/api/settings/google-maps", "/api/sms/config", "/api/whatsapp/config/status"].includes(url)) return Promise.reject(new Error("Unavailable"));
+      if (["/api/integrations/adsgpt/config", "/api/integrations/callified/config", "/api/settings/google-maps", "/api/sms/config", "/api/whatsapp/config/status", "/api/generic/email-provider"].includes(url)) return Promise.reject(new Error("Unavailable"));
       return defaults(url, opts);
     });
     renderSettings({ authValue: { tenant, user: { role: "ADMIN" }, setTenant: vi.fn() } });
     fireEvent.click(screen.getByRole("button", { name: "Integrations" }));
     const directory = screen.getByLabelText("Available integrations");
-    await waitFor(() => expect(within(directory).getAllByText("Status unavailable")).toHaveLength(5));
+    await waitFor(() => expect(within(directory).getAllByText("Status unavailable")).toHaveLength(6));
     expect(within(directory).queryByText("Not connected")).not.toBeInTheDocument();
   });
 
@@ -459,12 +457,14 @@ describe("<Settings /> — page shell + representative card pin", () => {
       const calledUrls = fetchApiMock.mock.calls.map(([url]) => url);
       expect(calledUrls).toContain("/api/tenants/current");
       expect(calledUrls).toContain("/api/wellness/branding");
-      expect(calledUrls).toContain("/api/pipeline_stages");
       expect(calledUrls).toContain("/api/notifications/preferences");
     });
     // Access Control Roster now lives on /roles — Settings must NOT fetch users.
     expect(fetchApiMock.mock.calls.map(([url]) => url)).not.toContain(
       "/api/auth/users",
+    );
+    expect(fetchApiMock.mock.calls.map(([url]) => url)).not.toContain(
+      "/api/pipeline_stages",
     );
   });
 
@@ -964,10 +964,54 @@ describe("<Settings /> — page shell + representative card pin", () => {
       });
     });
     expect(notifyObj.success).toHaveBeenCalledWith(
-      expect.stringMatching(/Travel SendGrid settings saved/i),
+      expect.stringMatching(/Travel CRM SendGrid settings saved/i),
     );
     fireEvent.click(screen.getByRole("button", { name: "All integrations" }));
     expect(await within(screen.getByRole("button", { name: /SendGrid.*Manage integration/i })).findByText("Connected")).toBeInTheDocument();
+  });
+
+  it("configures SendGrid from Generic CRM without exposing the backend fallback sender", async () => {
+    const user = userEvent.setup();
+    const defaultFetch = buildDefaultFetch({ tenant: baseTenant });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === "/api/generic/email-provider" && opts?.method === "PUT") {
+        const body = JSON.parse(opts.body);
+        return Promise.resolve({ configured: true, source: "tenant", ...body, apiKeyLast4: "****1234" });
+      }
+      return defaultFetch(url, opts);
+    });
+
+    renderSettings({
+      authValue: { tenant: baseTenant, user: { role: "ADMIN" }, setTenant: vi.fn() },
+    });
+
+    await user.click(await screen.findByRole("button", { name: "Integrations" }));
+    await user.click(screen.getByRole("button", { name: /SendGrid.*Manage integration/i }));
+    expect(screen.queryByText(/Using backend default:/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use Backend Default" })).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("SendGrid API key"), "SG.generic.secret1234");
+    await user.type(screen.getByLabelText("Verified sender email"), "sales@generic.test");
+    await user.type(screen.getByLabelText("Sender name"), "Acme Sales");
+    await user.click(screen.getByRole("button", { name: "Save SendGrid" }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      "/api/generic/email-provider",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          apiKey: "SG.generic.secret1234",
+          fromEmail: "sales@generic.test",
+          fromName: "Acme Sales",
+        }),
+      }),
+    ));
+    const updateButton = screen.getByRole("button", { name: "Update SendGrid" });
+    await waitFor(() => expect(updateButton).toBeDisabled());
+    const putCount = fetchApiMock.mock.calls.filter(([url, opts]) => url === "/api/generic/email-provider" && opts?.method === "PUT").length;
+    const successToastCount = notifyObj.success.mock.calls.length;
+    await user.click(updateButton);
+    expect(fetchApiMock.mock.calls.filter(([url, opts]) => url === "/api/generic/email-provider" && opts?.method === "PUT")).toHaveLength(putCount);
+    expect(notifyObj.success).toHaveBeenCalledTimes(successToastCount);
   });
 
   it("switches the transfer form to FTP and uses port 21", async () => {
@@ -1116,64 +1160,6 @@ describe("<Settings /> — page shell + representative card pin", () => {
     );
   });
 
-  // 6 — Pipeline stages loaded list
-  it("keeps pipeline stages in General and preserves the draft across other settings sections", async () => {
-    renderSettings({
-      authValue: { tenant: baseTenant, user: { role: "ADMIN" }, setTenant: vi.fn() },
-    });
-    const heading = await screen.findByRole("heading", { name: "Pipeline Stages" });
-    await screen.findByText("Prospecting");
-    const stageInput = screen.getByPlaceholderText(/Stage name/i);
-    fireEvent.change(stageInput, { target: { value: "Unsaved stage" } });
-
-    for (const section of ["Branding", "Appearance & tours", "Notifications", "Members", "Integrations", "AI & generation", "Forms & tracking", "API & webhooks"]) {
-      fireEvent.click(screen.getByRole("button", { name: section }));
-      expect(heading).not.toBeVisible();
-      expect(stageInput).not.toBeVisible();
-    }
-
-    fireEvent.click(screen.getByRole("button", { name: "General" }));
-    expect(heading).toBeVisible();
-    expect(stageInput).toHaveValue("Unsaved stage");
-  }, 10000); // Settings navigation and data rendering need headroom on loaded CI workers.
-
-  it("renders loaded pipeline stages with their names + position labels", async () => {
-    renderSettings();
-    await waitFor(() =>
-      expect(screen.getByText("Prospecting")).toBeInTheDocument(),
-    );
-    expect(screen.getByText("Qualification")).toBeInTheDocument();
-    expect(screen.getByText(/Position 1/i)).toBeInTheDocument();
-    expect(screen.getByText(/Position 2/i)).toBeInTheDocument();
-  });
-
-  // 7 — Add pipeline stage POSTs
-  it("submitting Add Stage form POSTs /api/pipeline_stages with { name, color, position }", async () => {
-    const user = userEvent.setup();
-    renderSettings();
-    await waitFor(() =>
-      expect(screen.getByText("Prospecting")).toBeInTheDocument(),
-    );
-
-    const stageNameInput = screen.getByPlaceholderText(/Stage name/i);
-    await user.type(stageNameInput, "Negotiation");
-    const addBtn = screen.getByRole("button", { name: /Add Stage/i });
-    await user.click(addBtn);
-
-    await waitFor(() => {
-      const posts = fetchApiMock.mock.calls.filter(
-        ([url, opts]) =>
-          url === "/api/pipeline_stages" && opts?.method === "POST",
-      );
-      expect(posts.length).toBeGreaterThan(0);
-      const body = JSON.parse(posts[0][1].body);
-      expect(body.name).toBe("Negotiation");
-      // position should match the current stages length (2 in baseStages)
-      expect(body.position).toBe(2);
-      expect(typeof body.color).toBe("string");
-    });
-  });
-
   // 8 — Invite user POSTs
   it("submitting the Invite Team Member form POSTs /api/auth/register with the form values", async () => {
     const user = userEvent.setup();
@@ -1286,8 +1272,8 @@ describe("<Settings /> — page shell + representative card pin", () => {
 
 // ============================================================================
 // EXTENSION WAVE — additional cases covering uncovered card sections:
-// Branding (logo placeholder + brand color save), Pipeline Stages (delete +
-// reorder), Email Messages (retention toggle pins), Notification Preferences
+// Branding (logo placeholder + brand color save), Email Messages (retention
+// toggle pins), Notification Preferences
 // (category + channel toggles, save, reset), Invite (role-select), Consent
 // (create + delete), Public Booking URL copy. Same stable mock pattern;
 // preserves the existing describe block above. Pure pin — no SUT changes.
@@ -1399,62 +1385,6 @@ describe("<Settings /> — extended card coverage", () => {
         url === "/api/wellness/branding/color" && opts?.method === "PUT",
     );
     expect(puts.length).toBe(0);
-  });
-
-  // 17 — Pipeline Stages: delete fires DELETE after notify.confirm resolves true
-  it("Delete stage button DELETEs /api/pipeline_stages/:id after confirm", async () => {
-    const user = userEvent.setup();
-    renderSettings();
-    await waitFor(() =>
-      expect(screen.getByText("Prospecting")).toBeInTheDocument(),
-    );
-
-    // The pipeline-stages section: locate trash buttons. There are 2 stages so 2 trash
-    // buttons inside the stages section; pick the first.
-    const stageRow = screen
-      .getByText("Prospecting")
-      .closest("div").parentElement;
-    const deleteBtn = stageRow.querySelectorAll("button")[2]; // up / down / delete
-    await user.click(deleteBtn);
-
-    await waitFor(() => {
-      const deletes = fetchApiMock.mock.calls.filter(
-        ([url, opts]) =>
-          /^\/api\/pipeline_stages\/s1$/.test(url) && opts?.method === "DELETE",
-      );
-      expect(deletes.length).toBe(1);
-    });
-    expect(notifyObj.confirm).toHaveBeenCalled();
-  });
-
-  // 18 — Pipeline Stages: reorder fires PUT /api/pipeline_stages/reorder
-  it("Move-down on first stage PUTs /api/pipeline_stages/reorder with swapped positions", async () => {
-    const user = userEvent.setup();
-    renderSettings();
-    await waitFor(() =>
-      expect(screen.getByText("Prospecting")).toBeInTheDocument(),
-    );
-
-    // First stage row's down-arrow button. Stage row layout: 3 buttons (Up, Down, Delete).
-    const stageRow = screen
-      .getByText("Prospecting")
-      .closest("div").parentElement;
-    const downBtn = stageRow.querySelectorAll("button")[1];
-    await user.click(downBtn);
-
-    await waitFor(() => {
-      const puts = fetchApiMock.mock.calls.filter(
-        ([url, opts]) =>
-          url === "/api/pipeline_stages/reorder" && opts?.method === "PUT",
-      );
-      expect(puts.length).toBeGreaterThan(0);
-      const body = JSON.parse(puts[0][1].body);
-      // After swap, Qualification (s2) → pos 0, Prospecting (s1) → pos 1
-      expect(body.stages).toEqual([
-        { id: "s2", position: 0 },
-        { id: "s1", position: 1 },
-      ]);
-    });
   });
 
   // 19 — Email Messages card: retention checkbox is checked when emailRetention !== false
@@ -1910,31 +1840,6 @@ describe("<Settings /> — error paths + boundary states", () => {
     });
   });
 
-  // 35 — Stage Move-Up button is disabled on the FIRST stage (boundary)
-  it("first pipeline stage Up-arrow is disabled and clicking it does not PUT reorder", async () => {
-    const user = userEvent.setup();
-    renderSettings();
-    await waitFor(() =>
-      expect(screen.getByText("Prospecting")).toBeInTheDocument(),
-    );
-
-    const stageRow = screen
-      .getByText("Prospecting")
-      .closest("div").parentElement;
-    const upBtn = stageRow.querySelectorAll("button")[0]; // up / down / delete
-    expect(upBtn).toBeDisabled();
-
-    // Force-click via fireEvent (userEvent skips disabled targets) to verify
-    // the disabled state truly suppresses the handler.
-    fireEvent.click(upBtn);
-    await new Promise((r) => setTimeout(r, 30));
-    const reorderPuts = fetchApiMock.mock.calls.filter(
-      ([url, opts]) =>
-        url === "/api/pipeline_stages/reorder" && opts?.method === "PUT",
-    );
-    expect(reorderPuts.length).toBe(0);
-  });
-
   // 36 — Consent Templates: clicking Disable on an active row PUTs
   // /api/wellness/consent-templates/:id with { isActive: false }.
   it("wellness Consent Templates Disable button PUTs the row with { isActive: false }", async () => {
@@ -1984,34 +1889,6 @@ describe("<Settings /> — error paths + boundary states", () => {
       const body = JSON.parse(puts[0][1].body);
       expect(body).toEqual({ isActive: false });
     });
-  });
-
-  // 37 — Add Stage form REJECTS whitespace-only stage name without POSTing.
-  // Pins the `if (!newStage.name.trim()) return;` guard in handleAddStage.
-  it("Add Stage with whitespace-only name does NOT POST /api/pipeline_stages", async () => {
-    const user = userEvent.setup();
-    renderSettings();
-    await waitFor(() =>
-      expect(screen.getByText("Prospecting")).toBeInTheDocument(),
-    );
-
-    // HTML5 `required` would block the click, so bypass by setting value
-    // directly and dispatching submit via fireEvent.
-    const stageNameInput = screen.getByPlaceholderText(/Stage name/i);
-    // Override the required attribute so the form can submit empty/whitespace
-    // and we can pin the SUT's trim() guard rather than the browser's check.
-    stageNameInput.removeAttribute("required");
-    fireEvent.change(stageNameInput, { target: { value: "   " } });
-
-    const form = stageNameInput.closest("form");
-    fireEvent.submit(form);
-
-    await new Promise((r) => setTimeout(r, 50));
-    const posts = fetchApiMock.mock.calls.filter(
-      ([url, opts]) =>
-        url === "/api/pipeline_stages" && opts?.method === "POST",
-    );
-    expect(posts.length).toBe(0);
   });
 
   // 38 — Empty brand color save sends `brandColor: null` (not the empty string)

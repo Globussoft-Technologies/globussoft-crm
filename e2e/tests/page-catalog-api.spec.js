@@ -123,7 +123,7 @@ test.describe('GET /api/pages/me', () => {
     /** @type {{ pages: Array<{ path: string }> }} */
     const body = await res.json();
     expect(Array.isArray(body.pages)).toBe(true);
-    // /home is permission-free so every authenticated user sees it.
+    // The seeded admin owns every Generic CRM page permission, including home.read.
     expect(body.pages.map((p) => p.path)).toContain('/home');
   });
 });
@@ -136,13 +136,16 @@ test.describe('Per-role accessible pages + landingPath lifecycle', () => {
   }) => {
     const token = await loginAdmin(request);
 
-    // New roles require at least one page grant. Start with tasks.read so
-    // contacts remains inaccessible until the lifecycle step below.
+    // New roles require at least one page grant. Start with home.read and
+    // tasks.read so contacts remains inaccessible until the lifecycle step below.
     const create = await post(request, token, '/api/roles', {
       name: `${RUN_TAG} life`,
       key: `${RUN_TAG}_LIFE`,
       userType: 'STAFF',
-      permissions: [{ module: 'tasks', action: 'read' }],
+      permissions: [
+        { module: 'home', action: 'read' },
+        { module: 'tasks', action: 'read' },
+      ],
     });
     expect(create.status(), await create.text()).toBe(201);
     const role = await create.json();
@@ -167,13 +170,14 @@ test.describe('Per-role accessible pages + landingPath lifecycle', () => {
     const tooEarlyBody = await tooEarly.json();
     expect(tooEarlyBody.code).toBe('LANDING_PATH_NOT_ACCESSIBLE');
 
-    // 3. Grant contacts.read + deals.read/write + tasks.read.
+    // 3. Grant contacts.read + deals.read/write while retaining home/tasks.
     //    These are COMMON modules, valid on the generic tenant that
     //    admin@globussoft.com belongs to. (Wellness-only modules would be
     //    rejected by the vertical-aware permission validator on a generic
     //    tenant, so this test intentionally uses cross-vertical common pages.)
     const grant = await put(request, token, `/api/roles/${role.id}/permissions`, {
       permissions: [
+        { module: 'home', action: 'read' },
         { module: 'contacts', action: 'read' },
         { module: 'deals', action: 'read' },
         { module: 'deals', action: 'write' },
@@ -199,12 +203,15 @@ test.describe('Per-role accessible pages + landingPath lifecycle', () => {
     expect(setOKBody.landingPath).toBe('/contacts');
 
     // 6. THE AUTO-CLEAR: now revoke contacts.read by replacing perms
-    //    with just deals.read. The role's landingPath should be
+    //    with home.read + deals.read. The role's landingPath should be
     //    cleared automatically because /contacts is no longer
     //    accessible. Without this the user would get redirected to a
     //    page they 403 on every login.
     const revoke = await put(request, token, `/api/roles/${role.id}/permissions`, {
-      permissions: [{ module: 'deals', action: 'read' }],
+      permissions: [
+        { module: 'home', action: 'read' },
+        { module: 'deals', action: 'read' },
+      ],
     });
     expect(revoke.status()).toBe(200);
     const revokeBody = await revoke.json();
@@ -219,6 +226,7 @@ test.describe('Per-role accessible pages + landingPath lifecycle', () => {
     //    as the landingPath.
     await put(request, token, `/api/roles/${role.id}/permissions`, {
       permissions: [
+        { module: 'home', action: 'read' },
         { module: 'deals', action: 'read' },
         { module: 'deals', action: 'write' },
         { module: 'tasks', action: 'read' },
@@ -237,7 +245,7 @@ test.describe('Per-role accessible pages + landingPath lifecycle', () => {
     expect(revokeAllBody.landingPathCleared).toBe(true);
   });
 
-  test('/home survives a permission revocation (permission-free fallback)', async ({
+  test('/home landingPath clears when home.read is revoked', async ({
     request,
   }) => {
     const token = await loginAdmin(request);
@@ -246,23 +254,27 @@ test.describe('Per-role accessible pages + landingPath lifecycle', () => {
       key: `${RUN_TAG}_HOME`,
       userType: 'STAFF',
       landingPath: '/home',
-      permissions: [{ module: 'contacts', action: 'read' }],
+      permissions: [
+        { module: 'home', action: 'read' },
+        { module: 'contacts', action: 'read' },
+      ],
     });
     expect(create.status()).toBe(201);
     const role = await create.json();
     createdRoleIds.add(role.id);
     expect(role.landingPath).toBe('/home');
 
-    // Revoking all perms should NOT clear /home (it's permission-free).
+    // Retain another valid page grant while revoking home.read. The landing
+    // path must clear because /home is now independently permission-controlled.
     const revoke = await put(request, token, `/api/roles/${role.id}/permissions`, {
-      permissions: [],
+      permissions: [{ module: 'contacts', action: 'read' }],
     });
     expect(revoke.status()).toBe(200);
     const revokeBody = await revoke.json();
-    expect(revokeBody.landingPathCleared).toBe(false);
+    expect(revokeBody.landingPathCleared).toBe(true);
 
     const readBack = await get(request, token, `/api/roles/${role.id}`);
     const readBackBody = await readBack.json();
-    expect(readBackBody.landingPath).toBe('/home');
+    expect(readBackBody.landingPath).toBeNull();
   });
 });

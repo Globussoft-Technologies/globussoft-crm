@@ -12,6 +12,7 @@ const { verifyRole } = require("../middleware/auth");
 const { hasModuleAction } = require("../middleware/fieldFilter");
 const { emailSendLimiter } = require("../middleware/apiRateLimiters");
 const travelSendGrid = require("../services/travelSendGrid");
+const genericSendGrid = require("../services/genericSendGrid");
 
 // Compose-mail attachments: memory storage so the buffer can be base64'd
 // straight into the SendGrid payload without a disk round-trip. multer is a
@@ -61,7 +62,11 @@ function formatSenderIdentity(provider) {
 }
 
 async function resolveCommunicationsEmailProvider(user) {
-  if (String(user?.vertical || "").toLowerCase() === "travel") {
+  const vertical = String(user?.vertical || "").toLowerCase();
+  if (vertical === "generic") {
+    return genericSendGrid.resolveSendGridConfig(user.tenantId);
+  }
+  if (vertical === "travel") {
     return travelSendGrid.resolveSendGridConfig(user.tenantId);
   }
   return { apiKey: SENDGRID_API_KEY, fromEmail: FROM_EMAIL, fromName: FROM_NAME, source: "backend" };

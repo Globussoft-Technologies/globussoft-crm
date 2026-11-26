@@ -1252,6 +1252,7 @@ async function runSingleAction(rule, actionType, config, payload, tenantId, io, 
 
     case "send_webhook": {
       const { deliverConfiguredWebhook } = require("./webhookDelivery");
+      const { hydrateGenericWebhookPayload } = require("./genericWebhookPayload");
       // Sign with the tenant's per-tenant secret (same as deliverWebhooks) so
       // every outbound webhook from this tenant carries one consistent
       // signature a partner can verify. Not subscription-gated here — this is
@@ -1259,7 +1260,8 @@ async function runSingleAction(rule, actionType, config, payload, tenantId, io, 
       // lead-sync stream which IS gated in deliverWebhooks().
       const { resolveTenantWebhookSecret } = require("./webhookEntitlement");
       const { secret } = await resolveTenantWebhookSecret(tenantId);
-      const result = await deliverConfiguredWebhook(config, rule.triggerType, payload, tenantId, secret);
+      const webhookPayload = await hydrateGenericWebhookPayload(payload, tenantId);
+      const result = await deliverConfiguredWebhook(config, rule.triggerType, webhookPayload, tenantId, secret);
       executionDetails = {
         webhook: {
           status: result.status,

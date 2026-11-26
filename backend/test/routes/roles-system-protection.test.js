@@ -719,6 +719,23 @@ describe('Bug 2 — PUT /api/roles/:id key/userType on a system role', () => {
 });
 
 describe('vertical-scoped permission catalog responses', () => {
+  test('generic roles catalog hides the permission module for a disabled page', async () => {
+    const { clearTenantPageVisibilityCache } = requireCJS('../../lib/tenantPageVisibility');
+    clearTenantPageVisibilityCache(11);
+    prisma.tenant.findUnique.mockResolvedValue({ id: 11, vertical: 'generic' });
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({ hiddenPaths: ['/billing-persons'] }),
+    });
+
+    const res = await request(makeApp({ vertical: 'generic' })).get('/api/roles/catalog');
+
+    expect(res.status).toBe(200);
+    expect(res.body.catalog).not.toHaveProperty('billing_persons');
+    expect(res.body.catalog).toHaveProperty('work_assignments');
+    expect(res.body.hiddenModules).toContain('billing_persons');
+    expect(res.body.modules.map((module) => module.module)).not.toContain('billing_persons');
+  });
+
   test('wellness roles catalog excludes travel modules and domains', async () => {
     prisma.tenant.findUnique.mockResolvedValue({ id: 11, vertical: 'wellness' });
 
@@ -726,8 +743,13 @@ describe('vertical-scoped permission catalog responses', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.vertical).toBe('wellness');
-    expect(res.body.catalog).toHaveProperty('patients');
+    expect(Object.keys(res.body.catalog)).toHaveLength(77);
+    expect(res.body.catalog).toHaveProperty('wellness_patients');
+    expect(res.body.catalog).not.toHaveProperty('patients');
     expect(res.body.catalog).not.toHaveProperty('itineraries');
+    expect(res.body.domains.flatMap((domain) => domain.modules)).toHaveLength(77);
+    expect(res.body.domains.map((domain) => domain.domain)).toContain('Clinical');
+    expect(res.body.domains.map((domain) => domain.domain)).toContain('Catalog');
     expect(res.body.domains.map((domain) => domain.domain)).not.toContain('Travel Sales');
   });
 
@@ -1126,7 +1148,7 @@ describe('GET /api/roles/:id/accessible-pages — vertical filter', () => {
       isActive: true,
     });
     prisma.rolePermission.findMany.mockResolvedValue([
-      { module: 'consents', action: 'read' },
+      { module: 'wellness_signatures', action: 'read' },
     ]);
     prisma.tenant.findUnique.mockResolvedValue({ id: 2, vertical: 'wellness' });
 

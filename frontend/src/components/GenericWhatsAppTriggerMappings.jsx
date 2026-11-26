@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowDown, Check, Clock3, GitBranch, List, MessageSquareText, Plus, Save, ShieldCheck, Square, Trash2, Zap } from 'lucide-react';
+import { ArrowDown, Check, Clock3, GitBranch, List, MessageSquareText, Plus, Save, Settings2, ShieldCheck, Square, Trash2, Zap } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { GENERIC_WHATSAPP_SEQUENCE_TRIGGERS as TRIGGERS } from '../utils/genericSequenceTriggers';
 import { useNotify } from '../utils/notify';
@@ -160,7 +160,7 @@ function removedStepMessage(type, removedWait) {
   return `Step removed: ${label}${removedWait ? ' and its wait condition' : ''}.`;
 }
 
-export default function GenericWhatsAppTriggerMappings({ campaigns, editCampaignId = null, onEditLoaded, onSaved, onDirty, onViewSequences }) {
+export default function GenericWhatsAppTriggerMappings({ campaigns, editCampaignId = null, onEditLoaded, onSaved, onDirty, onViewSequences, onConfigure }) {
   const notify = useNotify();
   const [templates, setTemplates] = useState([]);
   const [customFields, setCustomFields] = useState([]);
@@ -400,6 +400,7 @@ export default function GenericWhatsAppTriggerMappings({ campaigns, editCampaign
     <header style={toolbarStyle}>
       <div><h2 style={{ margin: 0, color: 'var(--text-primary)', fontSize: '1.15rem' }}>Build a WhatsApp sequence</h2><p style={subtitleStyle}>Choose one starting event, then add messages, waits, or conditions.</p></div>
       <div style={toolbarActionsStyle}>
+        {onConfigure && <button type="button" className="btn-secondary" onClick={onConfigure} style={viewSequencesButtonStyle}><Settings2 size={15} /> Configure WhatsApp</button>}
         <button type="button" className="btn-secondary" onClick={onViewSequences} style={viewSequencesButtonStyle}><List size={15} /> View sequences</button>
         <button type="button" onClick={save} disabled={saving || loading} style={saveButtonStyle}><Save size={15} /> {saving ? 'Saving…' : 'Save & activate'}</button>
       </div>

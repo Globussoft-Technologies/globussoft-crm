@@ -201,16 +201,23 @@ describe('cron/scheduledEmailEngine — vertical provider isolation', () => {
     expect(prisma.emailMessage.create.mock.calls[0][0].data.from).toBe('Acme Travel <bookings@travel.test>');
   });
 
-  test.each(['generic', 'wellness'])('%s keeps the platform SendGrid provider', async (vertical) => {
+  test.each(['generic', 'wellness'])('%s keeps the correct SendGrid provider boundary', async (vertical) => {
     prisma.scheduledEmail.findMany.mockResolvedValueOnce([
       pendingRow({ tenantId: 81, to: 'customer@example.com' }),
     ]);
     prisma.tenant.findUnique.mockResolvedValue({ vertical });
+    resolveSendGridConfig.mockResolvedValue({
+      apiKey: 'SG.testkey-deterministic',
+      fromEmail: 'noreply@crm.test',
+      fromName: '',
+      source: 'backend',
+    });
     mockOkResponse();
 
     await processScheduledEmails();
 
-    expect(resolveSendGridConfig).not.toHaveBeenCalled();
+    if (vertical === 'generic') expect(resolveSendGridConfig).toHaveBeenCalledWith(81);
+    else expect(resolveSendGridConfig).not.toHaveBeenCalled();
     expect(global.fetch.mock.calls[0][1].headers.Authorization).toBe('Bearer SG.testkey-deterministic');
   });
 });

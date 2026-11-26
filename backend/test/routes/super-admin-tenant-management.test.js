@@ -626,17 +626,20 @@ describe('tenant page visibility', () => {
     });
   });
 
-  test('returns the full vertical catalog with enabled state', async () => {
+  test('returns only the Wellness sidebar catalog with enabled state', async () => {
     const res = await request(makeApp()).get('/api/super-admin/tenant-management/tenants/7/page-visibility');
 
     expect(res.status).toBe(200);
     expect(res.body.vertical).toBe('wellness');
+    expect(res.body.pages).toHaveLength(77);
     expect(res.body.hiddenPaths).toEqual(['/wellness/patients']);
     expect(res.body.pages.find((page) => page.path === '/wellness/patients').enabled).toBe(false);
     expect(res.body.pages.find((page) => page.path === '/wellness/calendar').enabled).toBe(true);
+    expect(res.body.pages.some((page) => page.path === '/pipeline')).toBe(false);
+    expect(res.body.pages.some((page) => page.path === '/forecasting')).toBe(false);
   });
 
-  test('hides standalone Workflows from Generic CRM organization page visibility', async () => {
+  test('shows standalone Workflows in Generic CRM organization page visibility', async () => {
     prisma.tenant.findUnique.mockResolvedValueOnce({
       id: 7,
       name: 'Acme Generic',
@@ -649,7 +652,35 @@ describe('tenant page visibility', () => {
     const res = await request(makeApp()).get('/api/super-admin/tenant-management/tenants/7/page-visibility');
 
     expect(res.status).toBe(200);
-    expect(res.body.pages.find((page) => page.path === '/workflows')).toBeUndefined();
+    expect(res.body.pages.find((page) => page.path === '/workflows')).toMatchObject({
+      label: 'Workflows',
+      category: 'Work Management',
+      requiredPermissions: [{ module: 'workflows', action: 'read' }],
+    });
+  });
+
+  test('returns only Travel sidebar pages for Travel organization visibility', async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({
+      id: 7,
+      name: 'Travel Stall',
+      slug: 'travel-stall',
+      vertical: 'travel',
+      isActive: true,
+    });
+    prisma.tenantSetting.findUnique.mockResolvedValueOnce(null);
+
+    const res = await request(makeApp()).get('/api/super-admin/tenant-management/tenants/7/page-visibility');
+
+    expect(res.status).toBe(200);
+    expect(res.body.pages).toHaveLength(51);
+    expect(res.body.pages.find((page) => page.path === '/travel/quotes/builder')).toMatchObject({
+      label: 'Quote Builder',
+      category: 'Sales',
+      requiredPermissions: [{ module: 'quote_builder', action: 'write' }],
+      enabled: true,
+    });
+    expect(res.body.pages.some((page) => page.path === '/pipeline')).toBe(false);
+    expect(res.body.pages.some((page) => page.path === '/forecasting')).toBe(false);
   });
 
   test('stores hidden paths and records the Super Admin username', async () => {

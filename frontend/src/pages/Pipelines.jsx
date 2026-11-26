@@ -1,12 +1,23 @@
-import { useState, useEffect } from 'react';
-import { ArrowLeft, GitBranch, Plus, Edit, Trash2, Check, Star, X } from 'lucide-react';
+import { useState, useEffect, useContext, useCallback } from 'react';
+import { ArrowLeft, GitBranch, Plus, Edit, Trash2, Check, Star, X, Layers } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
+import { AuthContext } from '../appContexts';
+import PipelineStagesManager from '../components/PipelineStagesManager';
 
 const emptyForm = { name: '', description: '', isDefault: false };
+const isRequiredStage = (stage) => ['won', 'lost'].includes(String(stage?.name || '').trim().toLowerCase());
+
+function insertBeforeRequiredStages(current, stage) {
+  const firstRequired = current.findIndex(isRequiredStage);
+  if (firstRequired < 0) return [...current, stage];
+  return [...current.slice(0, firstRequired), stage, ...current.slice(firstRequired)];
+}
 
 const Pipelines = () => {
   const notify = useNotify();
+  const { tenant } = useContext(AuthContext) || {};
+  const isGeneric = !tenant?.vertical || tenant.vertical === 'generic';
   const [pipelines, setPipelines] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -19,10 +30,14 @@ const Pipelines = () => {
   const [loadingStages, setLoadingStages] = useState(false);
   const [editingStageId, setEditingStageId] = useState(null);
   const [originalStages, setOriginalStages] = useState([]);
+  const [showStagesModal, setShowStagesModal] = useState(false);
 
-  const fetchPipelines = () => {
+  const fetchPipelines = useCallback(() => {
     setLoading(true);
-    fetchApi('/api/pipelines')
+    const ensureDefault = isGeneric
+      ? fetchApi('/api/pipelines/ensure-default', { method: 'POST' }).catch(() => null)
+      : Promise.resolve(null);
+    ensureDefault.then(() => fetchApi('/api/pipelines'))
       .then((data) => {
         setPipelines(Array.isArray(data) ? data : []);
         setLoading(false);
@@ -31,9 +46,23 @@ const Pipelines = () => {
         setError(e.message || 'Failed to load pipelines');
         setLoading(false);
       });
-  };
+  }, [isGeneric]);
 
-  useEffect(() => { fetchPipelines(); }, []);
+  useEffect(() => { fetchPipelines(); }, [fetchPipelines]);
+
+  useEffect(() => {
+    if (!showStagesModal) return undefined;
+    const previousBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') setShowStagesModal(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousBodyOverflow;
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [showStagesModal]);
 
   const openCreate = () => {
     setEditing(null);
@@ -90,11 +119,13 @@ const Pipelines = () => {
     if (!stageId || stages.some((stage) => String(stage.id) === String(stageId))) return;
     const selected = availableStages.find((stage) => String(stage.id) === String(stageId));
     if (!selected) return;
-    setStages((current) => [...current, { ...selected, isExisting: true }]);
+    setStages((current) => insertBeforeRequiredStages(current, { ...selected, isExisting: true }));
   };
 
   const addStage = () => {
-    setStages((current) => [...current, { name: '', color: '#3b82f6' }]);
+    setStages((current) => isGeneric
+      ? [{ name: '', color: '#3b82f6' }, ...current]
+      : [...current, { name: '', color: '#3b82f6' }]);
   };
 
   const updateStage = (stage, name) => {
@@ -108,6 +139,7 @@ const Pipelines = () => {
   };
 
   const removeStage = (_stage, stageIndex) => {
+    if (isGeneric && editing?.isDefault && isRequiredStage(_stage)) return;
     if (stages.length <= 1) { setError('A pipeline must contain at least one stage.'); return; }
     setStages((current) => current.filter((item, itemIndex) => itemIndex !== stageIndex));
   };
@@ -124,6 +156,7 @@ const Pipelines = () => {
     }
     setSaving(true);
     setError('');
+    const addedStageCount = stages.filter((stage) => !stage.id).length;
     try {
       if (editing) {
         await fetchApi(`/api/pipelines/${editing.id}`, {
@@ -181,6 +214,9 @@ const Pipelines = () => {
           }),
         });
       }
+      if (isGeneric && addedStageCount > 0) {
+        notify.success(addedStageCount === 1 ? 'Stage added successfully' : 'Stages added successfully');
+      }
       closeModal();
       fetchPipelines();
     } catch (e) {
@@ -232,6 +268,21 @@ const Pipelines = () => {
 
   return (
     <div style={{ padding: '2rem', animation: 'fadeIn 0.3s ease' }}>
+      {isGeneric && (
+        <style>{`
+          .generic-pipeline-card,
+          .generic-pipeline-card:hover {
+            transform: none !important;
+            box-shadow: none !important;
+            border-color: var(--border-color) !important;
+            transition: none !important;
+          }
+          .generic-pipeline-card::before,
+          .generic-pipeline-card:hover::before {
+            display: none !important;
+          }
+        `}</style>
+      )}
       {/* Header */}
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '0.75rem' }}>
@@ -248,13 +299,25 @@ const Pipelines = () => {
             </div>
           </div>
         </div>
-        <button
-          className="btn-primary"
-          onClick={openCreate}
-          style={{ padding: '0.5rem 1rem', fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.375rem' }}
-        >
-          <Plus size={15} /> Create Pipeline
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          {isGeneric && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setShowStagesModal(true)}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}
+            >
+              <Layers size={15} /> View all stages
+            </button>
+          )}
+          <button
+            className="btn-primary"
+            onClick={openCreate}
+            style={{ padding: '0.5rem 1rem', fontSize: '0.875rem', display: 'flex', alignItems: 'center', gap: '0.375rem' }}
+          >
+            <Plus size={15} /> Create Pipeline
+          </button>
+        </div>
       </header>
 
       {/* Body */}
@@ -274,7 +337,7 @@ const Pipelines = () => {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.25rem' }}>
           {pipelines.map((p) => (
-            <div key={p.id} className="card" style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div key={p.id} className={isGeneric ? 'card generic-pipeline-card' : 'card'} style={{ padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', minWidth: 0 }}>
                   <GitBranch size={20} style={{ color: 'var(--accent-color)', flexShrink: 0 }} />
@@ -330,7 +393,7 @@ const Pipelines = () => {
                 >
                   <Edit size={13} /> Edit
                 </button>
-                {p.isDefault && (
+                {p.isDefault && !isGeneric && (
                   <button
                     onClick={() => handleRemoveDefault(p.id)}
                     title="Remove default"
@@ -360,6 +423,34 @@ const Pipelines = () => {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {!isGeneric && <PipelineStagesManager />}
+
+      {isGeneric && showStagesModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Pipeline stages"
+          onClick={() => setShowStagesModal(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 1100, padding: 'clamp(1rem, 4vw, 3rem)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{ position: 'relative', width: 'min(100%, 1100px)', height: 'min(88vh, 900px)', overflow: 'hidden' }}
+          >
+            <button
+              type="button"
+              onClick={() => setShowStagesModal(false)}
+              aria-label="Close pipeline stages"
+              title="Close"
+              style={{ ...iconBtn, position: 'absolute', top: '1.25rem', right: '1.25rem', zIndex: 1 }}
+            >
+              <X size={16} />
+            </button>
+            <PipelineStagesManager embedded genericDialog protectTerminalStages />
+          </div>
         </div>
       )}
 
@@ -444,7 +535,8 @@ const Pipelines = () => {
                   {editing && loadingStages ? (
                     <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Loading pipeline stages...</div>
                   ) : stages.map((stage, index) => {
-                    const isEditingStage = !editing || !stage.id || editingStageId === stage.id;
+                    const required = isGeneric && Boolean(editing?.isDefault) && isRequiredStage(stage);
+                    const isEditingStage = !required && (!editing || !stage.id || editingStageId === stage.id);
                     return (
                       <div key={stage.id || index} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', alignItems: 'center' }}>
                         {isEditingStage ? (
@@ -463,10 +555,10 @@ const Pipelines = () => {
                         ) : (
                           <span style={{ ...inputStyle, flex: 1, display: 'block', background: 'var(--surface-color)' }}>{stage.name}</span>
                         )}
-                        {editing && stage.id && !isEditingStage && (
+                        {editing && stage.id && !required && !isEditingStage && (
                           <button type="button" onClick={() => setEditingStageId(stage.id)} style={iconBtn}>Edit</button>
                         )}
-                        <button type="button" onClick={() => removeStage(stage, index)} style={{ ...iconBtn, color: '#ef4444' }} aria-label="Remove stage"><X size={13} /></button>
+                        {required ? <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>Required</span> : <button type="button" onClick={() => removeStage(stage, index)} style={{ ...iconBtn, color: '#ef4444' }} aria-label="Remove stage"><X size={13} /></button>}
                       </div>
                     );
                   })}

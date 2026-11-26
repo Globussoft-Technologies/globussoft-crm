@@ -66,6 +66,21 @@ describe('getCatalog', () => {
   });
 });
 
+describe('Generic CRM sidebar permission mapping', () => {
+  it('maps Deals to deals.read without changing the shared page mapping for other verticals', () => {
+    const genericDeals = getCatalogForVertical('generic').find((page) => page.path === '/pipeline');
+    const travelSharedPage = getCatalogForVertical('travel').find((page) => page.path === '/pipeline');
+
+    expect(genericDeals).toMatchObject({
+      label: 'Deals',
+      requiredPermissions: [{ module: 'deals', action: 'read' }],
+    });
+    expect(travelSharedPage).toMatchObject({
+      requiredPermissions: [{ module: 'pipeline', action: 'read' }],
+    });
+  });
+});
+
 describe('generic billing workspace page', () => {
   it('maps billing access to Customer Workflows instead of the legacy Billing Queue', () => {
     const customerWorkflows = getPage('/pickup-customers');
@@ -79,20 +94,23 @@ describe('generic billing workspace page', () => {
 });
 
 describe('Generic CRM Workflows page', () => {
-  it('is hidden from every page catalog without removing its implementation', () => {
-    expect(getCatalogForVertical('generic').some((page) => page.path === '/workflows')).toBe(false);
+  it('is catalogued only for Generic CRM with its own permission module', () => {
+    expect(getCatalogForVertical('generic').find((page) => page.path === '/workflows')).toMatchObject({
+      label: 'Workflows',
+      requiredPermissions: [{ module: 'workflows', action: 'read' }],
+    });
     expect(getCatalogForVertical('wellness').some((page) => page.path === '/workflows')).toBe(false);
     expect(getCatalogForVertical('travel').some((page) => page.path === '/workflows')).toBe(false);
   });
 });
 
 describe('Generic CRM Field Config page', () => {
-  it('is catalogued only for Generic CRM and uses the settings-manage permission', () => {
+  it('is catalogued only for Generic CRM and uses its own permission', () => {
     expect(getCatalogForVertical('generic').find((page) => page.path === '/field-config')).toMatchObject({
       label: 'Field Config',
       category: 'Leads',
       vertical: 'generic',
-      requiredPermissions: [{ module: 'settings', action: 'manage' }],
+      requiredPermissions: [{ module: 'field_config', action: 'read' }],
     });
     expect(getCatalogForVertical('wellness').some((page) => page.path === '/field-config')).toBe(false);
     expect(getCatalogForVertical('travel').some((page) => page.path === '/field-config')).toBe(false);
@@ -174,9 +192,11 @@ describe('canAccessPath', () => {
     'prescriptions.read',
   ]);
 
-  it('returns true for /home regardless of permissions', () => {
+  it('keeps legacy /home fallback while enforcing Generic home.read', () => {
     expect(canAccessPath('/home', new Set())).toBe(true);
     expect(canAccessPath('/home', docPerms)).toBe(true);
+    expect(canAccessPath('/home', new Set(), { vertical: 'generic' })).toBe(false);
+    expect(canAccessPath('/home', new Set(['home.read']), { vertical: 'generic' })).toBe(true);
   });
 
   it('returns true when the user has all required perms', () => {
@@ -430,8 +450,8 @@ describe('getAccessiblePages', () => {
     expect(paths).not.toContain('/wellness/pos'); // needs pos.read
   });
 
-  it('includes the wellness invoice ledger when invoices.read is granted', () => {
-    const perms = new Set(['invoices.read']);
+  it('includes the wellness invoice ledger when its page-specific permission is granted', () => {
+    const perms = new Set(['wellness_invoices.read']);
     const pages = getAccessiblePages(perms, { vertical: 'wellness' });
     const paths = pages.map((p) => p.path);
     expect(paths).toContain('/wellness/invoices');
@@ -539,7 +559,7 @@ describe('Vertical isolation — getCatalogForVertical', () => {
       path: '/travel/forms',
       label: 'Web Forms',
       category: 'Travel Marketing',
-      requiredPermissions: [{ module: 'marketing', action: 'read' }],
+      requiredPermissions: [{ module: 'travel_web_forms', action: 'read' }],
     });
   });
 
@@ -603,13 +623,18 @@ describe('Vertical isolation — getAccessiblePages with opts.vertical', () => {
   });
 
   it('wellness: surfaces /signatures when the role holds consents.read', () => {
-    const perms = new Set(['consents.read']);
+    const perms = new Set(['wellness_signatures.read']);
     const onWellness = getAccessiblePages(perms, { vertical: 'wellness' });
     expect(onWellness.find((p) => p.path === '/signatures')).toBeDefined();
   });
 
   it('travel: surfaces /travel/* pages when the role holds the matching perm', () => {
-    const perms = new Set(['itineraries.read', 'pipeline.read', 'diagnostics.write', 'invoices.export']);
+    const perms = new Set([
+      'itineraries.read',
+      'pipeline.read',
+      'travel_knowledge.write',
+      'tally.export',
+    ]);
     const onTravel = getAccessiblePages(perms, { vertical: 'travel' });
     expect(onTravel.find((p) => p.path === '/travel/pipeline')).toBeDefined();
     expect(onTravel.find((p) => p.path === '/travel/itineraries')).toBeDefined();
@@ -617,17 +642,17 @@ describe('Vertical isolation — getAccessiblePages with opts.vertical', () => {
     expect(onTravel.find((p) => p.path === '/travel/tally')).toBeDefined();
   });
 
-  it('travel: surfaces Web Forms when marketing.read is granted', () => {
-    const onTravel = getAccessiblePages(new Set(['marketing.read']), { vertical: 'travel' });
+  it('travel: surfaces Web Forms when its separate sidebar permission is granted', () => {
+    const onTravel = getAccessiblePages(new Set(['travel_web_forms.read']), { vertical: 'travel' });
     expect(onTravel.find((p) => p.path === '/travel/forms')).toBeDefined();
   });
 
-  it('travel: keeps the visible Calendar sidebar page searchable with integrations.read', () => {
-    const onTravel = getAccessiblePages(new Set(['integrations.read']), { vertical: 'travel' });
+  it('travel: keeps the visible Calendar sidebar page searchable with its separate permission', () => {
+    const onTravel = getAccessiblePages(new Set(['travel_calendar.read']), { vertical: 'travel' });
     const calendar = onTravel.find((p) => p.path === '/calendar-sync');
     expect(calendar).toMatchObject({
       label: 'Calendar',
-      requiredPermissions: [{ module: 'integrations', action: 'read' }],
+      requiredPermissions: [{ module: 'travel_calendar', action: 'read' }],
     });
 
     const wrongPermission = getAccessiblePages(new Set(['calendar.read']), { vertical: 'travel' });

@@ -29,7 +29,7 @@ function parseGenericDealTypes(setting) {
     : [];
 }
 
-export function normalizePipelineStages(stageData) {
+export function normalizePipelineStages(stageData, preserveConfiguredNames = false) {
   const seen = new Set();
   return (Array.isArray(stageData) ? stageData : []).flatMap((stage, index) => {
     const stageName = typeof stage === 'string'
@@ -38,7 +38,9 @@ export function normalizePipelineStages(stageData) {
     const id = slugifyStageName(stageName);
     if (!id || seen.has(id)) return [];
     seen.add(id);
-    const title = id === 'closed-won' ? 'Won' : id === 'closed-lost' ? 'Lost' : stageName;
+    const title = preserveConfiguredNames
+      ? stageName
+      : id === 'closed-won' ? 'Won' : id === 'closed-lost' ? 'Lost' : stageName;
     return [{ id, title, dbId: stage?.id, color: stage?.color || STAGE_COLORS[index % STAGE_COLORS.length], position: stage?.position ?? index }];
   });
 }
@@ -115,6 +117,10 @@ function stageIdForDeal(deal, stages, isGeneric = false) {
     contracted: ['contracted', 'contacted'],
     proposal: ['proposal-sent', 'proposal'],
     'proposal-sent': ['proposal-sent', 'proposal'],
+    // Older Generic CRM rows can contain `winner`; keep those deals visible
+    // under the configured required `Won` stage instead of creating a second
+    // ad-hoc "winner" column. Other verticals retain their existing behavior.
+    winner: isGeneric ? ['won', 'closed-won'] : ['winner'],
     won: ['closed-won', 'won'],
     lost: ['closed-lost', 'lost'],
     'closed-won': ['won', 'closed-won'],
@@ -169,7 +175,7 @@ export default function Pipeline() {
     tenantId: tenant?.id ?? user?.tenantId,
     userId: user?.userId,
   });
-  const [deals, setDeals] = useState([]); const [stages, setStages] = useState([]); const [pipelines, setPipelines] = useState([]); const [dealTypes, setDealTypes] = useState([]);
+  const [deals, setDeals] = useState([]); const [stages, setStages] = useState([]); const [pipelines, setPipelines] = useState([]); const [pipelineStageSlugs, setPipelineStageSlugs] = useState({}); const [, setDealTypes] = useState([]);
   const [staff, setStaff] = useState([]); const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [view, setView] = useState(() => { try { return localStorage.getItem(viewKey) === 'list' ? 'list' : 'kanban'; } catch { return 'kanban'; } }); const [search, setSearch] = useState(''); const [debouncedSearch, setDebouncedSearch] = useState('');
   const [page, setPage] = useState(1); const [pageSize, setPageSize] = useState(50); const [total, setTotal] = useState(0); const [totalPages, setTotalPages] = useState(1);
@@ -330,16 +336,12 @@ export default function Pipeline() {
       if (dateTo) query.set('to', `${dateTo}T23:59:59.999Z`);
       const statsQuery = new URLSearchParams(query); statsQuery.delete('limit'); statsQuery.delete('page');
       statsQuery.set('currency', tenant?.defaultCurrency || 'USD');
-      const selectedType = dealTypes.find((type) => type.name === dealType) || dealTypes.find((type) => type.isDefault) || dealTypes[0];
-      const selectedStages = selectedType?.stages?.length
-        ? selectedType.stages
-        : [];
       const [dealData, stageData, pipelineData, statsData, staffData] = await Promise.all([
         fetchApi(`/api/deals?${query.toString()}`),
         isGeneric && pipelineId
           ? fetchApi(`/api/pipeline_stages?pipelineId=${encodeURIComponent(pipelineId)}`)
           : isGeneric
-            ? Promise.resolve(selectedStages)
+            ? fetchApi('/api/pipeline_stages?assigned=true')
             : fetchApi(pipelineId ? `/api/pipeline_stages?pipelineId=${encodeURIComponent(pipelineId)}` : '/api/pipeline_stages'),
         fetchApi('/api/pipelines?fields=summary'),
         fetchApi(`/api/deals/stats?${statsQuery.toString()}`),
@@ -354,9 +356,21 @@ export default function Pipeline() {
       setTotal(displayTotal);
       setTotalPages(Array.isArray(dealData) ? 1 : Math.max(1, Number(dealData?.totalPages) || Math.ceil(displayTotal / pageSize)));
       setStats(statsData && !Array.isArray(statsData) ? statsData : null);
-      const normalizedStages = normalizePipelineStages(stageData);
+      const normalizedStages = normalizePipelineStages(stageData, isGeneric);
       setStages(normalizedStages);
       setPipelines(Array.isArray(pipelineData) ? pipelineData : []);
+      if (isGeneric) {
+        if (pipelineId) {
+          setPipelineStageSlugs({ [String(pipelineId)]: new Set(normalizedStages.map((stage) => slugifyStageName(stage.name || stage.title || stage.id))) });
+        } else {
+          const membershipEntries = await Promise.all((Array.isArray(pipelineData) ? pipelineData : []).map(async (pipeline) => {
+            const rows = await fetchApi(`/api/pipeline_stages?pipelineId=${encodeURIComponent(pipeline.id)}`).catch(() => []);
+            return [String(pipeline.id), new Set(normalizePipelineStages(rows, true).map((stage) => slugifyStageName(stage.name || stage.title || stage.id)))];
+          }));
+          if (requestId !== requestIdRef.current) return;
+          setPipelineStageSlugs(Object.fromEntries(membershipEntries));
+        }
+      }
       setStaff(Array.isArray(staffData) ? staffData : (staffData?.data || []));
       firstLoadRef.current = false;
       return true;
@@ -366,7 +380,7 @@ export default function Pipeline() {
     } finally {
       if (requestId === requestIdRef.current) setLoading(false);
     }
-  }, [dealKind, dealType, dealTypes, isGeneric, pipelineId, stageFilter, ownerFilter, debouncedSearch, dateFrom, dateTo, page, pageSize, tenant?.defaultCurrency]);
+  }, [dealKind, isGeneric, pipelineId, stageFilter, ownerFilter, debouncedSearch, dateFrom, dateTo, page, pageSize, tenant?.defaultCurrency]);
   useEffect(() => { load(); }, [load]);
 
   const refreshDeals = async () => {
@@ -478,6 +492,21 @@ export default function Pipeline() {
   const openDeal = (deal) => { if (deal?.id != null) navigate(`/deals/${deal.id}`); };
   const moveDeal = async (deal, targetStage) => {
     if (!deal || !targetStage || deal.stage === targetStage) return;
+    if (isGeneric) {
+      if (!deal.pipelineId) {
+        notify.error('Assign this deal to a pipeline before moving it between stages.');
+        return;
+      }
+      if (pipelineId && String(deal.pipelineId) !== String(pipelineId)) {
+        notify.error('This deal does not belong to the selected pipeline.');
+        return;
+      }
+      const targetBelongsToPipeline = pipelineStageSlugs[String(deal.pipelineId)]?.has(slugifyStageName(targetStage));
+      if (!targetBelongsToPipeline) {
+        notify.error('The selected stage does not belong to this pipeline.');
+        return;
+      }
+    }
     const currentStageKey = slugifyStageName(deal.stage);
     const targetStageKey = slugifyStageName(targetStage);
     if (isGeneric && ((currentStageKey === 'won' && targetStageKey === 'lost') || (currentStageKey === 'lost' && targetStageKey === 'won'))) {
@@ -490,7 +519,7 @@ export default function Pipeline() {
     const lostReason = isNegativeTarget ? await notify.prompt({ title: 'Negative deal stage', message: 'Reason for moving this deal to a negative stage:', confirmText: 'Save reason' }) : '';
     if (isNegativeTarget && !lostReason) return;
     const previous = deals; setDeals((rows) => rows.map((row) => row.id === deal.id ? { ...row, stage: targetStage, probability: targetStage === 'won' ? 100 : targetStage === 'lost' ? 0 : row.probability } : row));
-    try { await fetchApi(`/api/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify({ stage: targetStage, ...(lostReason ? { lostReason } : {}) }) }); notify.success('Deal stage updated'); } catch (err) { setDeals(previous); notify.error(err?.body?.error || 'Unable to move deal'); }
+    try { await fetchApi(`/api/deals/${deal.id}`, { method: 'PUT', body: JSON.stringify({ stage: targetStage, ...(isGeneric ? { pipelineId: Number(deal.pipelineId) } : {}), ...(lostReason ? { lostReason } : {}) }) }); notify.success('Deal stage updated'); } catch (err) { setDeals(previous); notify.error(err?.body?.error || 'Unable to move deal'); }
   };
   
   const deleteDeal = async (deal) => {

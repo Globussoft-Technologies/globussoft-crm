@@ -642,8 +642,10 @@ async function validateGenericDealDetails(body, { tenantId } = {}) {
   if (!body.contactId || !body.contactType) return null;
   const contact = await prisma.contact.findFirst({ where: { id: parseInt(body.contactId), tenantId }, select: { status: true } });
   if (!contact) return { status: 400, error: "Related contact was not found", code: "INVALID_CONTACT" };
-  const expectedStatus = body.contactType === "customer" ? "Customer" : "Lead";
-  if (String(contact.status || "").toLowerCase() !== expectedStatus.toLowerCase()) {
+  const isCustomer = String(contact.status || "").toLowerCase() === "customer";
+  const typeMismatch = body.contactType === "customer" ? !isCustomer : isCustomer;
+  if (typeMismatch) {
+    const expectedStatus = body.contactType === "customer" ? "Customer" : "Lead";
     return { status: 400, error: `Select a ${expectedStatus} contact`, code: "CONTACT_TYPE_MISMATCH" };
   }
   return null;

@@ -83,6 +83,9 @@ authMw.verifyToken = (req, res, next) => {
 // Travel global search must follow the same RBAC catalogue as its pages.
 // Patch the conditional helper before the router captures its reference.
 const permissionMw = requireCJS('../../middleware/requirePermission');
+const {
+  GENERIC_SIDEBAR_PERMISSION_BY_PATH,
+} = requireCJS('../../lib/genericSidebarPermissions');
 const permissionState = {
   allowed: new Set([
     'contacts.read',
@@ -154,7 +157,7 @@ const MODELS = [
 ];
 const GENERIC_VISIBLE_MODELS = [
   'contact', 'deal', 'campaign', 'invoice', 'ticket', 'task', 'project',
-  'contract', 'emailMessage', 'emailTemplate', 'automationRule', 'quote',
+  'contract', 'emailMessage', 'emailTemplate', 'automationRule', 'sequence', 'quote',
   'expense', 'payment', 'webForm', 'landingPage', 'signatureRequest',
   'documentTemplate', 'pipeline', 'playbook', 'abTest', 'chatbot', 'slaPolicy',
   'liveChatSession', 'webVisitor', 'socialPost', 'user', 'salesTeam', 'territory',
@@ -292,6 +295,8 @@ beforeEach(() => {
   prisma.patient.findMany.mockReset().mockResolvedValue([]);
   for (const m of TRAVEL_MODELS) prisma[m].findMany.mockReset().mockResolvedValue([]);
   permissionState.allowed = new Set([
+    ...Object.values(GENERIC_SIDEBAR_PERMISSION_BY_PATH)
+      .map(({ module, action }) => `${module}.${action}`),
     'contacts.read',
     'leads.read',
     'pipeline.read',
@@ -392,7 +397,7 @@ describe('GET /api/search — global search envelope', () => {
       expect(prisma[m].findMany, `${m} should be searched`).toHaveBeenCalled();
     }
     expect(prisma.contact.findMany).toHaveBeenCalledTimes(3);
-    for (const m of ['sequence', 'survey', 'kbArticle', 'estimate', 'whatsappMessage']) {
+    for (const m of ['survey', 'kbArticle', 'estimate', 'whatsappMessage']) {
       expect(prisma[m].findMany).not.toHaveBeenCalled();
     }
   });
@@ -506,6 +511,44 @@ describe('GET /api/search — global search envelope', () => {
     expect(prisma.automationRule.findMany).not.toHaveBeenCalled();
     expect(prisma.pipeline.findMany).not.toHaveBeenCalled();
     expect(prisma.whatsAppMessage.findMany).not.toHaveBeenCalled();
+  });
+
+  test('wellness record sections follow the exact permission-visible sidebar pages', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: TENANT_ID, vertical: 'wellness' });
+    permissionState.allowed = new Set([
+      'contacts.read',
+      'knowledge_base.read',
+      'wellness_knowledge_base.read',
+    ]);
+
+    const res = await request(makeApp()).get('/api/search?q=aftercare');
+
+    expect(res.status).toBe(200);
+    // Contacts is not a Wellness sidebar destination, so records from that
+    // module cannot leak into search even when a stale legacy grant exists.
+    expect(res.body.contacts).toEqual([]);
+    expect(prisma.contact.findMany).not.toHaveBeenCalled();
+    // Knowledge Base is a Wellness sidebar destination and is permissioned.
+    expect(res.body.kbArticles).toHaveLength(1);
+    expect(prisma.kbArticle.findMany).toHaveBeenCalledOnce();
+  });
+
+  test('wellness page visibility also suppresses its record search section', async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ id: TENANT_ID, vertical: 'wellness' });
+    permissionState.allowed = new Set([
+      'knowledge_base.read',
+      'wellness_knowledge_base.read',
+    ]);
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({ hiddenPaths: ['/knowledge-base'] }),
+    });
+    clearTenantPageVisibilityCache(TENANT_ID);
+
+    const res = await request(makeApp()).get('/api/search?q=aftercare');
+
+    expect(res.status).toBe(200);
+    expect(res.body.kbArticles).toEqual([]);
+    expect(prisma.kbArticle.findMany).not.toHaveBeenCalled();
   });
 
   test('generic tenant-hidden report, settings, goal, and work pages suppress their record categories', async () => {

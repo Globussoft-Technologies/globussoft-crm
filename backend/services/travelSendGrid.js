@@ -61,6 +61,11 @@ function backendConfig() {
 
 async function resolveSendGridConfig(tenantId) {
   if (tenantId) {
+    // Generic CRM uses a separate tenant key, but shared email pipelines have
+    // historically imported this resolver. Check that key first so those
+    // callers gain Generic BYOK support without changing Travel semantics.
+    const genericConfig = await require("./genericSendGrid").readTenantConfig(tenantId);
+    if (genericConfig) return { ...genericConfig.config, source: "tenant" };
     const tenantConfig = await readTenantConfig(tenantId);
     if (tenantConfig) return { ...tenantConfig.config, source: "tenant" };
   }
@@ -69,6 +74,8 @@ async function resolveSendGridConfig(tenantId) {
 
 async function isSendGridConfigured(tenantId) {
   if (tenantId) {
+    const genericConfig = await require("./genericSendGrid").readTenantConfig(tenantId);
+    if (genericConfig) return true;
     const row = await prisma.tenantSetting.findUnique({
       where: { tenantId_key: { tenantId, key: CONFIG_KEY } },
       select: { id: true },

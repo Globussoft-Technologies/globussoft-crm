@@ -143,6 +143,7 @@ const { isValidWidgetKey } = require("../lib/widgetCatalog");
 const { getAccessiblePages, canAccessPath } = require("../lib/pageCatalog");
 const {
   getTenantPageVisibility,
+  getTenantPageVisibilityCatalog,
   filterPagesByTenantVisibility,
   filterPermissionCatalogForTenant,
   getUnavailablePermissionModulesForTenant,
@@ -665,10 +666,27 @@ router.get(
       module,
       actions,
     }));
-    const domains = filterPermissionDomainsForTenant(
-      getGroupedCatalogForVertical(vertical),
-      catalog,
-    );
+    const domains = vertical === "wellness"
+      ? Array.from(getTenantPageVisibilityCatalog(vertical).reduce((groups, page) => {
+          const permission = page.requiredPermissions?.[0];
+          if (!permission?.module || !catalog[permission.module]) return groups;
+          const domain = page.category || "Other";
+          if (!groups.has(domain)) groups.set(domain, []);
+          if (!groups.get(domain).some((item) => item.module === permission.module)) {
+            groups.get(domain).push({
+              module: permission.module,
+              actions: [...catalog[permission.module]],
+            });
+          }
+          return groups;
+        }, new Map()).entries()).map(([domain, domainModules]) => ({
+          domain,
+          modules: domainModules,
+        }))
+      : filterPermissionDomainsForTenant(
+          getGroupedCatalogForVertical(vertical),
+          catalog,
+        );
     res.json({ catalog, modules, domains, vertical, hiddenPaths: visibility.hiddenPaths, hiddenModules });
   },
 );
@@ -999,13 +1017,13 @@ router.put(
           return res.status(400).json({ error: landingPathErr });
         }
         // If a non-empty landingPath was provided, also confirm the role
-        // has permissions to access that page. /home is permission-free
-        // (always allowed) so the typical "park new role at /home until
-        // we configure widgets" flow still works.
+        // has permissions to access that page. Pass the role's vertical so
+        // sidebar-specific permission overrides (including Generic home.read)
+        // use the same contract as role creation and accessible-pages.
         const normalized = normalizeLandingPath(landingPath);
         if (normalized) {
           const perms = await permissionSetForRole(roleId);
-          if (!canAccessPath(normalized, perms)) {
+          if (!canAccessPath(normalized, perms, { vertical: role.tenant?.vertical })) {
             return res.status(400).json({
               error:
                 "Landing page is not accessible by this role. Grant the required permissions first, or pick a page the role already has access to.",
@@ -1583,14 +1601,16 @@ router.put(
             tx,
           });
 
-          // Auto-clear landingPath if it's no longer accessible. /home is
-          // permission-free so it always survives.
+          // Auto-clear landingPath if it is no longer accessible. The tenant
+          // vertical is required here because Generic /home is gated by the
+          // sidebar-specific home.read permission even though the shared base
+          // page catalog keeps /home permission-free for legacy callers.
           let cleared = false;
           if (role.landingPath) {
             const permSet = new Set(
               newPerms.map((p) => `${p.module}.${p.action}`),
             );
-            if (!canAccessPath(role.landingPath, permSet)) {
+            if (!canAccessPath(role.landingPath, permSet, { vertical })) {
               await tx.role.update({
                 where: { id: roleId },
                 data: { landingPath: null },

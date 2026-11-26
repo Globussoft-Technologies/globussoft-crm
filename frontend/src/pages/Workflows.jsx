@@ -1227,7 +1227,7 @@ function applyServerSchema(schema) {
 // A few presentation keys map back to their real Contact payload names.
 function applyGenericLeadColumns(response) {
   const columns = Array.isArray(response?.availableColumns)
-    ? response.availableColumns
+    ? response.availableColumns.filter((column) => column.key !== "actions")
     : [];
   if (!columns.length) return false;
   const payloadFieldAliases = {

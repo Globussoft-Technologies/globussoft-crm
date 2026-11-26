@@ -165,7 +165,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
   const [openGroups, setOpenGroups] = useState(() => (
     Object.fromEntries(GROUPS.map((group) => [group.key, Boolean(group.openByDefault)]))
   ));
-  const [showEmpty, setShowEmpty] = useState(true);
+  const [showEmpty, setShowEmpty] = useState(() => !isGeneric);
   const [query, setQuery] = useState('');
   const [activeDetailTab, setActiveDetailTab] = useState('all');
   const [openDetailSections, setOpenDetailSections] = useState({ basic: true, utm: true, custom: true, ad: true });
@@ -598,7 +598,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     const workPhoneValue = contact?.workPhone ?? customFields.workPhone;
     const workPhoneVisible = (!normalizedQuery || 'work phone'.includes(normalizedQuery)) && (showEmpty || workPhoneValue !== null && workPhoneValue !== undefined && workPhoneValue !== '');
     const filteredMobileVisible = mobileVisible && (showEmpty || contact?.phone !== null && contact?.phone !== undefined && contact?.phone !== '');
-    if (!fields.length && !(telephone && (filteredMobileVisible || workPhoneVisible))) return null;
+    const hasVisibleFields = fields.length > 0 || (telephone && (filteredMobileVisible || workPhoneVisible));
     const open = openDetailSections[key] !== false;
     return <section className={`cd-detail-section${open ? ' is-open' : ''}`} data-detail-section={key} key={key}>
       <h4><button
@@ -611,6 +611,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
         <span className="cd-group-toggle" aria-hidden="true">{open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</span>
         <span>{label}</span>
       </button></h4>
+      {open && !hasVisibleFields && <div className="cd-detail-empty">No data available</div>}
       {open && fields.length > 0 && <div className="cd-basic-grid">{fields.map(renderDetailField)}</div>}
       {open && telephone && (filteredMobileVisible || workPhoneVisible) && <div className="cd-telephone-group">
         <div className="cd-telephone-label">Telephone numbers</div>

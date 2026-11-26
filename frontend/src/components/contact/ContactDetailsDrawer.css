@@ -49,6 +49,7 @@
 .cd-detail-section.is-open > h4 { margin-bottom: 0.8rem; }
 .cd-detail-section-toggle { display: flex; align-items: center; gap: 0.5rem; width: 100%; padding: 0.7rem 0.75rem; border: none; background: transparent; color: inherit; cursor: pointer; text-align: left; font: inherit; font-weight: 600; }
 .cd-detail-section .cd-basic-grid { padding: 0.15rem 0; }
+.cd-detail-empty { padding: 0.65rem 0.75rem; color: var(--text-secondary); font-size: 0.8rem; }
 .cd-tags { display: flex; align-items: center; gap: 0.45rem; color: var(--text-secondary); font-size: 0.75rem; }
 .cd-tag-values { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .cd-tag-manager { position: relative; align-items: flex-start; }
@@ -187,6 +188,26 @@ body[data-vertical="generic"] .cd-basic-field .cd-filled-value {
 body[data-vertical="generic"] .cd-basic-field .cd-empty-value,
 body[data-vertical="generic"] .cd-basic-field strong.is-empty {
   color: var(--text-secondary);
+}
+
+/* Generic tracking values can be long URLs or provider IDs without spaces.
+   Keep them inside their own grid cell and let the row grow downward. */
+.cd-generic-sections .cd-basic-field,
+.cd-generic-sections .cp-inline,
+.cd-generic-sections .cp-inline > span:first-child {
+  min-width: 0;
+  max-width: 100%;
+}
+.cd-generic-sections .cp-inline {
+  width: 100%;
+  align-items: flex-start;
+}
+.cd-generic-sections .cd-filled-value {
+  display: block;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 body[data-vertical="generic"] .cd-generic-tags-card {

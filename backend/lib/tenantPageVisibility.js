@@ -12,10 +12,38 @@ const prisma = require('./prisma');
 const {
   getCatalogForVertical,
 } = require('./pageCatalog');
+const {
+  GENERIC_SIDEBAR_PERMISSION_BY_PATH,
+} = require('./genericSidebarPermissions');
+const {
+  TRAVEL_SIDEBAR_PERMISSION_BY_PATH,
+  TRAVEL_SIDEBAR_DESCRIPTION_BY_PATH,
+} = require('./travelSidebarPermissions');
+const {
+  WELLNESS_SIDEBAR_PERMISSION_SPECS,
+  WELLNESS_SIDEBAR_PERMISSION_BY_PATH,
+  WELLNESS_SIDEBAR_LEGACY_PERMISSION_BY_PATH,
+} = require('./wellnessSidebarPermissions');
 
 const SETTING_KEY = 'navigation.hiddenPages';
 const SETTING_CATEGORY = 'feature-flag';
 const CACHE_TTL_MS = 30_000;
+
+// Generic CRM's permission editor mirrors its actual sidebar modules. These
+// legacy capability buckets have no standalone Generic sidebar destination;
+// their visible workflows are already owned by Inbox, Marketing Campaign,
+// Channels, or the specific document modules. Keep the underlying permission
+// keys valid (and preserve existing grants), but do not render duplicate cards
+// in the Generic permission matrix. Wellness and Travel are untouched.
+const GENERIC_SIDEBAR_PERMISSION_MODULES = new Set(
+  Object.values(GENERIC_SIDEBAR_PERMISSION_BY_PATH).map(({ module }) => module),
+);
+const TRAVEL_SIDEBAR_PERMISSION_MODULES = new Set(
+  Object.values(TRAVEL_SIDEBAR_PERMISSION_BY_PATH).map(({ module }) => module),
+);
+const WELLNESS_SIDEBAR_PERMISSION_MODULES = new Set(
+  Object.values(WELLNESS_SIDEBAR_PERMISSION_BY_PATH).map(({ module }) => module),
+);
 
 // These routes are safe landing surfaces. Keeping them enabled prevents a
 // tenant configuration from creating a redirect loop or leaving a user with
@@ -31,7 +59,6 @@ const GENERIC_NON_SIDEBAR_PAGE_PATHS = new Set([
   '/callified-data',
   '/lead-routing',
   '/estimates',
-  '/sequences',
   '/surveys',
   '/knowledge-base',
   '/dashboards',
@@ -51,8 +78,7 @@ const GENERIC_NON_SIDEBAR_PAGE_PATHS = new Set([
 // Generic CRM Page Visibility mirrors the actual rendered sidebar, including
 // its order, section names and labels. The route remains the catalog page's
 // canonical `path`; these overrides are presentation-only and do not change
-// routing, RBAC or API behaviour. Wellness and Travel continue to use their
-// existing vertical catalogs unchanged.
+// routing, RBAC or API behaviour.
 const GENERIC_SIDEBAR_PRESENTATION = [
   { path: '/home', label: 'Home', category: 'Core' },
   { path: '/dashboard', label: 'Dashboard', category: 'Core' },
@@ -60,7 +86,7 @@ const GENERIC_SIDEBAR_PRESENTATION = [
   { path: '/integrations/callified', label: 'Callified', category: 'Core' },
 
   { path: '/contacts', label: 'Contacts', category: 'Sales' },
-  { path: '/pipeline', label: 'Deals and Pipeline', category: 'Sales' },
+  { path: '/pipeline', label: 'Deals', category: 'Sales' },
   { path: '/deal-insights', label: 'Deal Insights', category: 'Sales' },
   { path: '/playbooks', label: 'Playbooks', category: 'Sales' },
   { path: '/pipelines', label: 'Pipelines', category: 'Sales' },
@@ -75,8 +101,7 @@ const GENERIC_SIDEBAR_PRESENTATION = [
   { path: '/live-chat', label: 'Live Chat', category: 'Communication' },
 
   { path: '/tasks', label: 'Task Queue', category: 'Work Management' },
-  // Standalone Generic CRM Workflows page intentionally hidden.
-  // { path: '/workflows', label: 'Workflows', category: 'Work Management' },
+  { path: '/workflows', label: 'Workflows', category: 'Work Management' },
 
   { path: '/tickets', label: 'Tickets', category: 'Customer Support' },
   { path: '/sla', label: 'SLA Policies', category: 'Customer Support' },
@@ -84,6 +109,7 @@ const GENERIC_SIDEBAR_PRESENTATION = [
   { path: '/forms', label: 'Web Forms', category: 'Marketing & Automation' },
   { path: '/landing-sites', label: 'Landing Sites', category: 'Marketing & Automation' },
   { path: '/marketing', label: 'Marketing Campaign', category: 'Marketing & Automation' },
+  { path: '/sequences', label: 'Sequences', category: 'Marketing & Automation' },
   { path: '/ab-tests', label: 'A/B Tests', category: 'Marketing & Automation' },
   { path: '/web-visitors', label: 'Web Visitors', category: 'Marketing & Automation' },
   { path: '/chatbots', label: 'Chatbots', category: 'Marketing & Automation' },
@@ -139,6 +165,87 @@ const GENERIC_SIDEBAR_PRESENTATION = [
   { path: '/settings', label: 'Settings', category: 'Settings' },
   { path: '/notification-settings', label: 'Notification Settings', category: 'User' },
 ];
+
+// Travel Page Visibility follows the live renderTravelNav inventory exactly.
+// Sub-brand entries remain configurable because they are real sidebar pages;
+// the runtime sub-brand switcher still decides when those links are rendered.
+const TRAVEL_SIDEBAR_PRESENTATION = [
+  { path: '/travel', label: 'Dashboard', category: 'Core' },
+
+  { path: '/travel/diagnostics', label: 'Diagnostics', category: 'Travel Management' },
+  { path: '/travel/trip-knowledge', label: 'Travel Knowledge', category: 'Travel Management' },
+  { path: '/travel/curriculum-mappings', label: 'Curriculum Mappings', category: 'Travel Management' },
+  { path: '/travel/tmc/catalogue', label: 'TMC Catalogue', category: 'Travel Management' },
+  { path: '/travel/itinerary-templates', label: 'Itinerary Templates', category: 'Travel Management' },
+  { path: '/travel/itineraries', label: 'Itineraries', category: 'Travel Management' },
+  { path: '/travel/trips', label: 'TMC Trips', category: 'Travel Management' },
+  { path: '/travel/sightseeing', label: 'Sightseeing Master', category: 'Travel Management' },
+  { path: '/travel/religious-packets', label: 'Religious Packets', category: 'Travel Management' },
+
+  { path: '/leads', label: 'Leads', category: 'Sales' },
+  { path: '/contacts', label: 'Contacts', category: 'Sales' },
+  { path: '/travel/quotes-admin', label: 'Quotes', category: 'Sales' },
+  { path: '/travel/flights/quote', label: 'Flight Quick-quote', category: 'Sales' },
+  { path: '/travel/quotes/builder', label: 'Quote Builder', category: 'Sales' },
+  { path: '/travel/quote-templates', label: 'Quote Templates', category: 'Sales' },
+
+  { path: '/travel/passport-verification', label: 'Passport', category: 'Operations' },
+  { path: '/travel/suppliers-admin', label: 'Suppliers', category: 'Operations' },
+  { path: '/travel/suppliers', label: 'Supplier Credentials', category: 'Operations' },
+  { path: '/travel/commission-profiles', label: 'Commission Profiles', category: 'Operations' },
+  { path: '/travel/cancellation-policies', label: 'Cancellation Policies', category: 'Operations' },
+  { path: '/travel/web-checkins', label: 'Web Check-ins', category: 'Operations' },
+
+  { path: '/travel/visa/applications', label: 'Applications', category: 'Visa Sure' },
+  { path: '/travel/visa/checklists', label: 'Checklists', category: 'Visa Sure' },
+  { path: '/travel/visa/embassy-rules', label: 'Embassy Rules', category: 'Visa Sure' },
+
+  { path: '/travel/email-automation', label: 'Email Automation', category: 'Marketing' },
+  { path: '/travel/brochures', label: 'Brochure Engine', category: 'Marketing' },
+  { path: '/travel/forms', label: 'Web Forms', category: 'Marketing' },
+  { path: '/travel/meeting-forms', label: 'Meeting Forms', category: 'Marketing' },
+  { path: '/landing-pages', label: 'Landing Pages', category: 'Marketing' },
+  { path: '/admin/brand-kits', label: 'Brand Kits', category: 'Marketing' },
+
+  { path: '/inbox', label: 'Inbox', category: 'Communication' },
+  { path: '/tasks', label: 'Tasks', category: 'Communication' },
+  { path: '/calendar-sync', label: 'Calendar', category: 'Communication' },
+  { path: '/gmail', label: 'Gmail', category: 'Communication' },
+  { path: '/travel/reviews', label: 'Reviews', category: 'Communication' },
+  { path: '/travel/school-terms', label: 'School Term Calendar', category: 'Communication' },
+
+  { path: '/travel/invoices-admin', label: 'Invoices', category: 'Finance' },
+  { path: '/travel/tally', label: 'Tally', category: 'Finance' },
+  { path: '/travel/payables', label: 'Payables', category: 'Finance' },
+  { path: '/payments', label: 'Payments Received', category: 'Finance' },
+  { path: '/expenses', label: 'Expense Management', category: 'Finance' },
+  { path: '/travel/cost-master', label: 'Cost Master', category: 'Finance' },
+  { path: '/travel/pricing-rules', label: 'Pricing Rules', category: 'Finance' },
+
+  { path: '/staff', label: 'Staff', category: 'Administration' },
+  { path: '/settings/roles', label: 'Roles', category: 'Administration' },
+  { path: '/audit-log', label: 'Audit Log', category: 'Administration' },
+  { path: '/travel/reports', label: 'Reports', category: 'Administration' },
+
+  { path: '/developer', label: 'Developer', category: 'Platform' },
+  { path: '/privacy', label: 'Privacy', category: 'Platform' },
+  { path: '/settings', label: 'Settings', category: 'Settings' },
+];
+
+const WELLNESS_SIDEBAR_SYNTHETIC_PAGES = {
+  '/integrations/adsgpt': {
+    path: '/integrations/adsgpt',
+    label: 'AdsGPT',
+    description: 'Open the connected AdsGPT marketing workspace.',
+    category: 'Manager',
+  },
+  '/integrations/callified': {
+    path: '/integrations/callified',
+    label: 'Callified',
+    description: 'Open the connected Callified calling workspace.',
+    category: 'Manager',
+  },
+};
 
 // A small set of generic routes still uses the legacy hardcoded sidebar
 // renderer and therefore is not part of the vertical page catalog. Keep
@@ -281,6 +388,33 @@ function catalogPathsForVertical(vertical) {
 
 function getTenantPageVisibilityCatalog(vertical) {
   const catalog = getCatalogForVertical(vertical);
+  if (vertical === 'wellness') {
+    const catalogByPath = new Map(catalog.map((page) => [page.path, page]));
+    return WELLNESS_SIDEBAR_PERMISSION_SPECS.flatMap(([path]) => {
+      const page = catalogByPath.get(path) || WELLNESS_SIDEBAR_SYNTHETIC_PAGES[path];
+      if (!page) return [];
+      const permission = WELLNESS_SIDEBAR_PERMISSION_BY_PATH[path];
+      return [{
+        ...page,
+        requiredPermissions: permission ? [{ ...permission }] : [],
+      }];
+    });
+  }
+  if (vertical === 'travel') {
+    const catalogByPath = new Map(catalog.map((page) => [page.path, page]));
+    return TRAVEL_SIDEBAR_PRESENTATION.flatMap((sidebarPage) => {
+      const page = catalogByPath.get(sidebarPage.path);
+      if (!page) return [];
+      const permission = TRAVEL_SIDEBAR_PERMISSION_BY_PATH[sidebarPage.path];
+      return [{
+        ...page,
+        label: sidebarPage.label,
+        category: sidebarPage.category,
+        description: TRAVEL_SIDEBAR_DESCRIPTION_BY_PATH[sidebarPage.path] || page.description,
+        ...(permission ? { requiredPermissions: [{ ...permission }] } : {}),
+      }];
+    });
+  }
   if (vertical !== 'generic') return catalog;
   const catalogByPath = new Map([
     ...catalog,
@@ -292,7 +426,38 @@ function getTenantPageVisibilityCatalog(vertical) {
 
   return GENERIC_SIDEBAR_PRESENTATION.flatMap((sidebarPage) => {
     const page = catalogByPath.get(sidebarPage.path);
-    return page ? [{ ...page, label: sidebarPage.label, category: sidebarPage.category }] : [];
+    if (!page) return [];
+    const permission = GENERIC_SIDEBAR_PERMISSION_BY_PATH[sidebarPage.path];
+    return [{
+      ...page,
+      label: sidebarPage.label,
+      category: sidebarPage.category,
+      ...(permission ? { requiredPermissions: [{ ...permission }] } : {}),
+    }];
+  });
+}
+
+/**
+ * Return the exact sidebar catalog entries available to a user. This is kept
+ * separate from pageCatalog's broader routable-page catalog because global
+ * search must never advertise a page that the vertical's sidebar does not
+ * expose. Callers can still apply tenant hidden-path filtering afterwards.
+ */
+function getAccessibleTenantSidebarPages(
+  vertical,
+  permissionSet,
+  { isOwner = false } = {},
+) {
+  const pages = getTenantPageVisibilityCatalog(vertical);
+  if (isOwner) return pages;
+  if (!(permissionSet instanceof Set)) return [];
+  return pages.filter((page) => {
+    const required = Array.isArray(page.requiredPermissions)
+      ? page.requiredPermissions
+      : [];
+    return required.every(({ module, action }) =>
+      permissionSet.has(`${module}.${action}`),
+    );
   });
 }
 
@@ -422,15 +587,13 @@ function referencedPermissionKeys(pages) {
 // comes from getTenantPageVisibilityCatalog(), so only sidebar-capable pages
 // can keep a page-backed permission module visible.
 function getPermissionReferenceCatalogForVertical(vertical) {
-  const catalog = getCatalogForVertical(vertical);
-  if (vertical !== 'generic') return catalog;
-  return [
-    ...catalog,
-    ...LEGACY_GENERIC_PAGE_CATALOG.map((page) => ({
-      ...page,
-      requiredPermissions: page.requiredPermissions.map((permission) => ({ ...permission })),
-    })),
-  ];
+  if (vertical === 'generic' || vertical === 'wellness') {
+    // Page-specific vertical permissions use the same overlaid catalog as
+    // Super Admin Page Visibility. This makes disabling one page hide exactly
+    // its matching card, including Wellness's external launcher entries.
+    return getTenantPageVisibilityCatalog(vertical);
+  }
+  return getCatalogForVertical(vertical);
 }
 
 /**
@@ -449,10 +612,12 @@ function filterPermissionCatalogForTenant(catalog, vertical, hiddenPaths) {
     knownKeys,
     enabledKeys,
   );
+  unavailableModules.push(...permissionPageHiddenModules(catalog, vertical));
+  const unavailableSet = new Set(unavailableModules);
   const filtered = {};
 
   for (const [module, actions] of Object.entries(catalog || {})) {
-    if (!unavailableModules.includes(module)) {
+    if (!unavailableSet.has(module)) {
       filtered[module] = [...actions];
     }
   }
@@ -470,13 +635,36 @@ function getUnavailablePermissionModules(catalog, knownKeys, enabledKeys) {
   });
 }
 
+function permissionPageHiddenModules(catalog, vertical) {
+  if (vertical === 'wellness') {
+    return Object.keys(catalog || {}).filter(
+      (module) => !WELLNESS_SIDEBAR_PERMISSION_MODULES.has(module),
+    );
+  }
+  if (vertical === 'travel') {
+    return Object.keys(catalog || {}).filter(
+      (module) => !TRAVEL_SIDEBAR_PERMISSION_MODULES.has(module),
+    );
+  }
+  if (vertical !== 'generic') return [];
+  // The Generic role editor is intentionally page-oriented: if a module does
+  // not own a visible Generic sidebar item, it remains a valid backend/API
+  // permission but is not rendered as an extra card in this matrix.
+  return Object.keys(catalog || {}).filter(
+    (module) => !GENERIC_SIDEBAR_PERMISSION_MODULES.has(module),
+  );
+}
+
 function getUnavailablePermissionModulesForTenant(catalog, vertical, hiddenPaths) {
   const pages = getTenantPageVisibilityCatalog(vertical);
   const knownKeys = referencedPermissionKeys(getPermissionReferenceCatalogForVertical(vertical));
   const enabledKeys = referencedPermissionKeys(
     filterPagesByTenantVisibility(pages, { hiddenPaths }),
   );
-  return getUnavailablePermissionModules(catalog, knownKeys, enabledKeys);
+  return Array.from(new Set([
+    ...getUnavailablePermissionModules(catalog, knownKeys, enabledKeys),
+    ...permissionPageHiddenModules(catalog, vertical),
+  ]));
 }
 
 function filterPermissionDomainsForTenant(domains, catalog) {
@@ -509,13 +697,17 @@ async function isPermissionAvailableForTenant(tenantId, module, _action, { pageP
     }
   }
 
-  const matchingPages = pages.filter((page) =>
-    (page.requiredPermissions || []).some(
+  const matchingPages = pages.filter((page) => {
+    const directMatch = (page.requiredPermissions || []).some(
       // Availability is a module-wide ceiling, including mutations. Catalog
       // pages often declare only read; hidden pages must not leave update open.
       (permission) => permission.module === module,
-    ),
-  );
+    );
+    if (directMatch) return true;
+    if (visibility.vertical !== 'wellness') return false;
+    const legacy = WELLNESS_SIDEBAR_LEGACY_PERMISSION_BY_PATH[page.path];
+    return legacy?.module === module;
+  });
   if (matchingPages.length === 0) return true;
   return matchingPages.some((page) => !isPathHidden(page.path, visibility.hiddenPaths));
 }
@@ -526,8 +718,11 @@ module.exports = {
   REQUIRED_PAGE_PATHS,
   GENERIC_NON_SIDEBAR_PAGE_PATHS,
   GENERIC_SIDEBAR_PRESENTATION,
+  TRAVEL_SIDEBAR_PRESENTATION,
+  WELLNESS_SIDEBAR_SYNTHETIC_PAGES,
   LEGACY_GENERIC_PAGE_CATALOG,
   getTenantPageVisibilityCatalog,
+  getAccessibleTenantSidebarPages,
   normalizeHiddenPaths,
   parseHiddenPaths,
   isPathHidden,

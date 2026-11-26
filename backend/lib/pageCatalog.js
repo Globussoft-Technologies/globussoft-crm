@@ -55,6 +55,16 @@
  * page  /home.
  */
 
+const {
+  GENERIC_SIDEBAR_PERMISSION_BY_PATH,
+} = require('./genericSidebarPermissions');
+const {
+  TRAVEL_SIDEBAR_PERMISSION_BY_PATH,
+} = require('./travelSidebarPermissions');
+const {
+  WELLNESS_SIDEBAR_PERMISSION_BY_PATH,
+} = require('./wellnessSidebarPermissions');
+
 const PAGE_CATALOG = [
   //  Always-available landing pages 
   {
@@ -1111,6 +1121,13 @@ const PAGE_CATALOG = [
     requiredPermissions: [{ module: 'school_terms', action: 'read' }],
   },
   {
+    path: '/travel/email-automation',
+    label: 'Email Automation',
+    description: 'Travel email templates, delivery rules, and history',
+    category: 'Travel Marketing',
+    requiredPermissions: [{ module: 'marketing', action: 'read' }],
+  },
+  {
     path: '/travel/brochures',
     label: 'Brochure Engine',
     description: 'AI brochure PDF composer (cover, itinerary, pricing)',
@@ -1283,16 +1300,14 @@ const PAGE_CATALOG = [
   },
 
   //  Automation 
-  // Generic CRM: standalone Workflows page intentionally hidden from page
-  // discovery. The route, API, and embedded webhook workflows remain intact.
-  // {
-  //   path: '/workflows',
-  //   label: 'Workflows',
-  //   description: 'Workflow automation builder',
-  //   category: 'Automation',
-  //   vertical: 'generic',
-  //   requiredPermissions: [{ module: 'workflows', action: 'read' }],
-  // },
+  {
+    path: '/workflows',
+    label: 'Workflows',
+    description: 'Workflow automation builder',
+    category: 'Automation',
+    vertical: 'generic',
+    requiredPermissions: [{ module: 'workflows', action: 'read' }],
+  },
 
   //  Admin & Developer (missing routes) 
   {
@@ -1549,6 +1564,13 @@ const PAGES_BY_PATH = new Map(PAGE_CATALOG.map((p) => [p.path, p]));
 // differ per tenant vertical are adjusted here after the base catalog is
 // filtered, so search + wellness catalog-driven sidebars show the right name.
 const VERTICAL_LABEL_OVERRIDES = {
+  generic: {
+    '/dashboard': 'Dashboard',
+    '/pipeline': 'Deals',
+    '/inbox': 'Inbox',
+    '/tasks': 'Task Queue',
+    '/marketing': 'Marketing Campaign',
+  },
   travel: {
     '/leads': 'Travel Leads',
     '/travel/leads': 'All Leads',
@@ -1560,9 +1582,24 @@ const VERTICAL_LABEL_OVERRIDES = {
 // vertical sidebar. Keep /api/pages/me aligned with the actual Travel sidebar
 // so a visible destination can never disappear from search.
 const VERTICAL_PERMISSION_OVERRIDES = {
-  travel: {
-    '/calendar-sync': [{ module: 'integrations', action: 'read' }],
-  },
+  wellness: Object.fromEntries(
+    Object.entries(WELLNESS_SIDEBAR_PERMISSION_BY_PATH).map(([path, permission]) => [
+      path,
+      [permission],
+    ]),
+  ),
+  generic: Object.fromEntries(
+    Object.entries(GENERIC_SIDEBAR_PERMISSION_BY_PATH).map(([path, permission]) => [
+      path,
+      [permission],
+    ]),
+  ),
+  travel: Object.fromEntries(
+    Object.entries(TRAVEL_SIDEBAR_PERMISSION_BY_PATH).map(([path, permission]) => [
+      path,
+      [permission],
+    ]),
+  ),
 };
 
 function applyVerticalLabel(page, vertical) {
@@ -1644,8 +1681,8 @@ function matchesVertical(pageVertical, vertical) {
 /**
  * Return the subset of catalog entries whose requiredPermissions are all
  * satisfied by the given Set of "module.action" permission strings. A
- * page with empty requiredPermissions always passes (so /home always
- * appears as a final-fallback target).
+ * page with empty requiredPermissions always passes. Vertical-specific
+ * permission overrides may still gate a shared page such as Generic /home.
  *
  * Multi-permission pages: an entry with multiple {module, action} items
  * requires the user to have ALL of them (AND semantics via .every()).

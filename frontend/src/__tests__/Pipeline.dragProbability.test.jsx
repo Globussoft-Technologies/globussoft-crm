@@ -30,27 +30,32 @@ const STAGES = [
 ];
 
 const DEALS = [
-  { id: 101, title: 'Acme Corp Renewal', contactName: 'Alice Lead', ownerName: 'Anita', amount: 50000, probability: 25, stage: 'new-lead' },
+  { id: 101, title: 'Acme Corp Renewal', contactName: 'Alice Lead', ownerName: 'Anita', amount: 50000, probability: 25, stage: 'new-lead', pipelineId: 41 },
 ];
 
-function mockApi({ putError = false } = {}) {
+function mockApi({ putError = false, deals = DEALS, stages = STAGES, pipelineStagesById = {} } = {}) {
   fetchApi.mockImplementation((url, options) => {
     if (options?.method === 'PUT') {
       return putError
         ? Promise.reject({ body: { error: 'Unable to move deal' } })
         : Promise.resolve({ ok: true });
     }
-    if (url.startsWith('/api/deals')) return Promise.resolve(DEALS);
-    if (url.startsWith('/api/pipeline_stages')) return Promise.resolve(STAGES);
-    if (url.startsWith('/api/pipelines')) return Promise.resolve([]);
+    if (url.startsWith('/api/deals')) return Promise.resolve(deals);
+    if (url.startsWith('/api/pipeline_stages')) {
+      const selectedPipelineId = new URL(url, 'http://localhost').searchParams.get('pipelineId');
+      return Promise.resolve(selectedPipelineId && pipelineStagesById[selectedPipelineId]
+        ? pipelineStagesById[selectedPipelineId]
+        : stages);
+    }
+    if (url.startsWith('/api/pipelines')) return Promise.resolve([{ id: 41, name: 'Default Sales', isDefault: true }]);
     return Promise.resolve([]);
   });
 }
 
-function renderPipeline() {
+function renderPipeline(initialEntry = '/pipeline?pipelineId=41') {
   return render(
-    <AuthContext.Provider value={{ user: { tenant: { vertical: 'generic' } } }}>
-      <MemoryRouter><Pipeline /></MemoryRouter>
+    <AuthContext.Provider value={{ user: { tenantId: 1 }, tenant: { id: 1, vertical: 'generic' } }}>
+      <MemoryRouter initialEntries={[initialEntry]}><Pipeline /></MemoryRouter>
     </AuthContext.Provider>,
   );
 }
@@ -75,18 +80,10 @@ describe('Deals and Pipelines kanban stage movement', () => {
 
     await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
       '/api/deals/101',
-      expect.objectContaining({ method: 'PUT', body: JSON.stringify({ stage: 'won' }) }),
+      expect.objectContaining({ method: 'PUT', body: JSON.stringify({ stage: 'won', pipelineId: 41 }) }),
     ));
     expect(notifyObj.success).toHaveBeenCalledWith('Deal stage updated');
     expect(await withinSection(won).findByText('Acme Corp Renewal')).toBeInTheDocument();
-  });
-
-  it('updates the probability to 100% when a deal is moved to Won', async () => {
-    renderPipeline();
-    const card = (await screen.findByText('Acme Corp Renewal')).closest('article');
-    fireEvent.dragStart(card, { dataTransfer: { effectAllowed: '' } });
-    fireEvent.drop(stageSection('Won'));
-    await waitFor(() => expect(screen.getByText('100%')).toBeInTheDocument());
   });
 
   it('reverts the optimistic move and reports an error when the stage update fails', async () => {
@@ -97,6 +94,44 @@ describe('Deals and Pipelines kanban stage movement', () => {
     fireEvent.drop(stageSection('Won'));
     await waitFor(() => expect(notifyObj.error).toHaveBeenCalledWith('Unable to move deal'));
     expect(withinSection(stageSection('New Lead')).getByText('Acme Corp Renewal')).toBeInTheDocument();
+  });
+
+  it('moves an assigned deal within its own pipeline while viewing All pipelines', async () => {
+    renderPipeline('/pipeline');
+    const card = (await screen.findByText('Acme Corp Renewal')).closest('article');
+    fireEvent.dragStart(card, { dataTransfer: { effectAllowed: '' } });
+    fireEvent.drop(stageSection('Won'));
+
+    await waitFor(() => expect(fetchApi).toHaveBeenCalledWith(
+      '/api/deals/101',
+      expect.objectContaining({ method: 'PUT', body: JSON.stringify({ stage: 'won', pipelineId: 41 }) }),
+    ));
+  });
+
+  it('blocks a legacy deal with no pipeline until one is assigned', async () => {
+    mockApi({ deals: [{ ...DEALS[0], pipelineId: null }] });
+    renderPipeline('/pipeline');
+    const card = (await screen.findByText('Acme Corp Renewal')).closest('article');
+    fireEvent.dragStart(card, { dataTransfer: { effectAllowed: '' } });
+    fireEvent.drop(stageSection('Won'));
+
+    expect(notifyObj.error).toHaveBeenCalledWith('Assign this deal to a pipeline before moving it between stages.');
+    expect(fetchApi.mock.calls.some(([url, options]) => url === '/api/deals/101' && options?.method === 'PUT')).toBe(false);
+  });
+
+  it('blocks moving a deal into a stage owned by another pipeline', async () => {
+    const review = { id: 4, name: 'Review', color: '#a855f7', position: 1 };
+    mockApi({
+      stages: [...STAGES, review],
+      pipelineStagesById: { 41: STAGES },
+    });
+    renderPipeline('/pipeline');
+    const card = (await screen.findByText('Acme Corp Renewal')).closest('article');
+    fireEvent.dragStart(card, { dataTransfer: { effectAllowed: '' } });
+    fireEvent.drop(stageSection('Review'));
+
+    expect(notifyObj.error).toHaveBeenCalledWith('The selected stage does not belong to this pipeline.');
+    expect(fetchApi.mock.calls.some(([url, options]) => url === '/api/deals/101' && options?.method === 'PUT')).toBe(false);
   });
 });
 

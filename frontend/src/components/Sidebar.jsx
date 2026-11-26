@@ -149,7 +149,11 @@ import { launchCallifiedSSO } from "../utils/callified";
 import { useNotify } from "../utils/notify";
 import { useActiveSubBrand } from "../utils/subBrand";
 import { usePermissions } from "../hooks/usePermissions";
-import { getGenericAccessByPath, isTenantPageHidden } from "../utils/sidebarSearch";
+import {
+  getGenericAccessByPath,
+  isTenantPageHidden,
+  TRAVEL_SIDEBAR_PERMISSION_BY_PATH,
+} from "../utils/sidebarSearch";
 // Branding refactor (2026-07-08): the sidebar shows exactly ONE logo, driven
 // by the fallback-resolved effective brand for the active sub-brand  never
 // a separate, always-on tenant-wide logo stacked alongside a sub-brand logo.
@@ -678,7 +682,9 @@ const Sidebar = ({
     if (canonicalAccess?.sidebarHidden) return null;
     const adminOnly = canonicalAccess ? Boolean(canonicalAccess.adminOnly) : requestedAdminOnly;
     const managerOnly = canonicalAccess ? Boolean(canonicalAccess.managerOnly) : requestedManagerOnly;
-    const requiredPermission = canonicalAccess?.requiredPermission || requestedPermission;
+    const requiredPermission = canonicalAccess?.requiredPermission
+      || (isTravel ? TRAVEL_SIDEBAR_PERMISSION_BY_PATH[to] : null)
+      || requestedPermission;
     if (canonicalAccess?.hideForAdmin && isAdmin) return null;
     if (canonicalAccess?.userOnly && isManager) return null;
     // Explicit permission grants are authoritative. The role flags are kept
@@ -819,9 +825,15 @@ const Sidebar = ({
     adminOnly,
     managerOnly,
     wellnessRoles: linkWellnessRoles,
-    requiredPermission,
+    requiredPermission: requestedPermission,
   }) => {
     if (isTenantPageHidden(to, hiddenPagePaths)) return false;
+    const canonicalAccess = !isTravel && !isWellness
+      ? getGenericAccessByPath(to)
+      : null;
+    const requiredPermission = canonicalAccess?.requiredPermission
+      || (isTravel ? TRAVEL_SIDEBAR_PERMISSION_BY_PATH[to] : null)
+      || requestedPermission;
     const hasConfiguredPermission = Boolean(requiredPermission);
     if (!hasConfiguredPermission && adminOnly && !isAdmin) return false;
     if (!hasConfiguredPermission && managerOnly && !isManager) return false;
@@ -1018,7 +1030,9 @@ const Sidebar = ({
   // Ref-backed impl + stable useMemo identity  same perf rationale as Link.
   const adsGptImplRef = useRef(null);
   adsGptImplRef.current = ({ icon: Icon = Sparkles, label = "AdsGPT" }) => {
-    if (!isTravel && !isWellness && isTenantPageHidden("/integrations/adsgpt", hiddenPagePaths)) return null;
+    if (!isTravel && isTenantPageHidden("/integrations/adsgpt", hiddenPagePaths)) return null;
+    const module = isWellness ? "wellness_adsgpt" : "adsgpt";
+    if (!isTravel && (!permissionsReady || !hasPermission(module, "read"))) return null;
     const handleClick = async (e) => {
       e.preventDefault();
       if (adsLoading) return;
@@ -1077,7 +1091,9 @@ const Sidebar = ({
     icon: Icon = PhoneCall,
     label = "Callified",
   }) => {
-    if (!isTravel && !isWellness && isTenantPageHidden("/integrations/callified", hiddenPagePaths)) return null;
+    if (!isTravel && isTenantPageHidden("/integrations/callified", hiddenPagePaths)) return null;
+    const module = isWellness ? "wellness_callified" : "callified";
+    if (!isTravel && (!permissionsReady || !hasPermission(module, "read"))) return null;
     const handleClick = async (e) => {
       e.preventDefault();
       if (callifiedLoading) return;
@@ -1954,8 +1970,8 @@ function renderWellnessNav({
           telecallers, etc. don't need AdsGPT (marketing tool) or Callified
           (call-centre console) in their day-to-day nav  they land on the
           role-aware /home dashboard instead. */}
-      {isManager && <AdsGptLink icon={Sparkles} label="AdsGPT" />}
-      {isManager && <CallifiedLink icon={PhoneCall} label="Callified" />}
+      <AdsGptLink icon={Sparkles} label="AdsGPT" />
+      <CallifiedLink icon={PhoneCall} label="Callified" />
 
       {/* Remaining categories  order driven by WELLNESS_CATEGORY_ORDER so
           a new catalog entry slots into the right section automatically.
@@ -2758,10 +2774,9 @@ function renderGenericNav({
       {!isAdmin && <Link to="/home" end icon={LayoutDashboard} label="Home" />}
       <Link to="/dashboard" end icon={LayoutDashboard} label="Dashboard" requiredPermission={{ module: "dashboards", action: "read" }} />
       {/* AdsGPT + Callified are marketing / call-centre integrations
-          intended for ADMIN + MANAGER only. Mirrors the same gate in the
-          wellness sidebar; keep both branches in sync. */}
-      {isManager && <AdsGptLink icon={Sparkles} label="AdsGPT" />}
-      {isManager && <CallifiedLink icon={PhoneCall} label="Callified" />}
+          controlled by their own Generic CRM permissions. */}
+      <AdsGptLink icon={Sparkles} label="AdsGPT" />
+      <CallifiedLink icon={PhoneCall} label="Callified" />
       {renderGroup("Leads", <>
         <Link to="/leads" icon={UserPlus} label="All Leads" count={counts.leads} requiredPermission={{ module: "leads", action: "read" }} />
         <Link to="/converted-leads" icon={UserCheck} label="Converted Leads" requiredPermission={{ module: "leads", action: "read" }} />
@@ -2795,7 +2810,7 @@ function renderGenericNav({
       {renderGroup("Sales", <>
         <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
         <Link to="/clients" icon={Building2} label="Clients" requiredPermission={{ module: "contacts", action: "read" }} />
-        <Link to="/pipeline" icon={Briefcase} label="Deals" requiredPermission={{ module: "pipeline", action: "read" }} />
+        <Link to="/pipeline" icon={Briefcase} label="Deals" requiredPermission={{ module: "deals", action: "read" }} />
         <Link to="/deal-insights" icon={Eye} label="Deal Insights" requiredPermission={{ module: "deal_insights", action: "read" }} />
         <Link to="/playbooks" icon={FileText} label="Playbooks" requiredPermission={{ module: "playbooks", action: "read" }} />
         <Link to="/booking-pages" icon={Calendar} label="Booking Pages" requiredPermission={{ module: "booking_pages", action: "read" }} />

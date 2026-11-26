@@ -824,6 +824,7 @@ test.describe('Audit coverage — Pipeline', () => {
     const res = await post(request, token, '/api/pipelines', {
       name: `${RUN_TAG} pipeline-create`,
       description: 'Audit-coverage probe',
+      stages: [{ name: `${RUN_TAG} pipeline-create-stage` }],
     });
     expect(res.status(), `pipeline create: ${await res.text()}`).toBe(201);
     const p = await res.json();
@@ -837,6 +838,7 @@ test.describe('Audit coverage — Pipeline', () => {
     const { token, userId, tenantId } = await getGenericAdmin(request);
     const create = await post(request, token, '/api/pipelines', {
       name: `${RUN_TAG} pipeline-update`,
+      stages: [{ name: `${RUN_TAG} pipeline-update-stage` }],
     });
     expect(create.status()).toBe(201);
     const p = await create.json();
@@ -857,6 +859,7 @@ test.describe('Audit coverage — Pipeline', () => {
     const create = await post(request, token, '/api/pipelines', {
       name: `${RUN_TAG} pipeline-delete`,
       description: 'Deletion probe',
+      stages: [{ name: `${RUN_TAG} pipeline-delete-stage` }],
     });
     expect(create.status()).toBe(201);
     const p = await create.json();

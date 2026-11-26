@@ -1,0 +1,106 @@
+/**
+ * Wellness sidebar -> permission-module contract.
+ *
+ * Each page rendered by the catalog-driven Wellness sidebar owns one unique
+ * permission module. `legacyModule` and `legacyAction` preserve existing role
+ * grants and API-route authorization during the one-time migration.
+ */
+const WELLNESS_SIDEBAR_PERMISSION_SPECS = [
+  ['/home', 'wellness_home', null, 'read'],
+  ['/wellness', 'wellness_owner_dashboard', 'reports', 'read'],
+  ['/wellness/recommendations', 'wellness_recommendations', 'reports', 'read'],
+  ['/integrations/adsgpt', 'wellness_adsgpt', 'integrations', 'read'],
+  ['/integrations/callified', 'wellness_callified', 'integrations', 'read'],
+  ['/wellness/calendar', 'wellness_calendar', 'calendar', 'read'],
+  ['/wellness/appointments', 'wellness_appointments', 'appointments', 'read'],
+  ['/wellness/call-history', 'wellness_call_history', 'call_history', 'read'],
+  ['/wellness/my-appointments', 'wellness_my_appointments', 'my_appointments', 'read'],
+  ['/wellness/patients', 'wellness_patients', 'patients', 'read'],
+  ['/wellness/waitlist', 'wellness_waitlist', 'waitlist', 'read'],
+  ['/wellness/prescriptions', 'wellness_prescriptions', 'prescriptions', 'read'],
+  ['/wellness/prescription-requests', 'wellness_prescription_requests', 'prescription_requests', 'read'],
+  ['/wellness/my-prescriptions', 'wellness_my_prescriptions', 'my_prescriptions', 'read'],
+  ['/wellness/my-prescription-requests', 'wellness_my_prescription_requests', 'my_prescription_requests', 'read'],
+  ['/wellness/visits', 'wellness_visits', 'visits', 'read'],
+  ['/signatures', 'wellness_signatures', 'consents', 'read'],
+  ['/wellness/inventory', 'wellness_inventory', 'inventory', 'read'],
+  ['/wellness/services', 'wellness_services', 'services', 'read'],
+  ['/wellness/service-categories', 'wellness_service_categories', 'services', 'read'],
+  ['/wellness/drugs', 'wellness_drugs', 'prescriptions', 'read'],
+  ['/wellness/memberships', 'wellness_memberships', 'services', 'read'],
+  ['/wellness/resources', 'wellness_resources', 'settings', 'read'],
+  ['/wellness/holidays', 'wellness_holidays', 'settings', 'read'],
+  ['/wellness/working-hours', 'wellness_working_hours', 'settings', 'read'],
+  ['/wellness/attendance', 'wellness_attendance', 'attendance', 'read'],
+  ['/wellness/attendance-dashboard', 'wellness_attendance_dashboard', 'reports', 'read'],
+  ['/wellness/leave', 'wellness_leave', 'leave', 'read'],
+  ['/inbox', 'wellness_inbox', 'communications', 'read'],
+  ['/wellness/telecaller', 'wellness_telecaller', 'leads', 'read'],
+  ['/leads', 'wellness_leads', 'leads', 'read'],
+  ['/callified-data', 'wellness_callified_data', 'integrations', 'read'],
+  ['/tasks', 'wellness_tasks', 'tasks', 'read'],
+  ['/lead-routing', 'wellness_lead_routing', 'leads', 'read'],
+  ['/wellness/pos', 'wellness_pos', 'pos', 'read'],
+  ['/estimates', 'wellness_estimates', 'estimates', 'read'],
+  ['/expenses', 'wellness_expenses', 'expenses', 'read'],
+  ['/payments', 'wellness_payments', 'payments', 'read'],
+  ['/wellness/invoices', 'wellness_invoices', 'invoices', 'read'],
+  ['/wellness/wallet', 'wellness_wallet', 'patient_wallets', 'read'],
+  ['/wellness/giftcards', 'wellness_giftcards', 'gift_cards', 'read'],
+  ['/wellness/buy-giftcards', 'wellness_buy_giftcards', null, 'read'],
+  ['/wellness/my-transactions', 'wellness_my_transactions', null, 'read'],
+  ['/wellness/coupons', 'wellness_coupons', 'marketing', 'read'],
+  ['/wellness/cashback-rules', 'wellness_cashback_rules', 'marketing', 'read'],
+  ['/currencies', 'wellness_currencies', 'settings', 'manage'],
+  ['/wellness/qr-generator', 'wellness_qr_generator', 'marketing', 'read'],
+  ['/wellness/events-history', 'wellness_events_history', 'marketing', 'read'],
+  ['/marketing', 'wellness_marketing', 'marketing', 'read'],
+  ['/landing-sites', 'wellness_landing_sites', 'marketing', 'read'],
+  ['/wellness/reports', 'wellness_reports', 'reports', 'read'],
+  ['/wellness/per-location', 'wellness_per_location', 'reports', 'read'],
+  ['/wellness/loyalty', 'wellness_loyalty', 'reports', 'read'],
+  ['/surveys', 'wellness_surveys', 'surveys', 'read'],
+  ['/knowledge-base', 'wellness_knowledge_base', 'knowledge_base', 'read'],
+  ['/wellness/book-appointment', 'wellness_book_appointment', 'book_appointment', 'write'],
+  ['/wellness/my-bookings', 'wellness_my_bookings', 'my_bookings', 'read'],
+  ['/wellness/product-categories', 'wellness_product_categories', 'products', 'read'],
+  ['/wellness/products', 'wellness_products', 'products', 'read'],
+  ['/wellness/auto-consumption-rules', 'wellness_auto_consumption_rules', 'products', 'manage'],
+  ['/wellness/vendors', 'wellness_vendors', 'inventory', 'read'],
+  ['/wellness/inventory-receipts', 'wellness_inventory_receipts', 'inventory', 'read'],
+  ['/wellness/inventory-adjustments', 'wellness_inventory_adjustments', 'inventory', 'read'],
+  ['/notification-settings', 'wellness_notification_settings', null, 'read'],
+  ['/wellness/locations', 'wellness_locations', 'settings', 'read'],
+  ['/staff', 'wellness_staff', 'staff', 'manage'],
+  ['/settings/roles', 'wellness_roles', 'roles', 'read'],
+  ['/commission-profiles', 'wellness_commission_profiles', 'staff', 'manage'],
+  ['/revenue-goals', 'wellness_revenue_goals', 'reports', 'write'],
+  ['/approvals', 'wellness_approvals', 'staff', 'manage'],
+  ['/audit-log', 'wellness_audit_log', 'audit', 'read'],
+  ['/privacy', 'wellness_privacy', 'settings', 'manage'],
+  ['/settings', 'wellness_settings', 'settings', 'read'],
+  ['/field-permissions', 'wellness_field_permissions', 'field_permissions', 'read'],
+  ['/data-import-export', 'wellness_data_import_export', 'settings', 'manage'],
+  ['/document-templates', 'wellness_document_templates', 'document_templates', 'read'],
+  ['/objects', 'wellness_custom_objects', 'custom_objects', 'read'],
+];
+
+const WELLNESS_SIDEBAR_PERMISSION_BY_PATH = Object.fromEntries(
+  WELLNESS_SIDEBAR_PERMISSION_SPECS.map(([path, module, , action]) => [
+    path,
+    { module, action },
+  ]),
+);
+
+const WELLNESS_SIDEBAR_LEGACY_PERMISSION_BY_PATH = Object.fromEntries(
+  WELLNESS_SIDEBAR_PERMISSION_SPECS.map(([path, , legacyModule, legacyAction]) => [
+    path,
+    legacyModule ? { module: legacyModule, action: legacyAction } : null,
+  ]),
+);
+
+module.exports = {
+  WELLNESS_SIDEBAR_PERMISSION_SPECS,
+  WELLNESS_SIDEBAR_PERMISSION_BY_PATH,
+  WELLNESS_SIDEBAR_LEGACY_PERMISSION_BY_PATH,
+};

@@ -83,6 +83,20 @@ describe('getSensitiveGrants', () => {
     expect(grants.sort()).toEqual(['invoices.write', 'staff.manage'].sort());
   });
 
+  test('preserves sensitive checks for Wellness page-specific modules', () => {
+    const grants = getSensitiveGrants([
+      { module: 'wellness_roles', action: 'manage' },
+      { module: 'wellness_staff', action: 'write' },
+      { module: 'wellness_patients', action: 'delete' },
+      { module: 'wellness_patients', action: 'update' },
+    ]);
+    expect(grants.sort()).toEqual([
+      'wellness_patients.delete',
+      'wellness_roles.manage',
+      'wellness_staff.write',
+    ]);
+  });
+
   test('returns empty array for empty / invalid input', () => {
     expect(getSensitiveGrants([])).toEqual([]);
     expect(getSensitiveGrants(null)).toEqual([]);
@@ -141,6 +155,13 @@ describe('getNewlyGrantedSensitive', () => {
     const prev = ['roles.manage'];
     const next = [{ module: 'staff', action: 'write' }];
     expect(getNewlyGrantedSensitive(prev, next)).toEqual(['staff.write']);
+  });
+
+  test('does not treat a migrated Wellness alias as a new sensitive grant', () => {
+    expect(getNewlyGrantedSensitive(
+      [{ module: 'roles', action: 'manage' }],
+      [{ module: 'wellness_roles', action: 'manage' }],
+    )).toEqual([]);
   });
 });
 

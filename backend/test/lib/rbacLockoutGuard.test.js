@@ -69,6 +69,12 @@ describe('intersectCritical', () => {
   it('returns empty when no overlap', () => {
     expect(intersectCritical([{ module: 'contacts', action: 'read' }])).toEqual([]);
   });
+
+  it('recognizes the Wellness page-specific Roles module', () => {
+    expect(intersectCritical([
+      { module: 'wellness_roles', action: 'manage' },
+    ])).toEqual([{ module: 'roles', action: 'manage' }]);
+  });
 });
 
 describe('simulateAdminCount — Scenario 1 (single admin)', () => {
@@ -283,6 +289,62 @@ describe('simulateAdminCount — inactive role is ignored', () => {
       proposedPermissions: [{ module: 'roles', action: 'read' }],
     });
     expect(result.count).toBe(0);
+  });
+});
+
+describe('simulateAdminCount - Wellness page-specific Roles module', () => {
+  it('accepts Wellness roles keys for the role being saved', async () => {
+    mockUsers([
+      {
+        id: 1,
+        deactivatedAt: null,
+        userRoles: [{
+          roleId: ADMIN_ROLE_ID,
+          role: { id: ADMIN_ROLE_ID, isActive: true, permissions: [] },
+        }],
+      },
+    ]);
+
+    const result = await simulateAdminCount({
+      tenantId: 11,
+      roleId: ADMIN_ROLE_ID,
+      proposedPermissions: [
+        { module: 'wellness_roles', action: 'read' },
+        { module: 'wellness_roles', action: 'manage' },
+      ],
+    });
+
+    expect(result.count).toBe(1);
+    expect(result.qualifyingUserIds).toEqual([1]);
+  });
+
+  it('recognizes Wellness roles keys on another unchanged role', async () => {
+    mockUsers([
+      {
+        id: 2,
+        deactivatedAt: null,
+        userRoles: [{
+          roleId: NON_ADMIN_ROLE_ID,
+          role: {
+            id: NON_ADMIN_ROLE_ID,
+            isActive: true,
+            permissions: [
+              { module: 'wellness_roles', action: 'read' },
+              { module: 'wellness_roles', action: 'manage' },
+            ],
+          },
+        }],
+      },
+    ]);
+
+    const result = await simulateAdminCount({
+      tenantId: 11,
+      roleId: ADMIN_ROLE_ID,
+      proposedPermissions: [],
+    });
+
+    expect(result.count).toBe(1);
+    expect(result.qualifyingUserIds).toEqual([2]);
   });
 });
 

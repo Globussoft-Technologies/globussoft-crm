@@ -8781,10 +8781,16 @@ const Leads = ({ initialListState = null } = {}) => {
   const openLeadDetail = (lead) => {
     rememberLeadListState();
     navigate(leadDetailPathWithListState(lead), {
-      state: leadFullDetailNavigationState,
+      state: isGeneric
+        ? leadListNavigationState
+        : leadFullDetailNavigationState,
     });
   };
   const handleLeadViewAction = (lead) => {
+    if (isGeneric) {
+      openLeadDetail(lead);
+      return;
+    }
     openLeadDetail(lead);
   };
   useEffect(() => {
@@ -10116,12 +10122,14 @@ const Leads = ({ initialListState = null } = {}) => {
             renderValue={(name) => (
               <Link
                 to={leadDetailPathWithListState(lead)}
-                state={leadFullDetailNavigationState}
+                state={isGeneric
+                  ? leadListNavigationState
+                  : leadFullDetailNavigationState}
                 onClick={(e) => {
                   e.stopPropagation();
                   rememberLeadListState();
                 }}
-                title={`Open full detail for ${name || "lead"}`}
+                title={`${isGeneric ? "Open profile" : "Open full detail"} for ${name || "lead"}`}
                 style={{
                   minWidth: 0,
                   overflow: "visible",
@@ -12624,12 +12632,14 @@ const Leads = ({ initialListState = null } = {}) => {
                                 renderValue={(name) => (
                                   <Link
                                     to={leadDetailPathWithListState(lead)}
-                                    state={leadFullDetailNavigationState}
+                                    state={isGeneric
+                                      ? leadListNavigationState
+                                      : leadFullDetailNavigationState}
                                     onClick={(e) => {
                                       e.stopPropagation();
                                       rememberLeadListState();
                                     }}
-                                    title={`Open full detail for ${name || "lead"}`}
+                                    title={`${isGeneric ? "Open profile" : "Open full detail"} for ${name || "lead"}`}
                                     style={{
                                       minWidth: 0,
                                       overflow: "visible",

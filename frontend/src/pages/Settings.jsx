@@ -9,9 +9,6 @@ import {
   Sun,
   Moon,
   Plus,
-  ArrowUp,
-  ArrowDown,
-  Layers,
   Building2,
   Image as ImageIcon,
   Palette,
@@ -121,11 +118,10 @@ export default function Settings() {
   // mounted. This also prevents generic-only controls (including Callified)
   // from disappearing during the initial render.
   const isGenericVertical = !ctxTenant || !ctxTenant.vertical || ctxTenant.vertical === "generic";
+  const supportsTenantSendGrid = isGenericVertical || ctxTenant?.vertical === "travel";
+  const emailProviderEndpoint = isGenericVertical ? "/api/generic/email-provider" : "/api/travel/email-provider";
+  const emailProviderCrmLabel = isGenericVertical ? "Generic CRM" : "Travel CRM";
   const hasSettingsWorkspace = ["generic", "travel", "wellness"].includes(ctxTenant?.vertical);
-  // Settings tests and legacy callers can render before tenant context is
-  // available. Restore the generic CRM pipeline-stage settings surface while
-  // keeping wellness/travel behavior unchanged.
-  const showLegacyPipelineStageEditor = !ctxTenant || isGenericVertical;
   // Only `reload` is consumed here (busts the shared cache Sidebar also
   // reads from after a save/delete) — the card displays the brand's OWN
   // values via `branding` state, not the fallback-resolved `effective`.
@@ -195,9 +191,6 @@ export default function Settings() {
     password: "",
     role: "USER",
   });
-  const [pipelineStages, setPipelineStages] = useState([]);
-  const [newStage, setNewStage] = useState({ name: "", color: "#3b82f6" });
-  const [stagesLoading, setStagesLoading] = useState(true);
   const [tenant, setTenantState] = useState(ctxTenant || null);
   const [tenantSaving, setTenantSaving] = useState(false);
   const [externalReviewUrl, setExternalReviewUrl] = useState("");
@@ -223,6 +216,9 @@ export default function Settings() {
   const [travelEmailSaving, setTravelEmailSaving] = useState(false);
   const [travelEmailRemoving, setTravelEmailRemoving] = useState(false);
   const [showTravelEmailKey, setShowTravelEmailKey] = useState(false);
+  const hasEmailProviderChanges = Boolean(travelEmail.apiKey.trim())
+    || travelEmail.fromEmail.trim() !== String(travelEmailStatus?.fromEmail || "").trim()
+    || travelEmail.fromName.trim() !== String(travelEmailStatus?.fromName || "").trim();
   // #611: email-message retention toggle. Industry-default ON for any CRM
   // that claims to track customer comms. Pre-fix the default was OFF, sent
   // emails vanished, Sent folder stayed empty, threading broke.
@@ -374,9 +370,9 @@ export default function Settings() {
   }, [ctxTenant?.vertical, ctxUser?.role, canManageSettings]);
 
   useEffect(() => {
-    if (ctxTenant?.vertical !== "travel" || ctxUser?.role !== "ADMIN" || !canManageSettings) return undefined;
+    if (!supportsTenantSendGrid || ctxUser?.role !== "ADMIN" || !canManageSettings) return undefined;
     setTravelEmailLoading(true);
-    fetchApi("/api/travel/email-provider")
+    fetchApi(emailProviderEndpoint)
       .then((status) => {
         setTravelEmailStatus(status || null);
         setTravelEmail((current) => ({
@@ -388,7 +384,7 @@ export default function Settings() {
       })
       .catch(() => setTravelEmailStatus(null))
       .finally(() => setTravelEmailLoading(false));
-  }, [ctxTenant?.vertical, ctxUser?.role, canManageSettings]);
+  }, [supportsTenantSendGrid, emailProviderEndpoint, ctxUser?.role, canManageSettings]);
 
   // Multi-brand (BrandKit) list — travel vertical only (sub-brands are a
   // travel-only concept; generic/wellness tenants only ever have the
@@ -842,9 +838,10 @@ export default function Settings() {
 
   const handleSaveTravelEmail = async (e) => {
     e.preventDefault();
+    if (isGenericVertical && travelEmailStatus?.configured && !hasEmailProviderChanges) return;
     setTravelEmailSaving(true);
     try {
-      const saved = await fetchApi("/api/travel/email-provider", {
+      const saved = await fetchApi(emailProviderEndpoint, {
         method: "PUT",
         body: JSON.stringify({
           ...(travelEmail.apiKey ? { apiKey: travelEmail.apiKey } : {}),
@@ -855,9 +852,9 @@ export default function Settings() {
       setTravelEmailStatus(saved);
       setTravelEmail((current) => ({ ...current, apiKey: "", fromEmail: saved.fromEmail || "", fromName: saved.fromName || "" }));
       setShowTravelEmailKey(false);
-      notify.success("Travel SendGrid settings saved. Travel emails will now use this account.");
+      notify.success(`${emailProviderCrmLabel} SendGrid settings saved. Emails will now use this account.`);
     } catch (err) {
-      notify.error(err?.body?.error || err?.message || "Failed to save Travel SendGrid settings.");
+      notify.error(err?.body?.error || err?.message || `Failed to save ${emailProviderCrmLabel} SendGrid settings.`);
     } finally {
       setTravelEmailSaving(false);
     }
@@ -866,12 +863,12 @@ export default function Settings() {
   const handleRemoveTravelEmail = async () => {
     setTravelEmailRemoving(true);
     try {
-      const status = await fetchApi("/api/travel/email-provider", { method: "DELETE" });
+      const status = await fetchApi(emailProviderEndpoint, { method: "DELETE" });
       setTravelEmailStatus(status);
       setTravelEmail({ apiKey: "", fromEmail: "", fromName: "" });
-      notify.success("Travel SendGrid removed. Travel emails will use the backend default account.");
+      notify.success(`${emailProviderCrmLabel} SendGrid removed. Emails will use the backend default account.`);
     } catch (err) {
-      notify.error(err?.body?.error || err?.message || "Failed to remove Travel SendGrid settings.");
+      notify.error(err?.body?.error || err?.message || `Failed to remove ${emailProviderCrmLabel} SendGrid settings.`);
     } finally {
       setTravelEmailRemoving(false);
     }
@@ -1037,82 +1034,6 @@ export default function Settings() {
       notify.error(msg);
     } finally {
       setCallifiedSaving(false);
-    }
-  };
-
-  const fetchStages = () => {
-    fetchApi("/api/pipeline_stages")
-      .then((res) => {
-        setPipelineStages(Array.isArray(res) ? res : []);
-        setStagesLoading(false);
-      })
-      .catch(() => setStagesLoading(false));
-  };
-
-  useEffect(() => {
-    fetchStages();
-    return undefined;
-  }, [isGenericVertical, ctxTenant]);
-
-  const handleAddStage = async (e) => {
-    e.preventDefault();
-    if (!newStage.name.trim()) return;
-    try {
-      await fetchApi("/api/pipeline_stages", {
-        method: "POST",
-        body: JSON.stringify({
-          name: newStage.name,
-          color: newStage.color,
-          position: pipelineStages.length,
-        }),
-      });
-      setNewStage({ name: "", color: "#3b82f6" });
-      fetchStages();
-    } catch (err) {
-      notify.error("Failed to add stage");
-    }
-  };
-
-  const handleDeleteStage = async (id) => {
-    if (await notify.confirm("Delete this pipeline stage?")) {
-      await fetchApi(`/api/pipeline_stages/${id}`, { method: "DELETE" });
-      fetchStages();
-    }
-  };
-
-  // #390: persist reorder to the backend. Optimistic UI update first, then
-  // PUT /api/pipeline_stages/reorder with the new {id, position} pairs. The
-  // server returns the canonical sorted list which we adopt as ground truth
-  // (so any server-side dedup / clamp wins). On failure we reload to undo
-  // the optimistic swap and notify the user — silent failures previously
-  // looked like "snap back on refresh" because the PUT errored without
-  // surfacing.
-  const handleMoveStage = async (index, direction) => {
-    const newStages = [...pipelineStages];
-    const swapIndex = index + direction;
-    if (swapIndex < 0 || swapIndex >= newStages.length) return;
-    [newStages[index], newStages[swapIndex]] = [
-      newStages[swapIndex],
-      newStages[index],
-    ];
-    const reordered = newStages.map((s, i) => ({ id: s.id, position: i }));
-    // Reflect new positions locally so the optimistic UI matches what we
-    // POST (previously items kept their old position values).
-    const optimistic = newStages.map((s, i) => ({ ...s, position: i }));
-    setPipelineStages(optimistic);
-    try {
-      const updated = await fetchApi("/api/pipeline_stages/reorder", {
-        method: "PUT",
-        body: JSON.stringify({ stages: reordered }),
-      });
-      if (Array.isArray(updated)) {
-        setPipelineStages(updated);
-      } else {
-        fetchStages();
-      }
-    } catch (err) {
-      notify.error("Failed to save stage order");
-      fetchStages();
     }
   };
 
@@ -1475,15 +1396,15 @@ export default function Settings() {
             )}
           </div></SettingsSection>
 
-          {ctxTenant?.vertical === "travel" && ctxUser?.role === "ADMIN" && hasPermission("settings", "manage") && (
-            <SettingsSection section="integrations" integration="sendgrid"><div className="card" data-testid="travel-email-provider-card" style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}>
+          {supportsTenantSendGrid && ctxUser?.role === "ADMIN" && hasPermission("settings", "manage") && (
+            <SettingsSection section="integrations" integration="sendgrid"><div className="card" data-testid={isGenericVertical ? "generic-email-provider-card" : "travel-email-provider-card"} style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}>
               <h3 style={{ fontSize: "1.25rem", fontWeight: "600", marginBottom: "0.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <Mail size={20} color="var(--accent-color)" /> Travel Email Delivery (SendGrid BYOK)
+                <Mail size={20} color="var(--accent-color)" /> {emailProviderCrmLabel} Email Delivery (SendGrid)
               </h3>
               <p style={{ color: "var(--text-secondary)", margin: "0 0 1.25rem", lineHeight: 1.5 }}>
-                Use your own SendGrid account for Travel CRM emails and choose the sender recipients see. The API key is encrypted and never returned to the browser. If no tenant account is configured, the CRM uses its existing backend SendGrid account.
+                Use your own SendGrid account for {emailProviderCrmLabel} emails and choose the sender recipients see. The API key is encrypted and never returned to the browser. If no tenant account is configured, the CRM uses its existing backend SendGrid account.
               </p>
-              {travelEmailLoading ? <p style={{ color: "var(--text-secondary)" }}>Loading Travel email settings…</p> : (
+              {travelEmailLoading ? <p style={{ color: "var(--text-secondary)" }}>Loading email settings…</p> : (
                 <form onSubmit={handleSaveTravelEmail} autoComplete="off">
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 240px), 1fr))", gap: "1rem" }}>
                     <div style={{ gridColumn: "1 / -1", minWidth: 0 }}>
@@ -1495,26 +1416,22 @@ export default function Settings() {
                     </div>
                     <div style={{ minWidth: 0 }}>
                       <label className="form-label" htmlFor="travel-sendgrid-from-email">Verified sender email</label>
-                      <input id="travel-sendgrid-from-email" type="email" required className="input-field" value={travelEmail.fromEmail} onChange={(e) => setTravelEmail((current) => ({ ...current, fromEmail: e.target.value }))} placeholder="meetings@yourdomain.com" />
+                      <input id="travel-sendgrid-from-email" type="email" required className="input-field" value={travelEmail.fromEmail} onChange={(e) => setTravelEmail((current) => ({ ...current, fromEmail: e.target.value }))} placeholder={isGenericVertical ? "sales@yourdomain.com" : "meetings@yourdomain.com"} />
                     </div>
                     <div style={{ minWidth: 0 }}>
                       <label className="form-label" htmlFor="travel-sendgrid-from-name">Sender name</label>
-                      <input id="travel-sendgrid-from-name" type="text" required maxLength="100" className="input-field" value={travelEmail.fromName} onChange={(e) => setTravelEmail((current) => ({ ...current, fromName: e.target.value }))} placeholder="Your Travel Company" />
+                      <input id="travel-sendgrid-from-name" type="text" required maxLength="100" className="input-field" value={travelEmail.fromName} onChange={(e) => setTravelEmail((current) => ({ ...current, fromName: e.target.value }))} placeholder={isGenericVertical ? "Your Company" : "Your Travel Company"} />
                     </div>
                   </div>
                   <p style={{ margin: "0.8rem 0 0", color: "var(--text-secondary)", fontSize: "0.8rem", lineHeight: 1.5 }}>
                     The sender email or its domain must be authenticated in this SendGrid account. Saving an unverified address may cause SendGrid to reject messages.
                   </p>
                   <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center", marginTop: "1.25rem" }}>
-                    <button type="submit" className="btn-primary" disabled={travelEmailSaving || travelEmailRemoving || (!travelEmailStatus?.configured && !travelEmail.apiKey)}>{travelEmailSaving ? "Saving…" : travelEmailStatus?.configured ? "Update SendGrid" : "Save SendGrid"}</button>
-                    {travelEmailStatus?.configured && <button type="button" className="btn-secondary" onClick={handleRemoveTravelEmail} disabled={travelEmailSaving || travelEmailRemoving}>{travelEmailRemoving ? "Removing…" : "Use Backend Default"}</button>}
-                    <span style={{ color: travelEmailStatus?.configured ? "var(--success-color, #16a34a)" : "var(--text-secondary)", fontSize: "0.875rem" }}>
-                      {travelEmailStatus?.configured
-                        ? `Tenant SendGrid active: ${travelEmailStatus.fromName} <${travelEmailStatus.fromEmail}>`
-                        : travelEmailStatus?.fallback?.configured
-                          ? `Using backend default: ${travelEmailStatus.fallback.fromEmail}`
-                          : "No SendGrid account is currently configured."}
-                    </span>
+                    <button type="submit" className="btn-primary" disabled={travelEmailSaving || travelEmailRemoving || (!travelEmailStatus?.configured && !travelEmail.apiKey) || (isGenericVertical && travelEmailStatus?.configured && !hasEmailProviderChanges)}>{travelEmailSaving ? "Saving…" : travelEmailStatus?.configured ? "Update SendGrid" : "Save SendGrid"}</button>
+                    {travelEmailStatus?.configured && !isGenericVertical && <button type="button" className="btn-secondary" onClick={handleRemoveTravelEmail} disabled={travelEmailSaving || travelEmailRemoving}>{travelEmailRemoving ? "Removing…" : "Use Backend Default"}</button>}
+                    {travelEmailStatus?.configured && <span style={{ color: "var(--success-color, #16a34a)", fontSize: "0.875rem" }}>
+                      {`Tenant SendGrid active: ${travelEmailStatus.fromName} <${travelEmailStatus.fromEmail}>`}
+                    </span>}
                   </div>
                 </form>
               )}
@@ -1868,204 +1785,6 @@ export default function Settings() {
           {tenant && tenant.vertical === "wellness" && (
             <SettingsSection section="clinicroles"><WellnessRoleTypesCard notify={notify} /></SettingsSection>
           )}
-
-          {/* Generic CRM pipeline stages are managed here as before. */}
-          {showLegacyPipelineStageEditor && <SettingsSection section="general"><div
-            className="card settings-pipeline-stages-card"
-            style={{ padding: "clamp(1.25rem, 3vw, 2rem)" }}
-          >
-            <h3
-              style={{
-                fontSize: "1.25rem",
-                fontWeight: "600",
-                marginBottom: "1.5rem",
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-              }}
-            >
-              <Layers size={20} color="var(--accent-color)" /> Pipeline Stages
-            </h3>
-
-            {stagesLoading ? (
-              <p>Loading stages...</p>
-            ) : (
-              <div
-                className="settings-pipeline-stage-list"
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "0.75rem",
-                  marginBottom: "1.5rem",
-                }}
-              >
-                {pipelineStages.length === 0 && (
-                  <p
-                    style={{
-                      color: "var(--text-secondary)",
-                      fontSize: "0.875rem",
-                    }}
-                  >
-                    No custom stages configured. The pipeline uses default
-                    stages.
-                  </p>
-                )}
-                {pipelineStages.map((stage, index) => (
-                  <div
-                    key={stage.id}
-                    className="settings-pipeline-stage-row"
-                    style={{
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      background: "var(--surface-color)",
-                      border: "1px solid var(--border-color)",
-                      padding: "1rem 1.25rem",
-                      borderRadius: "8px",
-                    }}
-                  >
-                    <div
-                      className="settings-pipeline-stage-details"
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "0.75rem",
-                      }}
-                    >
-                      <div
-                        style={{
-                          width: "20px",
-                          height: "20px",
-                          borderRadius: "6px",
-                          backgroundColor: stage.color,
-                          flexShrink: 0,
-                        }}
-                      />
-                      <span style={{ fontWeight: "500" }}>{stage.name}</span>
-                      <span
-                        className="settings-pipeline-stage-position"
-                        style={{
-                          fontSize: "0.75rem",
-                          color: "var(--text-secondary)",
-                        }}
-                      >
-                        Position {index + 1}
-                      </span>
-                    </div>
-                    <div
-                      className="settings-pipeline-stage-actions"
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "0.5rem",
-                      }}
-                    >
-                      <button
-                        onClick={() => handleMoveStage(index, -1)}
-                        disabled={index === 0}
-                        style={{
-                          background: "none",
-                          border: "none",
-                          color:
-                            index === 0
-                              ? "var(--border-color)"
-                              : "var(--text-secondary)",
-                          cursor: index === 0 ? "default" : "pointer",
-                          padding: "0.25rem",
-                        }}
-                      >
-                        <ArrowUp size={16} />
-                      </button>
-                      <button
-                        onClick={() => handleMoveStage(index, 1)}
-                        disabled={index === pipelineStages.length - 1}
-                        style={{
-                          background: "none",
-                          border: "none",
-                          color:
-                            index === pipelineStages.length - 1
-                              ? "var(--border-color)"
-                              : "var(--text-secondary)",
-                          cursor:
-                            index === pipelineStages.length - 1
-                              ? "default"
-                              : "pointer",
-                          padding: "0.25rem",
-                        }}
-                      >
-                        <ArrowDown size={16} />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteStage(stage.id)}
-                        style={{
-                          background: "none",
-                          border: "none",
-                          color: "var(--danger-color)",
-                          cursor: "pointer",
-                          padding: "0.25rem",
-                        }}
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* #479: flexWrap so the color picker + Add button drop below the
-              stage-name input on narrow viewports rather than truncating it. */}
-            <form
-              className="settings-pipeline-stage-form"
-              onSubmit={handleAddStage}
-              style={{
-                display: "flex",
-                gap: "0.75rem",
-                alignItems: "center",
-                flexWrap: "wrap",
-              }}
-            >
-              <input
-                type="text"
-                placeholder="Stage name"
-                required
-                className="input-field"
-                style={{ flex: "1 1 180px", minWidth: 0 }}
-                value={newStage.name}
-                onChange={(e) =>
-                  setNewStage({ ...newStage, name: e.target.value })
-                }
-              />
-              <input
-                type="color"
-                value={newStage.color}
-                onChange={(e) =>
-                  setNewStage({ ...newStage, color: e.target.value })
-                }
-                style={{
-                  width: "40px",
-                  height: "40px",
-                  border: "1px solid var(--border-color)",
-                  borderRadius: "8px",
-                  cursor: "pointer",
-                  padding: "2px",
-                  background: "var(--input-bg)",
-                }}
-              />
-              <button
-                type="submit"
-                className="btn-primary"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                <Plus size={16} /> Add Stage
-              </button>
-            </form>
-          </div></SettingsSection>}
 
           {/* Invite User Card */}
           <SettingsSection section="members"><div

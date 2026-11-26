@@ -40,6 +40,10 @@ import { MemoryRouter } from 'react-router-dom';
 import Sidebar from '../components/Sidebar';
 import { AuthContext } from '../App';
 import { ActiveSubBrandProvider } from '../utils/subBrand';
+import {
+  GENERIC_SIDEBAR_PERMISSION_BY_PATH,
+  TRAVEL_SIDEBAR_PERMISSION_BY_PATH,
+} from '../utils/sidebarSearch';
 
 // Stable mock object references (2026-05-23 RTL rule: hook-returned objects
 // used in useCallback deps must be referentially stable across renders or
@@ -144,17 +148,42 @@ const GENERIC_ADMIN_WORKSPACE_PERMS = [
   'transport_workspace.read', 'broker_workspace.read', 'billing_workspace.read',
 ];
 const GENERIC_USER_PERMS = [
+  'home.read', 'notification_settings.read', 'inbox.read',
+  'lead_reports.read', 'agent_reports.read', 'revenue_goals.read',
   'contacts.read', 'deals.read', 'leads.read', 'tasks.read', 'projects.read',
   'pipeline.read', 'reports.read', 'reports.write', 'communications.read', 'tickets.read',
   'surveys.read', 'documents.read', 'contracts.read', 'estimates.read',
 ];
+const GENERIC_ALL_SIDEBAR_PERMS = Object.values(GENERIC_SIDEBAR_PERMISSION_BY_PATH)
+  .map(({ module, action }) => `${module}.${action}`);
+const TRAVEL_ALL_SIDEBAR_PERMS = Object.values(TRAVEL_SIDEBAR_PERMISSION_BY_PATH)
+  .map(({ module, action }) => `${module}.${action}`);
+const TRAVEL_MANAGER_PAGE_PERMS = [
+  'travel_dashboard.read', 'leads.read', 'contacts.read', 'diagnostics.read',
+  'itineraries.read', 'trips.read', 'tmc_catalogue.read', 'web_checkins.read',
+  'cost_master.read', 'sightseeing.read', 'itinerary_templates.read',
+  'reports.read', 'travel_reviews.read', 'suppliers.read',
+  'commission_profiles.read', 'quotes.read', 'flight_quotes.read',
+  'quote_builder.write', 'quote_templates.read', 'cancellation_policies.read',
+  'religious_packets.read', 'curriculum.read', 'school_terms.read',
+  'email_automation.read', 'brochure_engine.read', 'travel_web_forms.read',
+  'meeting_forms.read', 'landing_pages.read', 'travel_inbox.read', 'tasks.read',
+  'travel_calendar.read', 'gmail.read', 'invoices.read', 'payables.read',
+  'payments.read', 'expenses.read', 'staff.read', 'settings.read',
+];
+const GENERIC_MANAGER_PAGE_PERMS = [
+  'home.read', 'notification_settings.read', 'adsgpt.read', 'callified.read',
+  'lead_reports.read', 'inbox.read', 'landing_sites.read', 'web_visitors.read',
+  'commissions.read', 'agent_reports.read', 'revenue_goals.read',
+  'commission_data.read', 'zapier.read',
+];
 function permsForRole(role, vertical) {
   if (vertical === 'generic' && role === 'USER') return new Set(GENERIC_USER_PERMS);
   if (role === 'ADMIN') {
-    return new Set([...GENERIC_BASE_PERMS, ...GENERIC_ADMIN_WORKSPACE_PERMS, ...TRAVEL_MANAGER_PERMS, ...TRAVEL_ADMIN_EXTRAS]);
+    return new Set([...GENERIC_BASE_PERMS, ...GENERIC_ALL_SIDEBAR_PERMS, ...GENERIC_ADMIN_WORKSPACE_PERMS, ...TRAVEL_MANAGER_PERMS, ...TRAVEL_ADMIN_EXTRAS, ...TRAVEL_ALL_SIDEBAR_PERMS, 'wellness_adsgpt.read', 'wellness_callified.read']);
   }
   if (role === 'MANAGER') {
-    return new Set([...GENERIC_BASE_PERMS.filter((k) => !k.startsWith('roles.') && !k.startsWith('staff.manage') && !k.startsWith('settings.manage') && !k.startsWith('audit.') && !k.startsWith('developer.')), ...TRAVEL_MANAGER_PERMS]);
+    return new Set([...GENERIC_BASE_PERMS.filter((k) => !k.startsWith('roles.') && !k.startsWith('staff.manage') && !k.startsWith('settings.manage') && !k.startsWith('audit.') && !k.startsWith('developer.')), ...GENERIC_MANAGER_PAGE_PERMS, ...TRAVEL_MANAGER_PERMS, ...TRAVEL_MANAGER_PAGE_PERMS, 'wellness_adsgpt.read', 'wellness_callified.read']);
   }
   // USER role — no travel sidebar entries are visible because unused
   // pages (e.g. Inbound Leads) are hidden.
@@ -468,7 +497,7 @@ describe('Sidebar — load-bearing render surface', () => {
     });
 
     it('shows site-visit work from permission, regardless of the role name', () => {
-      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['CUSTOM_TEAM'], permissions: ['broker_workspace.read'], expandGenericGroups: false });
+      renderSidebar({ vertical: 'generic', role: 'USER', roleKeys: ['CUSTOM_TEAM'], permissions: ['site_visits.read'], expandGenericGroups: false });
       fireEvent.click(screen.getByRole('button', { name: 'Pickup & Plot' }));
       expect(screen.getByText('Site Visits').closest('a')).toHaveAttribute('href', '/sales-workspace');
       expect(screen.queryByText('Transport Work')).toBeNull();
@@ -580,6 +609,18 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Attendance')).toBeTruthy();
       expect(screen.getByText('Unified Inbox')).toBeTruthy();
       expect(screen.getByText('Point of Sale')).toBeTruthy();
+    });
+
+    it('gates Wellness launchers independently and respects page visibility', () => {
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'USER',
+        permissions: ['wellness_adsgpt.read'],
+        hiddenPagePaths: ['/integrations/callified'],
+      });
+
+      expect(screen.getByRole('button', { name: 'Open AdsGPT' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Open Callified dashboard' })).toBeNull();
     });
 
     it('renders Landing Sites in the Marketing section for wellness tenants', async () => {
@@ -762,14 +803,14 @@ describe('Sidebar — load-bearing render surface', () => {
     });
 
     it('renders Landing Pages only for travel tenants', () => {
-      renderSidebar({ vertical: 'travel', role: 'MANAGER', permissions: ['marketing.read'] });
+      renderSidebar({ vertical: 'travel', role: 'MANAGER', permissions: ['landing_pages.read'] });
       const link = screen.getByText('Landing Pages').closest('a');
       expect(link).toBeTruthy();
       expect(link.getAttribute('href')).toBe('/landing-pages');
     });
 
     it('renders Web Forms at the travel-scoped route used by global search', () => {
-      renderSidebar({ vertical: 'travel', role: 'MANAGER', permissions: ['marketing.read'] });
+      renderSidebar({ vertical: 'travel', role: 'MANAGER', permissions: ['travel_web_forms.read'] });
       const link = screen.getByText('Web Forms').closest('a');
       expect(link).toBeTruthy();
       expect(link.getAttribute('href')).toBe('/travel/forms');
@@ -875,7 +916,7 @@ describe('Sidebar — load-bearing render surface', () => {
         vertical: 'travel',
         role: 'ADMIN',
         path: '/travel/trip-knowledge',
-        permissions: ['reports.read', 'diagnostics.write'],
+        permissions: ['travel_dashboard.read', 'travel_knowledge.write'],
       });
       const dashboard = document.querySelector('a[href="/travel"]');
       const knowledge = document.querySelector('a[href="/travel/trip-knowledge"]');
@@ -1029,7 +1070,7 @@ describe('Sidebar — load-bearing render surface', () => {
       const hiddenLabels = [
         'Clients', 'Booking Pages', 'Forecasting', 'Quotas', 'Converted Leads',
         'Lead Scoring', 'Approvals', 'Knowledge Base',
-        'Sequences', 'Surveys', 'Dashboards', 'Custom Reports', 'Field Permissions',
+        'Surveys', 'Dashboards', 'Custom Reports', 'Field Permissions',
       ];
 
       for (const role of ['ADMIN', 'MANAGER']) {
@@ -1575,6 +1616,18 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.queryByText('Travel Stall')).toBeNull();
     });
 
+    it('gates each Travel sidebar page with its separate permission module', () => {
+      renderSidebar({
+        vertical: 'travel',
+        role: 'USER',
+        permissions: ['quote_builder.write'],
+      });
+
+      expect(screen.getByText('Quote Builder')).toBeTruthy();
+      expect(screen.queryByText('Quotes')).toBeNull();
+      expect(screen.queryByText('Quote Templates')).toBeNull();
+    });
+
     it('hides manager-only travel items for USER role', () => {
       renderSidebar({ vertical: 'travel', role: 'USER' });
       expect(screen.queryByText('Quote Builder')).toBeNull();
@@ -1629,9 +1682,8 @@ describe('Sidebar — load-bearing render surface', () => {
       // has no requiredPermission and always renders) survives.
       renderSidebar({ vertical: 'travel', role: 'USER' });
       expect(screen.queryByText('Sales')).toBeNull();
-      // Gmail is a personal integration and keeps Communication visible.
-      expect(screen.getByText('Communication')).toBeTruthy();
-      expect(screen.getByText('Gmail')).toBeTruthy();
+      expect(screen.queryByText('Communication')).toBeNull();
+      expect(screen.queryByText('Gmail')).toBeNull();
       expect(screen.queryByText('Finance')).toBeNull();
       // "Reports" must not appear AT ALL — neither as the section
       // header (gated by reports.read) nor as the nav-link inside.
@@ -1650,7 +1702,7 @@ describe('Sidebar — load-bearing render surface', () => {
         permissions: ['leads.read'],
       });
       expect(screen.getByText('Sales')).toBeTruthy();
-      expect(screen.getByText('Communication')).toBeTruthy();
+      expect(screen.queryByText('Communication')).toBeNull();
       expect(screen.queryByText('Finance')).toBeNull();
       expect(screen.queryByText('Reports')).toBeNull();
     });
@@ -1782,9 +1834,9 @@ describe('Sidebar — load-bearing render surface', () => {
   });
 
   describe('Generic Sequences + Marketing manager cluster', () => {
-    it('renders Marketing for MANAGER while Sequences and Lead Routing stay hidden under generic', () => {
+    it('renders separate Marketing and Sequences links while Lead Routing stays hidden', () => {
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
-      expect(screen.queryByText('Sequences')).toBeNull();
+      expect(screen.getByText('Sequences').closest('a')).toHaveAttribute('href', '/sequences');
       const marketingCampaignLink = screen.getByText('Marketing Campaign').closest('a');
       expect(marketingCampaignLink).toBeTruthy();
       expect(marketingCampaignLink.getAttribute('href')).toBe('/marketing');

@@ -12,8 +12,19 @@ function isGenericCrm(req) {
   return req.user?.vertical !== 'wellness' && req.user?.vertical !== 'travel';
 }
 
+function isRequiredTerminalStage(name) {
+  return ['won', 'lost'].includes(String(name || '').trim().toLowerCase());
+}
+
 async function ownsPipeline(tenantId, pipelineId) {
-  return prisma.pipeline.findFirst({ where: { id: pipelineId, tenantId }, select: { id: true } });
+  return prisma.pipeline.findFirst({ where: { id: pipelineId, tenantId }, select: { id: true, isDefault: true } });
+}
+
+async function isRequiredByDefaultPipeline(tenantId, stageId) {
+  return prisma.pipelineStageAssignment.findFirst({
+    where: { tenantId, stageId, pipeline: { tenantId, isDefault: true } },
+    select: { pipelineId: true },
+  });
 }
 
 async function getGenericPipelineStages(tenantId, pipelineId) {
@@ -36,8 +47,14 @@ router.get('/', async (req, res) => {
         return res.status(404).json({ error: 'Pipeline not found' });
       }
       if (pipelineId != null) return res.json(await getGenericPipelineStages(req.user.tenantId, pipelineId));
+      const assignedOnly = req.query.assigned === 'true';
       const stages = await prisma.pipelineStage.findMany({
-        where: { tenantId: req.user.tenantId },
+        where: {
+          tenantId: req.user.tenantId,
+          ...(assignedOnly ? {
+            assignments: { some: { tenantId: req.user.tenantId, pipeline: { tenantId: req.user.tenantId } } },
+          } : {}),
+        },
         orderBy: { position: 'asc' },
       });
       return res.json(stages);
@@ -160,6 +177,9 @@ router.put('/:id', async (req, res) => {
     const existing = await prisma.pipelineStage.findFirst({ where: { id: parseInt(req.params.id), tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Pipeline stage not found' });
     const { name, color, position } = req.body;
+    if (isGenericCrm(req) && isRequiredTerminalStage(existing.name) && await isRequiredByDefaultPipeline(req.user.tenantId, existing.id) && name != null && String(name).trim().toLowerCase() !== existing.name.trim().toLowerCase()) {
+      return res.status(400).json({ error: 'Won and Lost stages are required and cannot be renamed', code: 'REQUIRED_PIPELINE_STAGE' });
+    }
     const stage = await prisma.pipelineStage.update({
       where: { id: existing.id },
       data: { name, color, position },
@@ -176,7 +196,13 @@ router.delete('/:id', async (req, res) => {
     if (isGenericCrm(req) && req.query.pipelineId != null) {
       const pipelineId = Number(req.query.pipelineId);
       if (!Number.isInteger(pipelineId) || pipelineId < 1) return res.status(400).json({ error: 'Valid pipelineId required' });
-      if (!(await ownsPipeline(req.user.tenantId, pipelineId))) return res.status(404).json({ error: 'Pipeline not found' });
+      const pipeline = await ownsPipeline(req.user.tenantId, pipelineId);
+      if (!pipeline) return res.status(404).json({ error: 'Pipeline not found' });
+      const existing = await prisma.pipelineStage.findFirst({ where: { id: stageId, tenantId: req.user.tenantId } });
+      if (!existing) return res.status(404).json({ error: 'Pipeline stage not found' });
+      if (pipeline.isDefault && isRequiredTerminalStage(existing.name)) {
+        return res.status(400).json({ error: 'Won and Lost stages are required and cannot be removed', code: 'REQUIRED_PIPELINE_STAGE' });
+      }
       const removed = await prisma.pipelineStageAssignment.deleteMany({ where: { tenantId: req.user.tenantId, pipelineId, stageId } });
       if (removed.count === 0) return res.status(404).json({ error: 'Pipeline stage assignment not found' });
       return res.status(204).end();
@@ -184,6 +210,9 @@ router.delete('/:id', async (req, res) => {
 
     const existing = await prisma.pipelineStage.findFirst({ where: { id: stageId, tenantId: req.user.tenantId } });
     if (!existing) return res.status(404).json({ error: 'Pipeline stage not found' });
+    if (isGenericCrm(req) && isRequiredTerminalStage(existing.name) && await isRequiredByDefaultPipeline(req.user.tenantId, existing.id)) {
+      return res.status(400).json({ error: 'Won and Lost stages are required and cannot be removed', code: 'REQUIRED_PIPELINE_STAGE' });
+    }
     await prisma.pipelineStage.delete({ where: { id: existing.id } });
     return res.status(204).end();
   } catch (_err) {

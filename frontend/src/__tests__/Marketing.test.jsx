@@ -244,8 +244,7 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     renderMarketing(GENERIC_USER);
 
     fireEvent.click(await screen.findByRole('button', { name: 'WhatsApp Sequences' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'View sequences' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Configure WhatsApp' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure WhatsApp' }));
 
     const dialog = screen.getByRole('dialog', { name: 'Configure WhatsApp' });
     expect(dialog.parentElement).toHaveStyle({ background: 'transparent', backdropFilter: 'none' });
@@ -258,8 +257,7 @@ describe('<Marketing /> — Generic campaign workflow', () => {
 
     fireEvent.click(within(dialog).getByRole('button', { name: 'Close WhatsApp configuration' }));
     fireEvent.click(screen.getByRole('button', { name: 'SMS Sequences' }));
-    fireEvent.click(await screen.findByRole('button', { name: 'View sequences' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Configure SMS' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Configure SMS' }));
 
     const smsDialog = screen.getByRole('dialog', { name: 'Configure SMS' });
     expect(smsDialog).toHaveStyle({ maxHeight: 'none', overflowY: 'visible' });

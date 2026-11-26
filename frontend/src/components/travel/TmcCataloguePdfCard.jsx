@@ -29,6 +29,8 @@ export default function TmcCataloguePdfCard({
       ...cardStyle({
         display: "flex",
         flexDirection: "column",
+        height: teacherSelection ? 210 : undefined,
+        boxSizing: teacherSelection ? "border-box" : undefined,
         minWidth: 0,
         overflow: "hidden",
         border: selected ? "1px solid var(--tmc-primary, var(--accent-color, #315c78))" : "1px solid var(--tmc-border, var(--border-color, #dfe7eb))",
@@ -45,7 +47,7 @@ export default function TmcCataloguePdfCard({
       aria-label={`Open ${file.fileName} PDF`}
       title={onOpen ? "Preview PDF" : "Open PDF in Drive"}
       style={{
-        height: teacherSelection ? 150 : 158,
+        height: teacherSelection ? 92 : 158,
         flex: "0 0 auto",
         boxSizing: "border-box",
         overflow: "hidden",
@@ -66,18 +68,18 @@ export default function TmcCataloguePdfCard({
         <span style={{ position: "absolute", right: 10, bottom: 10, display: "grid", placeItems: "center", width: 30, height: 30, borderRadius: 7, background: "rgba(5,8,14,.82)", color: "#fff" }}><ExternalLink size={15} /></span>
       </>}
     </a>
-    <div style={{ display: "flex", flex: 1, flexDirection: "column", minWidth: 0, padding: teacherSelection ? "12px 14px 10px" : 14 }}>
-      <h3 title={file.fileName} style={{ minWidth: 0, minHeight: teacherSelection ? 38 : undefined, display: teacherSelection ? "-webkit-box" : undefined, WebkitBoxOrient: teacherSelection ? "vertical" : undefined, WebkitLineClamp: teacherSelection ? 2 : undefined, margin: 0, fontSize: teacherSelection ? 14 : 15, lineHeight: 1.35, color: "var(--tmc-text, var(--text-primary, inherit))", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: teacherSelection ? undefined : "nowrap", overflowWrap: "anywhere" }}>{file.fileName}</h3>
-      <p title={file.folderPath} style={{ display: "flex", alignItems: "center", gap: 6, minWidth: 0, margin: teacherSelection ? "5px 0 8px" : "7px 0 14px", color: "var(--tmc-muted, var(--text-secondary, #71808a))", fontSize: 12, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+    <div style={{ display: "flex", flex: 1, flexDirection: "column", minWidth: 0, padding: teacherSelection ? "8px 10px 7px" : 14 }}>
+      <h3 title={file.fileName} style={{ minWidth: 0, minHeight: teacherSelection ? 34 : undefined, display: teacherSelection ? "-webkit-box" : undefined, WebkitBoxOrient: teacherSelection ? "vertical" : undefined, WebkitLineClamp: teacherSelection ? 2 : undefined, margin: 0, fontSize: teacherSelection ? 13 : 15, lineHeight: 1.3, color: "var(--tmc-text, var(--text-primary, inherit))", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: teacherSelection ? undefined : "nowrap", overflowWrap: "anywhere" }}>{file.fileName}</h3>
+      <p title={file.folderPath} style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0, margin: teacherSelection ? "3px 0 5px" : "7px 0 14px", color: "var(--tmc-muted, var(--text-secondary, #71808a))", fontSize: teacherSelection ? 11 : 12, lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {teacherSelection && <Folder size={13} aria-hidden style={{ flex: "0 0 auto" }} />}
         <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{teacherSelection ? file.folderPath || "TMC catalogue" : <><strong style={{ color: "inherit" }}>Path:</strong> {file.folderPath || "TMC"}</>}</span>
       </p>
-      {teacherSelection ? <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, minHeight: 36, marginTop: "auto", paddingTop: 8, borderTop: "1px solid var(--tmc-border, #e6ebef)" }}>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0, color: selected ? "var(--tmc-primary, #315c78)" : "var(--tmc-text, #31495a)", fontSize: 13, fontWeight: selected ? 750 : 600, cursor: "pointer", userSelect: "none" }}>
-          <input type="checkbox" checked={selected} onChange={() => onToggle(file)} aria-label={`Select ${file.fileName}`} style={{ width: 17, height: 17, margin: 0, flex: "0 0 auto", accentColor: "var(--tmc-primary, #315c78)", cursor: "pointer" }} />
+      {teacherSelection ? <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6, minHeight: 30, marginTop: "auto", paddingTop: 5, borderTop: "1px solid var(--tmc-border, #e6ebef)" }}>
+        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, minWidth: 0, color: selected ? "var(--tmc-primary, #315c78)" : "var(--tmc-text, #31495a)", fontSize: 11, fontWeight: selected ? 750 : 600, cursor: "pointer", userSelect: "none" }}>
+          <input type="checkbox" checked={selected} onChange={() => onToggle(file)} aria-label={`Select ${file.fileName}`} style={{ width: 16, height: 16, margin: 0, flex: "0 0 auto", accentColor: "var(--tmc-primary, #315c78)", cursor: "pointer" }} />
           <span>{selected ? "Selected" : "Select catalogue"}</span>
         </label>
-        <button type="button" onClick={() => onOpen(file)} aria-label={`Preview ${file.fileName}`} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, flex: "0 0 auto", border: "1px solid var(--tmc-border, #d7e0e6)", borderRadius: 7, padding: "7px 9px", background: "var(--tmc-surface, #fff)", color: "var(--tmc-text, #31495a)", fontSize: 12, fontWeight: 650, cursor: "pointer" }}>
+        <button type="button" onClick={() => onOpen(file)} aria-label={`Preview ${file.fileName}`} style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5, flex: "0 0 auto", border: "1px solid var(--tmc-border, #d7e0e6)", borderRadius: 7, padding: "5px 7px", background: "var(--tmc-surface, #fff)", color: "var(--tmc-text, #31495a)", fontSize: 11, fontWeight: 650, cursor: "pointer" }}>
           Preview <ExternalLink size={13} aria-hidden />
         </button>
       </div> : <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap", marginTop: "auto" }}>

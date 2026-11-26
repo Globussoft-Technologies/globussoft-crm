@@ -25,12 +25,43 @@ import { useEffect, useRef, useState } from "react";
 import { geocodeSuggest } from "../../lib/geocoder";
 
 const DEBOUNCE_MS = 300;
+const NAME_ONLY_DEBOUNCE_MS = 120;
 const MIN_CHARS = 2;
+
+function suggestionContext(suggestion) {
+  const displayName = String(suggestion?.display_name || "").trim();
+  const name = String(suggestion?.name || "").trim();
+  if (!displayName || !name || displayName.toLowerCase() === name.toLowerCase()) return "";
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return displayName.replace(new RegExp(`^${escapedName}(?:\\s*,\\s*|\\s+)`, "i"), "").trim();
+}
+
+function suggestionName(suggestion) {
+  const name = String(suggestion?.name || "").trim();
+  if (name) return name;
+  return String(suggestion?.display_name || "").split(",")[0].trim();
+}
+
+function uniqueSuggestionsByName(suggestions) {
+  const seen = new Set();
+  return suggestions.filter((suggestion) => {
+    const key = suggestionName(suggestion)
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 export default function LocationAutocomplete({
   value = "",
   onChange,
   onSelect,
+  nameOnly = false,
   limit = 6,
   style,
   inputProps = {},
@@ -61,15 +92,15 @@ export default function LocationAutocomplete({
       const seq = ++fetchSeqRef.current;
       const results = await geocodeSuggest(query, limit);
       if (seq !== fetchSeqRef.current) return; // stale response
-      setSuggestions(results);
+      setSuggestions(nameOnly ? uniqueSuggestionsByName(results) : results);
       setActiveIndex(-1);
       setLoading(false);
-    }, DEBOUNCE_MS);
+    }, nameOnly ? NAME_ONLY_DEBOUNCE_MS : DEBOUNCE_MS);
 
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
-  }, [value, limit]);
+  }, [value, limit, nameOnly]);
 
   useEffect(() => {
     if (!open) return undefined;
@@ -90,7 +121,7 @@ export default function LocationAutocomplete({
     setOpen(false);
     setSuggestions([]);
     setActiveIndex(-1);
-    fireChange(suggestion.display_name);
+    fireChange(nameOnly ? suggestionName(suggestion) : suggestion.display_name);
     if (typeof onSelect === "function") onSelect(suggestion);
   }
 
@@ -116,7 +147,7 @@ export default function LocationAutocomplete({
     open && String(value || "").trim().length >= MIN_CHARS && (loading || suggestions.length > 0);
 
   return (
-    <div ref={wrapRef} style={{ position: "relative", width: "100%" }}>
+    <div ref={wrapRef} style={{ position: "relative", width: "100%", minWidth: 0 }}>
       <input
         type="text"
         role="combobox"
@@ -139,7 +170,7 @@ export default function LocationAutocomplete({
           handleKeyDown(e);
           if (typeof inputProps.onKeyDown === "function") inputProps.onKeyDown(e);
         }}
-        style={style}
+        style={{ width: "100%", boxSizing: "border-box", ...style }}
       />
 
       {showDropdown && (
@@ -158,13 +189,13 @@ export default function LocationAutocomplete({
             // see-through over whatever sits behind it (e.g. the table
             // rows behind the "Create itinerary" drawer). --modal-bg is
             // the CRM's existing opaque-panel token for exactly this case.
-            background: "var(--modal-bg, #fff)",
+            background: "var(--popover-bg, var(--modal-bg, #fff))",
             border: "1px solid var(--border-color, rgba(0,0,0,0.12))",
-            borderRadius: 8,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.24)",
-            maxHeight: 260,
+            borderRadius: 10,
+            boxShadow: "0 12px 28px rgba(0,0,0,0.18)",
+            maxHeight: 280,
             overflowY: "auto",
-            zIndex: 60,
+            zIndex: 80,
           }}
         >
           {loading && suggestions.length === 0 && (
@@ -178,9 +209,8 @@ export default function LocationAutocomplete({
 
           {!loading &&
             suggestions.map((s, idx) => (
-              <button
+              <div
                 key={`${s.display_name}-${idx}`}
-                type="button"
                 role="option"
                 aria-selected={idx === activeIndex}
                 data-testid={`location-autocomplete-row-${idx}`}
@@ -193,26 +223,36 @@ export default function LocationAutocomplete({
                 }}
                 onMouseEnter={() => setActiveIndex(idx)}
                 style={{
-                  display: "block",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 7,
                   width: "100%",
+                  minHeight: 44,
+                  boxSizing: "border-box",
                   textAlign: "left",
-                  padding: "0.5rem 0.7rem",
+                  padding: "9px 12px",
                   border: "none",
-                  borderBottom: "1px solid var(--border-color, rgba(0,0,0,0.06))",
+                  borderBottom: idx === suggestions.length - 1
+                    ? "none"
+                    : "1px solid var(--border-color, rgba(0,0,0,0.08))",
                   background:
-                    idx === activeIndex ? "var(--surface-hover, rgba(0,0,0,0.05))" : "transparent",
+                    idx === activeIndex ? "var(--surface-hover, var(--hover-bg, rgba(0,0,0,0.05)))" : "transparent",
                   color: "var(--text-primary)",
-                  fontSize: "0.85rem",
+                  fontFamily: "inherit",
+                  fontSize: 14,
+                  lineHeight: 1.35,
                   cursor: "pointer",
                 }}
               >
-                <span style={{ display: "block", fontWeight: 600 }}>{s.name || s.display_name}</span>
-                {s.display_name && s.name && s.display_name !== s.name && (
-                  <span style={{ display: "block", marginTop: 2, color: "var(--text-secondary)", fontSize: 11 }}>
-                    {s.display_name}
+                <span style={{ flex: nameOnly ? "1 1 auto" : "0 1 auto", minWidth: 0, maxWidth: nameOnly ? "100%" : "55%", overflow: "hidden", color: "var(--text-primary)", fontSize: 14, fontWeight: 650, textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {nameOnly ? suggestionName(s) : (s.name || s.display_name)}
+                </span>
+                {!nameOnly && suggestionContext(s) && (
+                  <span style={{ flex: "1 1 auto", minWidth: 0, overflow: "hidden", color: "var(--text-secondary)", fontSize: 12, textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    · {suggestionContext(s)}
                   </span>
                 )}
-              </button>
+              </div>
             ))}
         </div>
       )}

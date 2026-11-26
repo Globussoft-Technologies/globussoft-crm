@@ -4644,6 +4644,44 @@ body[data-vertical="travel"]
   box-sizing: border-box;
 }
 
+/* Keep the TMC Trips controls and column labels in view while its rows scroll. */
+.app-main > main:has(.travel-trips-page) {
+  overflow-y: hidden !important;
+}
+
+.travel-content-frame:has(.travel-trips-page) {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.travel-trips-page__header,
+.travel-trips-page__filters {
+  flex: 0 0 auto;
+}
+
+.travel-trips-page__pager {
+  flex: 0 0 auto;
+}
+
+.travel-trips-page__table-card > .top-scroll-sync {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.travel-trips-page__table-card > .top-scroll-sync > .top-scroll-sync__top {
+  flex: 0 0 16px;
+}
+
+.travel-trips-table-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto !important;
+}
+
 @media (max-width: 899px) {
   .travel-content-frame > * {
     max-width: none !important;

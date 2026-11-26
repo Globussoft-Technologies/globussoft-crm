@@ -780,12 +780,7 @@ is that the sidebar text and icon will reduce based on viewport/* Travel pages w
     gap: 8px !important;
   }
 
-  .travel-trips-page__filters > svg {
-    display: none;
-  }
-
-  .travel-trips-page__search,
-  .travel-trips-page__filters > select {
+  .travel-trips-page__search {
     grid-column: 1 / -1;
     width: 100%;
     min-width: 0 !important;
@@ -994,8 +989,69 @@ is that the sidebar text and icon will reduce based on viewport/* Travel pages w
 
 .travel-trips-table .travel-trips-row--family-parent > td {
   font-weight: 500;
+  background-color: rgba(79, 70, 229, 0.025);
 }
 
 .travel-trips-table .travel-trips-row--family-child > td {
   color: var(--text-secondary);
+  background-color: rgba(79, 70, 229, 0.045);
+}
+
+.travel-trips-table {
+  background-color: var(--surface-color);
+}
+
+.travel-trips-table th,
+.travel-trips-table td {
+  box-sizing: border-box;
+  border-right: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--surface-color);
+  background-clip: padding-box;
+}
+
+.travel-trips-table th:first-child,
+.travel-trips-table td:first-child {
+  border-left: 1px solid var(--border-color);
+}
+
+/* Keep Trip Code visible while the remaining TMC trip columns scroll. */
+.travel-trips-table__trip-code-header {
+  left: 0;
+  z-index: 20 !important;
+  box-shadow: inset 0 -1px 0 var(--border-color) !important;
+}
+
+.travel-trips-table .travel-trips-row > .travel-trips-table__trip-code-cell {
+  position: sticky;
+  left: 0;
+  z-index: 12;
+  isolation: isolate;
+  background-color: var(--modal-bg, #fff);
+}
+
+.travel-trips-table .travel-trips-row--family-parent > .travel-trips-table__trip-code-cell {
+  background-color: var(--modal-bg, #fff);
+  box-shadow: inset 3px 0 rgba(47, 122, 77, 0.72);
+}
+
+.travel-trips-table .travel-trips-row--family-child > .travel-trips-table__trip-code-cell {
+  background-color: var(--modal-bg, #fff);
+  box-shadow: inset 3px 0 rgba(79, 70, 229, 0.32);
+}
+
+.travel-trips-table .travel-trips-row:hover > .travel-trips-table__trip-code-cell {
+  background-color: var(--modal-bg, #fff);
+}
+
+.travel-trips-table__resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 7;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
 }

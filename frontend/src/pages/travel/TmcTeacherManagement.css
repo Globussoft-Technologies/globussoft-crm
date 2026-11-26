@@ -240,6 +240,23 @@ body[data-vertical="travel"] .travel-app-shell .travel-content-frame .tmc-teache
   vertical-align: middle;
 }
 
+.tmc-teacher-page__trip-link {
+  display: grid;
+  gap: 0.12rem;
+  color: inherit;
+  text-decoration: none;
+}
+
+.tmc-teacher-page__trip-link:hover strong {
+  text-decoration: underline;
+}
+
+.tmc-teacher-page__trip-link:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--tmc-teacher-accent);
+  outline-offset: 2px;
+}
+
 .tmc-teacher-page__table td > small,
 .tmc-teacher-page__table td small,
 .tmc-teacher-page__teacher-name small,

@@ -3910,19 +3910,18 @@ router.delete("/:id", verifyToken, async (req, res) => {
 
     if (!existing) return res.status(404).json({ error: "Page not found" });
 
+    let promotionalWebsite = null;
     try {
-      await removePromotionalLandingPage(existing);
+      const removal = await removePromotionalLandingPage(existing);
+      if (removal) promotionalWebsite = { removed: true };
     } catch (syncErr) {
-      return res.status(502).json({
-        error: "The landing page could not be removed from the promotional website. CRM deletion was not completed.",
-        code: "PROMOTIONAL_WEBSITE_DELETE_FAILED",
-        details: syncErr.message,
-      });
+      console.warn("[LandingPages] promotional website removal failed during CRM deletion:", syncErr.message);
+      promotionalWebsite = { removed: false };
     }
 
     await prisma.landingPage.delete({ where: { id: existing.id } });
 
-    res.json({ success: true });
+    res.json({ success: true, ...(promotionalWebsite ? { promotionalWebsite } : {}) });
 
   } catch (_err) { res.status(500).json({ error: "Failed to delete page" }); }
 

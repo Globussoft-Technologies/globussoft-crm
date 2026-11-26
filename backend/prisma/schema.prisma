@@ -8617,6 +8617,7 @@ model TmcTrip {
   schoolContactId       Int // FK Contact (B2B school)
   destination           String
   tripType              String                    @default("international") // domestic | international | day_trip
+  consentTerms          String?                   @db.LongText // trip-level digital consent terms, saved independently from requirement visibility
   departDate            DateTime
   returnDate            DateTime
   legalEntity           String                    @default("tmc_nexus")
@@ -9070,7 +9071,8 @@ model RoomingAssignment {
   id             Int      @id @default(autoincrement())
   tripId         Int
   roomNumber     String
-  roomType       String // single | twin | triple | quad
+  roomType       String // legacy label; use sharingCapacity for occupancy limits
+  sharingCapacity Int?
   participantIds String   @db.Text // JSON array of TripParticipant ids
   trip           TmcTrip  @relation(fields: [tripId], references: [id], onDelete: Cascade)
   createdAt      DateTime @default(now())

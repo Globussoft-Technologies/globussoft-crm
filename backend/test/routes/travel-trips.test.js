@@ -322,6 +322,7 @@ describe('GET /api/travel/trips', () => {
         skip: 0,
       }),
     );
+    expect(prisma.tmcTrip.findMany.mock.calls[0][0].include._count.select.rooming).toBe(true);
   });
 
   test('?status=invalidValue returns 400 INVALID_STATUS', async () => {
@@ -377,6 +378,63 @@ describe('GET /api/travel/trips', () => {
         { destination: { contains: 'goa' } },
       ],
     });
+  });
+
+  test('multiple family, trip type, status, and departure date selections combine in the query', async () => {
+    prisma.tmcTrip.findMany.mockResolvedValue([]);
+    prisma.tmcTrip.count.mockResolvedValue(0);
+
+    await request(makeApp())
+      .get('/api/travel/trips?family=primary&family=variant&tripType=international&tripType=domestic&status=confirmed&status=completed&departFrom=2027-02-01&departTo=2027-02-28')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    const { where } = prisma.tmcTrip.findMany.mock.calls[0][0];
+    expect(where).toMatchObject({
+      tenantId: 1,
+      tripType: { in: ['international', 'domestic'] },
+      status: { in: ['confirmed', 'completed'] },
+      departDate: {
+        gte: new Date('2027-02-01T00:00:00.000Z'),
+        lte: new Date('2027-02-28T23:59:59.999Z'),
+      },
+    });
+    expect(where.OR).toEqual([
+      {
+        familyParentId: null,
+        familyVariants: { some: { tenantId: 1 } },
+      },
+      { familyParentId: { not: null } },
+    ]);
+  });
+
+  test('invalid departure date filter returns 400 without querying trips', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/trips?departFrom=2027-02-30')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_DATE_FILTER' });
+    expect(prisma.tmcTrip.findMany).not.toHaveBeenCalled();
+  });
+
+  test('departure start date after end date returns 400 without querying trips', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/trips?departFrom=2027-02-28&departTo=2027-02-01')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVERTED_DATE_FILTER' });
+    expect(prisma.tmcTrip.findMany).not.toHaveBeenCalled();
+  });
+
+  test('invalid trip family filter returns 400 without querying trips', async () => {
+    const res = await request(makeApp())
+      .get('/api/travel/trips?family=unrelated')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_TRIP_FAMILY' });
+    expect(prisma.tmcTrip.findMany).not.toHaveBeenCalled();
   });
 
   test('caller without TMC sub-brand access returns 403 SUB_BRAND_DENIED', async () => {
@@ -621,17 +679,19 @@ describe('POST /api/travel/trips', () => {
 describe('GET /api/travel/trips/:id', () => {
   test('returns trip with children when found in tenant', async () => {
     prisma.tmcTrip.findFirst.mockResolvedValue({
-      id: 100, tripCode: 'bali2026', tenantId: 1, participants: [], documentRequirements: [],
+      id: 100, tripCode: 'bali2026', tenantId: 1, participants: [], documentRequirements: [], _count: { rooming: 2 },
     });
     const res = await request(makeApp())
       .get('/api/travel/trips/100')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ id: 100, tripCode: 'bali2026' });
+    expect(res.body._count.rooming).toBe(2);
     // Cross-tenant scope: where MUST include tenantId.
     expect(prisma.tmcTrip.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 100, tenantId: 1 } }),
     );
+    expect(prisma.tmcTrip.findFirst.mock.calls[0][0].include._count.select.rooming).toBe(true);
   });
 
   test('decorates the trip with its tenant-scoped school name', async () => {
@@ -908,6 +968,24 @@ describe('PATCH /api/travel/trips/:id', () => {
         data: expect.objectContaining({ destination: 'Bali Updated' }),
       }),
     );
+  });
+
+  test('saves consent terms directly on the trip without requiring a document name', async () => {
+    const consentTerms = 'Updated clauses saved independently.';
+    prisma.tmcTrip.findFirst.mockResolvedValue({ id: 100, status: 'confirmed' });
+    prisma.tmcTrip.update.mockResolvedValue({ id: 100, consentTerms });
+
+    const res = await request(makeApp())
+      .patch('/api/travel/trips/100')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ consentTerms: `<script>alert(1)</script>${consentTerms}` });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 100, consentTerms });
+    expect(prisma.tmcTrip.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 100 },
+      data: { consentTerms },
+    }));
   });
 
   test('assigns multiple active TMC teachers atomically and keeps the first as lead', async () => {
@@ -1755,10 +1833,30 @@ describe('Document requirements', () => {
         acceptedFileTypes: ['pdf', 'docx'],
         required: true,
       })],
+      consentTermsTemplate: '',
+      consentTermsSaved: '',
     });
     expect(prisma.tripDocumentRequirement.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { tripId: 100 } }),
     );
+  });
+
+  test('GET documents returns trip-level consent copy as the saved editor value', async () => {
+    prisma.tmcTrip.findFirst.mockResolvedValue({
+      id: 100,
+      tripType: 'day_trip',
+      consentTerms: 'Trip-level consent copy saved by the admin.',
+    });
+
+    const res = await request(makeApp())
+      .get('/api/travel/trips/100/documents')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      consentTermsTemplate: 'Trip-level consent copy saved by the admin.',
+      consentTermsSaved: 'Trip-level consent copy saved by the admin.',
+    });
   });
 
   test('GET documents keeps admin-defined names and POST accepts them for any trip type', async () => {
@@ -1776,6 +1874,8 @@ describe('Document requirements', () => {
       expect.objectContaining({ id: 1, docType: 'Passport copy', acceptedFileTypes: ['pdf'] }),
       expect.objectContaining({ id: 2, docType: 'Emergency contact letter', acceptedFileTypes: ['jpg', 'png'] }),
     ]);
+    expect(listRes.body.consentTermsTemplate).toContain('TERMS AND CONDITIONS');
+    expect(listRes.body.consentTermsSaved).toBe('');
 
     prisma.tripDocumentRequirement.create.mockResolvedValue({
       id: 3,
@@ -1812,6 +1912,36 @@ describe('Document requirements', () => {
       .send({ required: true });
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: 'MISSING_FIELDS' });
+    expect(prisma.tripDocumentRequirement.create).not.toHaveBeenCalled();
+  });
+
+  test('POST rejects a duplicate document name case-insensitively', async () => {
+    prisma.tripDocumentRequirement.findMany.mockResolvedValue([
+      { id: 1, docType: 'Passport', captureMode: 'file' },
+    ]);
+
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/documents')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ docType: '  passport  ', acceptedFileTypes: ['pdf'] });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: 'DUPLICATE_DOCUMENT_NAME' });
+    expect(prisma.tripDocumentRequirement.create).not.toHaveBeenCalled();
+  });
+
+  test('POST rejects a second digital consent form even when its name differs', async () => {
+    prisma.tripDocumentRequirement.findMany.mockResolvedValue([
+      { id: 1, docType: 'Parent consent form', captureMode: 'digital_consent' },
+    ]);
+
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/documents')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ docType: 'Alternate consent', captureMode: 'digital_consent', consentTerms: 'Terms' });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: 'CONSENT_FORM_ALREADY_EXISTS' });
     expect(prisma.tripDocumentRequirement.create).not.toHaveBeenCalled();
   });
 
@@ -1863,6 +1993,33 @@ describe('Document requirements', () => {
     }));
   });
 
+  test('POST document preserves the complete consent document above the former 10k limit', async () => {
+    const completeTerms = `TERMS AND CONDITIONS ${'Clause text. '.repeat(1100)}`;
+    prisma.tripDocumentRequirement.create.mockResolvedValue({
+      id: 11,
+      tripId: 100,
+      docType: 'Parent consent form',
+      acceptedFileTypes: '["pdf"]',
+      required: true,
+      captureMode: 'digital_consent',
+      consentTerms: completeTerms,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/travel/trips/100/documents')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({
+        docType: 'Parent consent form',
+        captureMode: 'digital_consent',
+        consentTerms: completeTerms,
+      });
+
+    expect(res.status).toBe(201);
+    expect(prisma.tripDocumentRequirement.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ consentTerms: completeTerms }),
+    }));
+  });
+
   test('PATCH updates the custom document name and accepted file types', async () => {
     prisma.tripDocumentRequirement.findFirst.mockResolvedValue({
       id: 9,
@@ -1892,6 +2049,30 @@ describe('Document requirements', () => {
       where: { id: 9 },
       data: { docType: 'Updated travel authorization', acceptedFileTypes: '["docx","pdf"]' },
     }));
+  });
+
+  test('PATCH rejects renaming a requirement to another requirement name', async () => {
+    prisma.tripDocumentRequirement.findFirst.mockResolvedValue({
+      id: 9,
+      tripId: 100,
+      docType: 'Old name',
+      captureMode: 'file',
+      acceptedFileTypes: '["pdf"]',
+      required: true,
+    });
+    prisma.tripDocumentRequirement.findMany.mockResolvedValue([
+      { id: 9, docType: 'Old name', captureMode: 'file' },
+      { id: 10, docType: 'Passport', captureMode: 'file' },
+    ]);
+
+    const res = await request(makeApp())
+      .patch('/api/travel/trips/100/documents/9')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ docType: 'passport' });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: 'DUPLICATE_DOCUMENT_NAME' });
+    expect(prisma.tripDocumentRequirement.update).not.toHaveBeenCalled();
   });
 
   test('DELETE document cross-trip returns 404 DOC_NOT_FOUND', async () => {

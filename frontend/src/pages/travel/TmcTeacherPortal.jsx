@@ -1151,7 +1151,14 @@ function TripsView({ trips, loading, selectedTrip, tripTab, participants, landin
               </div>
             ) : tripTab === "rooming" ? (
               <div style={{ ...sharedVariables, minWidth: 0 }}>
-                <RoomingTab trip={{ ...selectedTrip, participants }} notify={notify} request={request} showExports={false} />
+                <RoomingTab
+                  trip={{ ...selectedTrip, participants }}
+                  notify={notify}
+                  request={request}
+                  showExports={false}
+                  canManageRooms={false}
+                  assignmentOnly
+                />
               </div>
             ) : <>
               <h4 style={styles.subheading}>Participants</h4>
@@ -1242,8 +1249,8 @@ const styles = {
   contentScroll: { width: "100%", minHeight: 0, height: "100%", boxSizing: "border-box", padding: 32, overflowY: "auto", overflowX: "hidden", overscrollBehavior: "contain" },
   cataloguesContentScroll: { display: "flex", flexDirection: "column", overflow: "hidden" },
   dashboard: { display: "grid", gap: 18 },
-  reviewPage: { display: "grid", gap: 18, width: "min(100%, 1180px)", maxWidth: 1180, margin: "0 auto", paddingBottom: 24, boxSizing: "border-box" },
-  reviewSelectCard: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(280px, .9fr)", alignItems: "center", gap: "16px 24px", padding: 22, border: "1px solid var(--tmc-info-border)", borderRadius: 14, background: "linear-gradient(135deg, var(--tmc-info-bg) 0%, var(--tmc-surface) 72%)", boxShadow: "var(--tmc-question-shadow)" },
+  reviewPage: { display: "grid", gap: 18, width: "100%", minWidth: 0, paddingBottom: 24, boxSizing: "border-box" },
+  reviewSelectCard: { display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(280px, .9fr)", alignItems: "center", gap: "16px 24px", padding: 20, border: "1px solid var(--tmc-border)", borderRadius: 14, background: "var(--tmc-surface)" },
   reviewSelectHint: { margin: "6px 0 0", color: "var(--tmc-muted)", fontSize: 13, lineHeight: 1.5 },
   reviewSelectControls: { display: "grid", gap: 10, minWidth: 0 },
   reviewSelectField: { display: "grid", gap: 7, minWidth: 0 },

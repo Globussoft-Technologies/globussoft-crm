@@ -123,6 +123,76 @@ describe("TMC parent travel documents", () => {
     }));
   });
 
+  test("uses configured consent clauses and supplies full trip terms when a form has no saved clauses", async () => {
+    prisma.tmcTrip.findMany.mockResolvedValue([{
+      id: 7,
+      tripCode: "DARJ-2026",
+      destination: "Darjeeling",
+      tripType: "international",
+      documentRequirements: [
+        {
+          id: 103,
+          tripId: 7,
+          docType: "Parent consent form",
+          acceptedFileTypes: [],
+          required: true,
+          captureMode: "digital_consent",
+          consentTerms: "Custom parent consent clauses for this trip.",
+        },
+        {
+          id: 104,
+          tripId: 7,
+          docType: "Legacy consent form",
+          acceptedFileTypes: [],
+          required: true,
+          captureMode: "digital_consent",
+          consentTerms: null,
+        },
+      ],
+    }]);
+
+    const response = await request(makeApp())
+      .get("/api/portal/tmc/parent/documents")
+      .set("Authorization", `Bearer ${portalToken()}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.documentRequirements).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 103, consentTerms: "Custom parent consent clauses for this trip." }),
+      expect.objectContaining({
+        id: 104,
+        consentTerms: expect.stringContaining("TERMS AND CONDITIONS FOR INTERNATIONAL EDUCATIONAL TRAVEL PROGRAMMES"),
+      }),
+    ]));
+  });
+
+  test("uses trip-level saved consent clauses for parent requirements", async () => {
+    prisma.tmcTrip.findMany.mockResolvedValue([{
+      id: 7,
+      tripCode: "DARJ-2026",
+      destination: "Darjeeling",
+      tripType: "international",
+      consentTerms: "Trip-level consent clauses saved by the admin.",
+      documentRequirements: [{
+        id: 105,
+        tripId: 7,
+        docType: "Parent consent form",
+        acceptedFileTypes: [],
+        required: true,
+        captureMode: "digital_consent",
+        consentTerms: "Older requirement-specific clauses.",
+      }],
+    }]);
+
+    const response = await request(makeApp())
+      .get("/api/portal/tmc/parent/documents")
+      .set("Authorization", `Bearer ${portalToken()}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.documentRequirements).toEqual([
+      expect.objectContaining({ id: 105, consentTerms: "Trip-level consent clauses saved by the admin." }),
+    ]);
+  });
+
   test("uploads a supported file against the selected trip requirement", async () => {
     const response = await request(makeApp())
       .post("/api/portal/tmc/parent/documents")
@@ -247,6 +317,7 @@ describe("TMC parent travel documents", () => {
       id: 7,
       destination: "Darjeeling",
       tripType: "international",
+      consentTerms: "Trip-level consent clauses saved by the admin.",
       documentRequirements: [{
         id: 103,
         tripId: 7,
@@ -284,7 +355,7 @@ describe("TMC parent travel documents", () => {
         captureMode: "digital_consent",
         mimeType: "application/json",
         fileBlob: null,
-        termsSnapshot: expect.stringContaining("TERMS AND CONDITIONS FOR INTERNATIONAL EDUCATIONAL TRAVEL PROGRAMMES"),
+        termsSnapshot: "Trip-level consent clauses saved by the admin.",
         answersJson: expect.stringContaining("Anaya Singh"),
       }),
     }));

@@ -377,7 +377,16 @@ function TripTable({ trips, onCopyParentLink, compact = false, infiniteList = nu
         <thead><tr><th>Trip</th><th>Dates</th><th>Participants</th><th>Parent portal registrations</th><th>Status</th>{onCopyParentLink && <th>Parent portal link</th>}</tr></thead>
         <tbody>{trips.map((trip) => (
           <tr key={trip.id}>
-            <td><strong>{trip.destination || 'Unnamed trip'}</strong><small>{trip.tripCode || 'Trip code unavailable'}</small></td>
+            <td>
+              <Link
+                className="tmc-teacher-page__trip-link"
+                to={`/travel/trips/${trip.id}?tab=overview`}
+                aria-label={`Open ${trip.destination || trip.tripCode || 'trip'} in TMC Trips`}
+              >
+                <strong>{trip.destination || 'Unnamed trip'}</strong>
+                <small>{trip.tripCode || 'Trip code unavailable'}</small>
+              </Link>
+            </td>
             <td>{formatDateRange(trip.departDate, trip.returnDate)}</td>
             <td>{trip.participantCount || 0}</td>
             <td>{trip.parentCount || 0}</td>

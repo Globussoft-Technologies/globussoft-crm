@@ -126,6 +126,14 @@ describe("TmcTeacherPortal", () => {
               json: () => Promise.resolve({ participants: [{ id: 55, fullName: "Manish", parentName: "Arijit", parentEmail: "arijit@example.com", parentPhone: "+91 90000 00001" }] }),
         });
       }
+      if (url === "/api/portal/tmc/teacher/trips/7/rooming") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            rooming: [{ id: 31, tripId: 7, roomNumber: "101", roomType: "twin", sharingCapacity: 2, participantIds: "[]" }],
+          }),
+        });
+      }
       if (url === "/api/portal/tmc/teacher/trips/9/review") {
         return Promise.resolve({
           ok: true,
@@ -327,7 +335,7 @@ describe("TmcTeacherPortal", () => {
     expect(await screen.findByRole("heading", { name: "Your trips" })).toBeInTheDocument();
   });
 
-  it("opens participant, payment, and rooming tabs from the trips page", async () => {
+  it("lets teachers assign participants to admin-configured rooms", async () => {
     render(<TmcTeacherPortal />);
 
     await screen.findByRole("heading", { name: "Dashboard" });
@@ -344,9 +352,27 @@ describe("TmcTeacherPortal", () => {
 
     fireEvent.click(screen.getByRole("tab", { name: "Rooming" }));
     expect(await screen.findByRole("tab", { name: "Rooming" })).toHaveAttribute("aria-selected", "true");
-    expect(await screen.findByRole("button", { name: "Add room" })).toBeInTheDocument();
+    expect(await screen.findByText("Room 101")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add room" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Assign participants" })).toBeInTheDocument();
     expect(fetchSpy.mock.calls.some(([url]) => url === "/api/portal/tmc/teacher/trips/7/payment-plan")).toBe(true);
     expect(fetchSpy.mock.calls.some(([url]) => url === "/api/portal/tmc/teacher/trips/7/rooming")).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Assign participants" }));
+    expect(screen.queryByRole("textbox", { name: "Room number" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Sharing capacity" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Manish" }));
+    fireEvent.click(screen.getByRole("button", { name: "Save assignments" }));
+    await waitFor(() => {
+      const assignment = fetchSpy.mock.calls.find(([url, options]) => (
+        url === "/api/portal/tmc/teacher/trips/7/rooming/31" && options?.method === "PATCH"
+      ));
+      expect(assignment).toBeTruthy();
+      expect(JSON.parse(assignment[1].body)).toEqual({ participantIds: [55] });
+    });
+    expect(fetchSpy.mock.calls.some(([url, options]) => (
+      url === "/api/portal/tmc/teacher/trips/7/rooming" && options?.method === "POST"
+    ))).toBe(false);
   });
 
   it("restores the selected section from the URL after a refresh", async () => {

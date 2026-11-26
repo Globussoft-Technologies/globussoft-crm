@@ -4,8 +4,8 @@ import { Check, ChevronLeft, ChevronRight, ChevronsUpDown, Plus, X } from "lucid
 import { fetchApi } from "../../utils/api";
 import "./TripSetupNavigation.css";
 
-export const steps = ["Trip created", "Payment plan", "Documents", "Landing page", "Assign teacher", "Parent link"];
-const labels = [...steps.slice(0, 4), "Teachers", "Parent link"];
+export const steps = ["Trip created", "Payment plan", "Documents", "Landing page", "Assign teacher", "Parent link", "Rooming"];
+const labels = [...steps.slice(0, 4), "Teachers", "Parent link", "Rooming"];
 function linkKey(trip) {
   return `tmc-parent-link:${trip.tenantId}:${trip.id}`;
 }
@@ -15,8 +15,8 @@ export function rememberParentLink(trip, generated) {
     else localStorage.removeItem(linkKey(trip));
   } catch { /* Storage may be disabled. */ }
 }
-export const stepTab = ["overview", "payment", "documents", "overview", "overview", "overview"];
-export const anchors = [null, null, null, "landing", "teacher", "parent"];
+export const stepTab = ["overview", "payment", "documents", "overview", "overview", "overview", "rooming"];
+export const anchors = [null, null, null, "landing", "teacher", "parent", null];
 export function tripStepPath(id, index) {
   const params = new URLSearchParams({tab: stepTab[index]});
   if (anchors[index]) params.set("setup", anchors[index]);
@@ -30,8 +30,9 @@ export function setupSteps(trip, linked, generated) {
   if (parent == null && trip.teacherContactId) {
     try { parent = localStorage.getItem(linkKey(trip)) === String(trip.teacherContactId); } catch { /* unavailable */ }
   }
+  const roomingCount = trip._count?.rooming ?? trip.rooming?.length ?? 0;
   return [true, !!trip.paymentPlan, (trip.documentRequirements?.length ?? trip._count?.documentRequirements ?? 0) > 0,
-    linked, !!trip.teacherContactId, !!trip.teacherContactId && !!parent];
+    linked, !!trip.teacherContactId, !!trip.teacherContactId && !!parent, Number(roomingCount) > 0];
 }
 function initials(trip) {
   return (trip.tripCode || "Trip").split(/[\s_-]+/).slice(0, 2).map(word => word[0]).join("").toUpperCase();
@@ -48,8 +49,9 @@ function Dots({ flags, viewed, jump, compact }) {
 }
 export function SetupHeader(props) {
   const count = props.flags.filter(Boolean).length;
-  const pct = Math.round(count / 6 * 100);
-  return <nav className="ts-header ts-ui" aria-label="Trip setup"><div className="ts-summary"><strong>Trip setup · <small>{count} of 6 complete</small></strong><span><i><b style={{width:pct+'%'}}/></i> {pct}%</span></div><Dots {...props}/></nav>;
+  const total = props.flags.length;
+  const pct = Math.round(count / total * 100);
+  return <nav className="ts-header ts-ui" aria-label="Trip setup"><div className="ts-summary"><strong>Trip setup · <small>{count} of {total} complete</small></strong><span><i><b style={{width:pct+'%'}}/></i> {pct}%</span></div><Dots {...props}/></nav>;
 }
 export function SetupNavigator(props) {
   const [dismissed, setDismissed] = useState(false);
@@ -120,10 +122,10 @@ function FloatingTripNavigator({ trip, flags, viewed, jump, switchTrip, newTrip,
     document.addEventListener('pointerdown',dismiss); document.addEventListener('keydown',dismiss);
     return () => { active=false; clearTimeout(timer); document.removeEventListener('pointerdown',dismiss); document.removeEventListener('keydown',dismiss); };
   }, [open,offset,search,trip.id]);
-  const count=flags.filter(Boolean).length, pct=Math.round(count/6*100);
+  const count=flags.filter(Boolean).length, stepTotal=flags.length, pct=Math.round(count/stepTotal*100);
   return createPortal(<nav ref={bar} className="ts-float ts-ui" aria-label="Trip navigator">
     <div className="ts-switch"><button className="ts-trigger" ref={trigger} type="button" aria-expanded={open} onClick={()=>{setSearch('');setOffset(0);setOpen(!open);}}>
-      <b className="ts-initial">{initials(trip)}</b><span><strong>{trip.tripCode}</strong><small>{count} of 6 steps done</small></span><ChevronsUpDown size={16}/></button>
+      <b className="ts-initial">{initials(trip)}</b><span><strong>{trip.tripCode}</strong><small>{count} of {stepTotal} steps done</small></span><ChevronsUpDown size={16}/></button>
       {open && <div className="ts-menu" ref={menu}>
       <div className="ts-menu-search"><small>SWITCH TRIP</small>
         <input type="search" aria-label="Search TMC trips" placeholder="Search TMC trips…" autoFocus value={search}
@@ -132,11 +134,11 @@ function FloatingTripNavigator({ trip, flags, viewed, jump, switchTrip, newTrip,
       {!rows.length && <small role="status">{error || (loading ? 'Loading trips…' : search.trim() ? 'No matching trips.' : 'No trips found.')}</small>}
       {rows.map(({row,linked,loaded}) => { const selected=row.id===trip.id, state=selected?flags:setupSteps(row,linked);
         return <button type="button" key={row.id} disabled={!selected && !loaded} data-selected={selected} onClick={()=>{setOpen(false);switchTrip(row, Math.max(0,state.findIndex(value=>!value)));}}>
-        <b className="ts-initial">{initials(row)}</b><span><strong>{row.tripCode}</strong><small>{row.destination} · {row.status}</small><span className="ts-segments">{state.map((done,i)=><i key={i} data-done={!!done}/>)}</span></span><b>{state.includes(undefined)?'…':state.filter(Boolean).length+'/6'}</b></button>; })}
+        <b className="ts-initial">{initials(row)}</b><span><strong>{row.tripCode}</strong><small>{row.destination} · {row.status}</small><span className="ts-segments">{state.map((done,i)=><i key={i} data-done={!!done}/>)}</span></span><b>{state.includes(undefined)?'…':state.filter(Boolean).length+'/'+state.length}</b></button>; })}
       {offset>0 && <button onClick={()=>setOffset(offset-10)}>Previous trips</button>}{offset+10<total && <button onClick={()=>setOffset(offset+10)}>More trips</button>}
       <button type="button" className="ts-new" onClick={newTrip}><Plus size={15}/> New trip</button></div>}
-    </div><div className="ts-controls"><button aria-label="Previous setup step" disabled={viewed<=0} onClick={()=>jump(viewed-1)}><ChevronLeft/></button><Dots flags={flags} viewed={viewed} jump={jump} compact/><button aria-label="Next setup step" disabled={viewed===5} onClick={()=>jump(viewed+1)}><ChevronRight/></button></div>
-    <div className="ts-where"><small>{viewed<0?'VIEWING':`STEP ${viewed+1} OF 6`}</small><strong>{steps[viewed] || tabLabel}</strong></div>
+    </div><div className="ts-controls"><button aria-label="Previous setup step" disabled={viewed<=0} onClick={()=>jump(viewed-1)}><ChevronLeft/></button><Dots flags={flags} viewed={viewed} jump={jump} compact/><button aria-label="Next setup step" disabled={viewed>=stepTotal-1} onClick={()=>jump(viewed+1)}><ChevronRight/></button></div>
+    <div className="ts-where"><small>{viewed<0?'VIEWING':`STEP ${viewed+1} OF ${stepTotal}`}</small><strong>{steps[viewed] || tabLabel}</strong></div>
     <button type="button" className="ts-close" aria-label="Close trip navigator" title="Close trip navigator" onClick={onClose}><X size={18} aria-hidden="true" /></button>
     <b>{pct}%</b>
     <i className="ts-strip"><b style={{width:pct+'%'}}/></i></nav>, document.body);

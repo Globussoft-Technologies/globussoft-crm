@@ -1,17 +1,18 @@
 ﻿// Travel CRM — TMC trip billing + rooming surface.
 //
-// Rooming assignments + payment plan + per-participant instalments.
+// Admin-managed room inventory + teacher-managed assignments, payment plan,
+// and per-participant instalments.
 // All sub-routes are scoped to a TmcTrip via :tripId in the URL.
 //
 // Endpoints:
 //   GET    /api/travel/trip-billing/stats                     — USER+ tenant-wide TMC rollup
 //   GET    /api/travel/trips/:tripId/rooming                  — list rooms
-//   POST   /api/travel/trips/:tripId/rooming                  ADMIN+MGR
-//   PATCH  /api/travel/trips/:tripId/rooming/:roomId          ADMIN+MGR
-//   DELETE /api/travel/trips/:tripId/rooming/:roomId          ADMIN
+//   POST   /api/travel/trips/:tripId/rooming                  ADMIN+MGR — create empty room
+//   PATCH  /api/travel/trips/:tripId/rooming/:roomId          ADMIN+MGR — room config only
+//   DELETE /api/travel/trips/:tripId/rooming/:roomId          ADMIN — empty rooms only
 //   GET    /api/travel/trips/:tripId/rooming/export.xlsx      ADMIN+MGR
 //   GET    /api/travel/trips/:tripId/rooming/export.pdf       ADMIN+MGR
-//   POST   /api/travel/trips/:tripId/rooming/auto             ADMIN+MGR — auto-allocate unassigned
+//   POST   /api/travel/trips/:tripId/rooming/auto             deprecated — returns 403
 //
 //   GET    /api/travel/trips/:tripId/payment-plan             — single plan
 //   PUT    /api/travel/trips/:tripId/payment-plan             ADMIN+MGR (upsert)
@@ -39,8 +40,13 @@ const { materializeTripInstalmentsFromPlan } = require("../lib/travelTripInstalm
 const { createDraftInvoiceForParticipant } = require("../lib/tmcParticipantInvoice");
 const { getTenantRazorpayClient } = require("../lib/tenantPaymentGateway");
 const { TRIP_PAYMENT_KINDS, isSuccessfulPayment, parseMetadata, reconcileTripPaymentRecord } = require("../lib/tripPaymentReconciliation");
+const {
+  parseSharingCapacity,
+  resolveSharingCapacity,
+  legacyRoomTypeForCapacity,
+  serializeRoomCapacity,
+} = require("../lib/roomingCapacity");
 
-const VALID_ROOM_TYPES = ["single", "twin", "triple", "quad"];
 const VALID_INSTALMENT_STATUSES = ["pending", "partial", "paid", "overdue"];
 const DATE_INPUT_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
@@ -635,7 +641,7 @@ router.get("/trips/:tripId/rooming", verifyToken, requireTravelTenant, requireTm
       where: { tripId: trip.id },
       orderBy: { roomNumber: "asc" },
     });
-    res.json({ rooming: rows });
+    res.json({ rooming: rows.map(serializeRoomCapacity) });
   } catch (e) {
     if (e.status) return res.status(e.status).json({ error: e.message, code: e.code });
     console.error("[travel-trip-billing] rooming list error:", e.message);
@@ -652,23 +658,34 @@ router.post(
   async (req, res) => {
     try {
       const trip = await loadTrip(req);
-      const { roomNumber, roomType, participantIds } = req.body || {};
-      if (!roomNumber || !roomType || !Array.isArray(participantIds)) {
+      const roomNumber = String(req.body?.roomNumber ?? "").trim();
+      const sharingCapacity = parseSharingCapacity(req.body?.sharingCapacity);
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, "participantIds")) {
+        return res.status(403).json({
+          error: "Participant assignments are managed in the teacher portal",
+          code: "PARTICIPANT_ASSIGNMENT_TEACHER_ONLY",
+        });
+      }
+      const unsupportedField = Object.keys(req.body || {}).find((key) => !["roomNumber", "sharingCapacity"].includes(key));
+      if (unsupportedField) {
+        return res.status(400).json({ error: `Unsupported room field: ${unsupportedField}`, code: "INVALID_FIELDS" });
+      }
+      if (!roomNumber || req.body?.sharingCapacity === undefined) {
         return res.status(400).json({
-          error: "roomNumber, roomType, participantIds[] required",
+          error: "roomNumber and sharingCapacity are required",
           code: "MISSING_FIELDS",
         });
       }
-      if (!VALID_ROOM_TYPES.includes(roomType)) {
+      if (sharingCapacity === null) {
         return res.status(400).json({
-          error: `roomType must be one of: ${VALID_ROOM_TYPES.join(", ")}`,
-          code: "INVALID_ROOM_TYPE",
+          error: "sharingCapacity must be a positive integer",
+          code: "INVALID_SHARING_CAPACITY",
         });
       }
 
       // Check for duplicate room number
       const existingRoom = await prisma.roomingAssignment.findFirst({
-        where: { tripId: trip.id, roomNumber: String(roomNumber) },
+        where: { tripId: trip.id, roomNumber },
         select: { id: true },
       });
       if (existingRoom) {
@@ -678,57 +695,16 @@ router.post(
         });
       }
 
-      const capLimit = { single: 1, twin: 2, triple: 3, quad: 4 }[roomType];
-      if (participantIds.length > capLimit) {
-        return res.status(400).json({
-          error: `roomType "${roomType}" allows at most ${capLimit} participants`,
-          code: "ROOM_CAPACITY_EXCEEDED",
-        });
-      }
-      // Sanity: all participantIds must belong to this trip
-      if (participantIds.length > 0) {
-        const ids = participantIds.map((x) => parseInt(x, 10)).filter(Number.isFinite);
-        const count = await prisma.tripParticipant.count({
-          where: { id: { in: ids }, tripId: trip.id },
-        });
-        if (count !== ids.length) {
-          return res.status(400).json({
-            error: "one or more participantIds aren't on this trip",
-            code: "PARTICIPANTS_OFF_TRIP",
-          });
-        }
-
-        // Prevent duplicate room assignments: check if any participant is already assigned to another room
-        const existingAssignments = await prisma.roomingAssignment.findMany({
-          where: { tripId: trip.id },
-          select: { id: true, participantIds: true },
-        });
-        for (const assignment of existingAssignments) {
-          let existingPids = [];
-          try {
-            existingPids = JSON.parse(assignment.participantIds || "[]");
-          } catch (_e) {
-            existingPids = [];
-          }
-          for (const pid of ids) {
-            if (existingPids.includes(pid)) {
-              return res.status(409).json({
-                error: `Participant #${pid} is already assigned to another room`,
-                code: "DUPLICATE_ASSIGNMENT",
-              });
-            }
-          }
-        }
-      }
       const created = await prisma.roomingAssignment.create({
         data: {
           tripId: trip.id,
-          roomNumber: String(roomNumber),
-          roomType,
-          participantIds: JSON.stringify(participantIds),
+          roomNumber,
+          roomType: legacyRoomTypeForCapacity(sharingCapacity),
+          sharingCapacity,
+          participantIds: "[]",
         },
       });
-      res.status(201).json(created);
+      res.status(201).json(serializeRoomCapacity(created));
     } catch (err) {
       if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
       console.error("[travel-trip-billing] rooming create error:", err.message);
@@ -752,15 +728,30 @@ router.patch(
         where: { id: roomId, tripId: trip.id },
       });
       if (!existing) return res.status(404).json({ error: "Room not found", code: "ROOM_NOT_FOUND" });
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, "participantIds")) {
+        return res.status(403).json({
+          error: "Participant assignments are managed in the teacher portal",
+          code: "PARTICIPANT_ASSIGNMENT_TEACHER_ONLY",
+        });
+      }
 
+      const body = req.body || {};
+      const unsupportedField = Object.keys(body).find((key) => !["roomNumber", "sharingCapacity"].includes(key));
+      if (unsupportedField) {
+        return res.status(400).json({ error: `Unsupported room field: ${unsupportedField}`, code: "INVALID_FIELDS" });
+      }
       const data = {};
-      const { roomNumber, roomType, participantIds } = req.body || {};
+      const { roomNumber } = body;
       if (roomNumber !== undefined) {
+        const normalizedRoomNumber = String(roomNumber).trim();
+        if (!normalizedRoomNumber) {
+          return res.status(400).json({ error: "roomNumber is required", code: "INVALID_ROOM_NUMBER" });
+        }
         // Check for duplicate room number (excluding current room)
         const duplicateRoom = await prisma.roomingAssignment.findFirst({
           where: {
             tripId: trip.id,
-            roomNumber: String(roomNumber),
+            roomNumber: normalizedRoomNumber,
             NOT: { id: roomId },
           },
           select: { id: true },
@@ -771,57 +762,34 @@ router.patch(
             code: "DUPLICATE_ROOM_NUMBER",
           });
         }
-        data.roomNumber = String(roomNumber);
+        data.roomNumber = normalizedRoomNumber;
       }
-      if (roomType !== undefined) {
-        if (!VALID_ROOM_TYPES.includes(roomType)) {
-          return res.status(400).json({ error: "invalid roomType", code: "INVALID_ROOM_TYPE" });
+      if (body.sharingCapacity !== undefined) {
+        const sharingCapacity = parseSharingCapacity(body.sharingCapacity);
+        if (sharingCapacity === null) {
+          return res.status(400).json({ error: "sharingCapacity must be a positive integer", code: "INVALID_SHARING_CAPACITY" });
         }
-        data.roomType = roomType;
-      }
-      if (participantIds !== undefined) {
-        if (!Array.isArray(participantIds)) return res.status(400).json({ error: "participantIds must be an array", code: "INVALID_PARTICIPANTS" });
-        const finalType = data.roomType || existing.roomType;
-        const capLimit = { single: 1, twin: 2, triple: 3, quad: 4 }[finalType];
-        if (participantIds.length > capLimit) {
+        let existingParticipantIds = [];
+        try {
+          existingParticipantIds = JSON.parse(existing.participantIds || "[]");
+        } catch (_e) {
+          existingParticipantIds = [];
+        }
+        if (!Array.isArray(existingParticipantIds)) existingParticipantIds = [];
+        if (existingParticipantIds.length > sharingCapacity) {
           return res.status(400).json({
-            error: `roomType "${finalType}" allows at most ${capLimit} participants`,
+            error: `Room has ${existingParticipantIds.length} assigned participants and cannot be changed to ${sharingCapacity} sharing`,
             code: "ROOM_CAPACITY_EXCEEDED",
           });
         }
-
-        // Prevent duplicate assignments: check if any new participant is already assigned to a different room
-        if (participantIds.length > 0) {
-          const ids = participantIds.map((x) => parseInt(x, 10)).filter(Number.isFinite);
-          const otherAssignments = await prisma.roomingAssignment.findMany({
-            where: { tripId: trip.id, id: { not: roomId } },
-            select: { id: true, participantIds: true },
-          });
-          for (const assignment of otherAssignments) {
-            let otherPids = [];
-            try {
-              otherPids = JSON.parse(assignment.participantIds || "[]");
-            } catch (_e) {
-              otherPids = [];
-            }
-            for (const pid of ids) {
-              if (otherPids.includes(pid)) {
-                return res.status(409).json({
-                  error: `Participant #${pid} is already assigned to another room`,
-                  code: "DUPLICATE_ASSIGNMENT",
-                });
-              }
-            }
-          }
-        }
-
-        data.participantIds = JSON.stringify(participantIds);
+        data.sharingCapacity = sharingCapacity;
+        data.roomType = legacyRoomTypeForCapacity(sharingCapacity);
       }
       if (Object.keys(data).length === 0) {
         return res.status(400).json({ error: "no updatable fields provided", code: "EMPTY_BODY" });
       }
       const updated = await prisma.roomingAssignment.update({ where: { id: roomId }, data });
-      res.json(updated);
+      res.json(serializeRoomCapacity(updated));
     } catch (err) {
       if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
       console.error("[travel-trip-billing] rooming patch error:", err.message);
@@ -845,6 +813,26 @@ router.delete(
         where: { id: roomId, tripId: trip.id },
       });
       if (!existing) return res.status(404).json({ error: "Room not found", code: "ROOM_NOT_FOUND" });
+      let participantIds = [];
+      try {
+        participantIds = JSON.parse(existing.participantIds || "[]");
+      } catch (_e) {
+        participantIds = [];
+      }
+      const assignedIds = Array.isArray(participantIds)
+        ? participantIds.map(Number).filter(Number.isInteger)
+        : [];
+      const assignedParticipantCount = assignedIds.length
+        ? await prisma.tripParticipant.count({
+          where: { id: { in: assignedIds }, tripId: trip.id },
+        })
+        : 0;
+      if (assignedParticipantCount > 0) {
+        return res.status(409).json({
+          error: "Unassign participants in the teacher portal before deleting this room",
+          code: "ROOM_HAS_ASSIGNMENTS",
+        });
+      }
       await prisma.roomingAssignment.delete({ where: { id: roomId } });
       res.json({ deleted: true, id: roomId });
     } catch (err) {
@@ -897,9 +885,8 @@ router.get(
       const nameById = new Map(participants.map((p) => [p.id, p.fullName]));
 
       const XLSX = require("xlsx");
-      const ROOM_CAPACITY = { single: 1, twin: 2, triple: 3, quad: 4 };
       const aoa = [
-        ["Room #", "Room type", "Capacity", "Occupancy", "Participants"],
+        ["Room #", "Sharing capacity", "Occupancy", "Participants"],
       ];
       for (const room of rooms) {
         let pids = [];
@@ -912,10 +899,9 @@ router.get(
         const names = pids
           .map((pid) => nameById.get(Number(pid)) || `#${pid}`)
           .join(", ");
-        const capacity = ROOM_CAPACITY[room.roomType] || pids.length;
+        const capacity = resolveSharingCapacity(room) ?? "";
         aoa.push([
           room.roomNumber,
-          room.roomType,
           capacity,
           pids.length,
           names,
@@ -927,8 +913,7 @@ router.get(
       // Column widths — rough heuristic for readability in Excel.
       ws["!cols"] = [
         { wch: 10 }, // Room #
-        { wch: 10 }, // Room type
-        { wch: 10 }, // Capacity
+        { wch: 16 }, // Sharing capacity
         { wch: 10 }, // Occupancy
         { wch: 60 }, // Participants
       ];
@@ -954,19 +939,8 @@ router.get(
 
 // POST /api/travel/trips/:tripId/rooming/auto
 //
-// Automatic room allocation. Distributes all unassigned participants
-// into rooms based on capacity and room type preferences. Simple
-// deterministic algorithm: sort participants by ID, create rooms as
-// needed following the specified roomType(s), respect capacity.
-// Idempotent — re-running after adding new participants allocates only
-// the unassigned ones.
-//
-// Request body: { roomTypes: ["twin", "quad"], startingRoomNumber: 101 }
-// roomTypes: array of types in order of preference. When filled, moves
-//   to the next type in the list.
-// startingRoomNumber: number to increment for each new room created.
-//
-// Returns: { created: N, skipped: M, warnings: [...] }
+// Kept as a stable policy response for older clients. Admins now configure
+// room inventory explicitly; teachers assign participants to those rooms.
 router.post(
   "/trips/:tripId/rooming/auto",
   verifyToken,
@@ -975,92 +949,10 @@ router.post(
   requireTmcAccess,
   async (req, res) => {
     try {
-      const trip = await loadTrip(req);
-      const { roomTypes, startingRoomNumber } = req.body || {};
-      const types = Array.isArray(roomTypes) && roomTypes.length > 0
-        ? roomTypes.filter((t) => VALID_ROOM_TYPES.includes(t))
-        : ["twin", "quad"];
-      if (types.length === 0) types.push("twin");
-      const startNum = Number(startingRoomNumber) || 101;
-
-      // Fetch all participants and existing room assignments
-      const [participants, existingRooms] = await Promise.all([
-        prisma.tripParticipant.findMany({
-          where: { tripId: trip.id },
-          select: { id: true },
-          orderBy: { id: "asc" },
-        }),
-        prisma.roomingAssignment.findMany({
-          where: { tripId: trip.id },
-          select: { participantIds: true },
-        }),
-      ]);
-
-      const assignedSet = new Set();
-      for (const room of existingRooms) {
-        try {
-          const pids = JSON.parse(room.participantIds || "[]");
-          if (Array.isArray(pids)) {
-            pids.forEach((p) => assignedSet.add(Number(p)));
-          }
-        } catch (_e) {
-          // ignore
-        }
-      }
-
-      const unassigned = participants.filter((p) => !assignedSet.has(p.id));
-      if (unassigned.length === 0) {
-        return res.status(201).json({ created: 0, skipped: 0, warnings: ["All participants already assigned"] });
-      }
-
-      // Auto-allocate: partition unassigned into rooms
-      const toCreate = [];
-      let roomNum = startNum;
-      let typeIdx = 0;
-      let currentRoom = [];
-      const CAPACITY = { single: 1, twin: 2, triple: 3, quad: 4 };
-
-      for (const p of unassigned) {
-        const type = types[typeIdx % types.length];
-        const cap = CAPACITY[type];
-
-        if (currentRoom.length < cap) {
-          currentRoom.push(p.id);
-        }
-
-        if (currentRoom.length === cap) {
-          toCreate.push({
-            tripId: trip.id,
-            roomNumber: String(roomNum++),
-            roomType: type,
-            participantIds: JSON.stringify(currentRoom),
-          });
-          currentRoom = [];
-          typeIdx += 1;
-        }
-      }
-
-      // Leftover participants (partial room)
-      if (currentRoom.length > 0) {
-        const type = types[typeIdx % types.length];
-        toCreate.push({
-          tripId: trip.id,
-          roomNumber: String(roomNum++),
-          roomType: type,
-          participantIds: JSON.stringify(currentRoom),
-        });
-      }
-
-      let created = 0;
-      if (toCreate.length > 0) {
-        const result = await prisma.roomingAssignment.createMany({ data: toCreate });
-        created = result.count;
-      }
-
-      return res.status(201).json({
-        created,
-        skipped: 0,
-        warnings: created === 0 ? ["No new rooms created"] : [],
+      await loadTrip(req);
+      return res.status(403).json({
+        error: "Room inventory is configured by an admin and assignments are made in the teacher portal",
+        code: "ROOM_AUTO_ALLOCATION_DISABLED",
       });
     } catch (err) {
       if (err.status) return res.status(err.status).json({ error: err.message, code: err.code });
@@ -1101,8 +993,6 @@ router.get(
       });
 
       const nameById = new Map(participants.map((p) => [p.id, p.fullName]));
-      const ROOM_CAPACITY = { single: 1, twin: 2, triple: 3, quad: 4 };
-
       const PDFDocument = require("pdfkit");
       const doc = new PDFDocument({ margin: 40 });
 
@@ -1127,15 +1017,14 @@ router.get(
       } else {
         // Table header
         const tableTop = doc.y;
-        const col1 = 50, col2 = 140, col3 = 200, col4 = 250, col5 = 380;
+        const col1 = 50, col2 = 140, col3 = 240, col4 = 320;
         const rowHeight = 20;
 
         doc.fontSize(9).font("Helvetica-Bold").fillColor("#333");
         doc.text("Room #", col1, tableTop);
-        doc.text("Type", col2, tableTop);
-        doc.text("Capacity", col3, tableTop);
-        doc.text("Occupancy", col4, tableTop);
-        doc.text("Participants", col5, tableTop);
+        doc.text("Sharing", col2, tableTop);
+        doc.text("Occupancy", col3, tableTop);
+        doc.text("Participants", col4, tableTop);
 
         doc.moveTo(40, tableTop + 15).lineTo(550, tableTop + 15).stroke();
         let y = tableTop + 20;
@@ -1151,22 +1040,21 @@ router.get(
           if (!Array.isArray(pids)) pids = [];
 
           const names = pids.map((pid) => nameById.get(Number(pid)) || `#${pid}`).join(", ");
-          const capacity = ROOM_CAPACITY[room.roomType] || 0;
+          const capacity = resolveSharingCapacity(room);
 
           doc.fillColor("black");
           doc.text(String(room.roomNumber), col1, y);
-          doc.text(room.roomType, col2, y);
-          doc.text(String(capacity), col3, y);
-          doc.text(String(pids.length), col4, y);
+          doc.text(capacity === null ? "Not set" : `${capacity} sharing`, col2, y);
+          doc.text(String(pids.length), col3, y);
 
-          const textWidth = 150;
+          const textWidth = 220;
           doc.fontSize(9);
           const nameLines = doc.heightOfString(names, { width: textWidth });
           if (y + nameLines > 750) {
             doc.addPage();
             y = 40;
           }
-          doc.text(names, col5, y, { width: textWidth });
+          doc.text(names, col4, y, { width: textWidth });
 
           y += Math.max(rowHeight, nameLines) + 5;
           if (y > 750) {

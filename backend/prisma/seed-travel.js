@@ -1539,6 +1539,7 @@ async function seedTmcOperationalExtras(tenantId) {
         tripId: baliTrip.id,
         roomNumber,
         roomType: "twin",
+        sharingCapacity: 2,
         participantIds: JSON.stringify(twinIds),
       },
     });

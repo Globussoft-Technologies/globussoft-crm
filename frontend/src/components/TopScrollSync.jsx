@@ -12,6 +12,8 @@ import { useEffect, useRef, useState } from "react";
 // native bottom scrollbar, which is useful on dense split tables where the
 // top bar is the only one we want the user to see. `hideTopBar` does the
 // reverse (no top bar, native bottom scrollbar only); opt-in, default false.
+// `hideBottomHorizontalScrollbar` hides only the content pane's horizontal
+// scrollbar, leaving its vertical scrollbar available.
 //
 // `scrollWidth` is OPTIONAL - when omitted, the actual rendered width of the
 // wrapped content is measured automatically (via ResizeObserver, so it stays
@@ -20,8 +22,8 @@ import { useEffect, useRef, useState } from "react";
 // (e.g. it also drives the table's own minWidth) and want to skip the extra
 // measurement.
 // `bottomBarLeadingWidth` adds a separate bottom scrollbar after a fixed
-// leading column. Pair it with `hideBottomScrollbar` and pass the scrollable
-// columns' width as `scrollWidth`.
+// leading column. Pair it with `hideBottomHorizontalScrollbar` to retain the
+// vertical scrollbar, and pass the scrollable columns' width as `scrollWidth`.
 const TopScrollSync = ({
   scrollWidth,
   children,
@@ -30,6 +32,7 @@ const TopScrollSync = ({
   stickyTop = false,
   stickyTopOffset = 0,
   hideBottomScrollbar = false,
+  hideBottomHorizontalScrollbar = false,
   hideTopBar = false,
   verticalOverflow = "visible",
   stickyBottom = false,
@@ -211,10 +214,12 @@ const TopScrollSync = ({
         role={contentRole}
         aria-label={contentAriaLabel}
         tabIndex={contentTabIndex}
-        className={`top-scroll-sync__bottom${hideBottomScrollbar || stickyBottom ? " top-scroll-sync__bottom--hidden-scrollbar" : ""}${contentClassName ? ` ${contentClassName}` : ""}`}
+        className={`top-scroll-sync__bottom${hideBottomScrollbar || stickyBottom ? " top-scroll-sync__bottom--hidden-scrollbar" : ""}${hideBottomHorizontalScrollbar ? " top-scroll-sync__bottom--hidden-horizontal-scrollbar" : ""}${contentClassName ? ` ${contentClassName}` : ""}`}
         style={{
           overflowX: stickyBottom
             ? "visible"
+            : hideBottomHorizontalScrollbar
+              ? "hidden"
             : forceScrollbar
               ? "scroll"
               : "auto",

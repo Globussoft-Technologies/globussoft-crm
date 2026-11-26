@@ -4,13 +4,11 @@
  *
  * What's pinned
  * -------------
- *   - Rooming (5 routes):
+ *   - Rooming (inventory and assignment separation):
  *       GET    /trips/:tripId/rooming                    all-roles, requireTmcAccess
- *       POST   /trips/:tripId/rooming                    ADMIN+MGR, room-type enum,
- *                                                        capacity caps (1/2/3/4),
- *                                                        participantIds-on-trip check
- *       PATCH  /trips/:tripId/rooming/:roomId            ADMIN+MGR, partial-update,
- *                                                        capacity re-check, 404 cross-trip
+ *       POST   /trips/:tripId/rooming                    ADMIN+MGR, empty room inventory
+ *       PATCH  /trips/:tripId/rooming/:roomId            ADMIN+MGR, room number/capacity,
+ *                                                        capacity and 404 checks
  *       DELETE /trips/:tripId/rooming/:roomId            ADMIN only
  *       GET    /trips/:tripId/rooming/export.xlsx        ADMIN+MGR, XLSX content-type
  *   - Payment plan (3 routes):
@@ -35,7 +33,7 @@
  *   verifyToken → [requirePermission?] → requireTravelTenant → requireTmcAccess → handler
  *
  * Failure-path codes pinned by the route source as of this commit:
- *   400 INVALID_ID / INVALID_ROOM_ID / MISSING_FIELDS / INVALID_ROOM_TYPE /
+ *   400 INVALID_ID / INVALID_ROOM_ID / MISSING_FIELDS / INVALID_SHARING_CAPACITY /
  *       ROOM_CAPACITY_EXCEEDED / PARTICIPANTS_OFF_TRIP / INVALID_PARTICIPANTS /
  *       EMPTY_BODY / INVALID_JSON / EMPTY_INSTALMENTS / INVALID_STATUS /
  *       INVALID_INPUT / INVALID_DATE / INVALID_AMOUNT / PARTICIPANT_OFF_TRIP
@@ -183,6 +181,7 @@ describe('GET /api/travel/trips/:tripId/rooming', () => {
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ rooming: expect.any(Array) });
     expect(res.body.rooming).toHaveLength(1);
+    expect(res.body.rooming[0].sharingCapacity).toBe(2);
     expect(prisma.roomingAssignment.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { tripId: 100 },
@@ -233,85 +232,58 @@ describe('GET /api/travel/trips/:tripId/rooming', () => {
 // -----------------------------------------------------------------------------
 
 describe('POST /api/travel/trips/:tripId/rooming', () => {
-  test('happy path returns 201 with persisted row (participantIds stringified)', async () => {
-    prisma.tripParticipant.count.mockResolvedValue(2);
+  test('admin creates an empty room with a custom sharing capacity', async () => {
     prisma.roomingAssignment.findFirst.mockResolvedValue(null); // no duplicate room
-    prisma.roomingAssignment.findMany.mockResolvedValue([]); // no existing assignments
     prisma.roomingAssignment.create.mockResolvedValue({
-      id: 50, tripId: 100, roomNumber: '101', roomType: 'twin', participantIds: '[1,2]',
+      id: 50, tripId: 100, roomNumber: '101', roomType: 'custom', sharingCapacity: 5, participantIds: '[]',
     });
     const res = await request(makeApp())
       .post('/api/travel/trips/100/rooming')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ roomNumber: '101', roomType: 'twin', participantIds: [1, 2] });
+      .send({ roomNumber: '101', sharingCapacity: 5 });
     expect(res.status).toBe(201);
-    expect(res.body).toMatchObject({ id: 50, roomType: 'twin' });
+    expect(res.body).toMatchObject({ id: 50, roomType: 'custom', sharingCapacity: 5 });
     // tripId comes from the URL param (after loadTrip), NOT body.
     expect(prisma.roomingAssignment.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           tripId: 100,
           roomNumber: '101',
-          roomType: 'twin',
-          participantIds: JSON.stringify([1, 2]),
+          roomType: 'custom',
+          sharingCapacity: 5,
+          participantIds: '[]',
         }),
       }),
     );
   });
 
-  test('missing roomType returns 400 MISSING_FIELDS', async () => {
+  test('missing sharingCapacity returns 400 MISSING_FIELDS', async () => {
     const res = await request(makeApp())
       .post('/api/travel/trips/100/rooming')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ roomNumber: '101', participantIds: [1] });
+      .send({ roomNumber: '101' });
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: 'MISSING_FIELDS' });
     expect(prisma.roomingAssignment.create).not.toHaveBeenCalled();
   });
 
-  test('participantIds must be an array (string yields 400 MISSING_FIELDS)', async () => {
+  test('admin cannot assign participants while creating room inventory', async () => {
     const res = await request(makeApp())
       .post('/api/travel/trips/100/rooming')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ roomNumber: '101', roomType: 'twin', participantIds: 'not-array' });
-    expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ code: 'MISSING_FIELDS' });
+      .send({ roomNumber: '101', sharingCapacity: 2, participantIds: 'not-array' });
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'PARTICIPANT_ASSIGNMENT_TEACHER_ONLY' });
     expect(prisma.roomingAssignment.create).not.toHaveBeenCalled();
   });
 
-  test('invalid roomType returns 400 INVALID_ROOM_TYPE', async () => {
+  test('invalid sharing capacity returns 400 INVALID_SHARING_CAPACITY', async () => {
     const res = await request(makeApp())
       .post('/api/travel/trips/100/rooming')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ roomNumber: '101', roomType: 'penthouse', participantIds: [1] });
+      .send({ roomNumber: '101', sharingCapacity: 2.5 });
     expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ code: 'INVALID_ROOM_TYPE' });
-    expect(res.body.error).toMatch(/single/);
-    expect(res.body.error).toMatch(/quad/);
-    expect(prisma.roomingAssignment.create).not.toHaveBeenCalled();
-  });
-
-  test('participantIds.length over room capacity returns 400 ROOM_CAPACITY_EXCEEDED', async () => {
-    const res = await request(makeApp())
-      .post('/api/travel/trips/100/rooming')
-      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ roomNumber: '101', roomType: 'twin', participantIds: [1, 2, 3] });
-    expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ code: 'ROOM_CAPACITY_EXCEEDED' });
-    expect(res.body.error).toMatch(/twin/);
-    expect(res.body.error).toMatch(/at most 2/);
-    expect(prisma.roomingAssignment.create).not.toHaveBeenCalled();
-  });
-
-  test('participantIds off-trip returns 400 PARTICIPANTS_OFF_TRIP', async () => {
-    // Count returns 1 but we sent 2 ids — one isn't on this trip.
-    prisma.tripParticipant.count.mockResolvedValue(1);
-    const res = await request(makeApp())
-      .post('/api/travel/trips/100/rooming')
-      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ roomNumber: '101', roomType: 'twin', participantIds: [1, 999] });
-    expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ code: 'PARTICIPANTS_OFF_TRIP' });
+    expect(res.body).toMatchObject({ code: 'INVALID_SHARING_CAPACITY' });
     expect(prisma.roomingAssignment.create).not.toHaveBeenCalled();
   });
 
@@ -319,21 +291,20 @@ describe('POST /api/travel/trips/:tripId/rooming', () => {
     const res = await request(makeApp())
       .post('/api/travel/trips/100/rooming')
       .set('Authorization', `Bearer ${tokenFor('USER')}`)
-      .send({ roomNumber: '101', roomType: 'twin', participantIds: [] });
+      .send({ roomNumber: '101', sharingCapacity: 2 });
     expect(res.status).toBe(403);
     expect(prisma.roomingAssignment.create).not.toHaveBeenCalled();
   });
 
   test('MANAGER role IS allowed (gate is ADMIN+MANAGER)', async () => {
     prisma.user.findUnique.mockResolvedValue({ role: 'MANAGER', subBrandAccess: null });
-    prisma.tripParticipant.count.mockResolvedValue(0);
     prisma.roomingAssignment.create.mockResolvedValue({
-      id: 51, tripId: 100, roomNumber: '102', roomType: 'single', participantIds: '[]',
+      id: 51, tripId: 100, roomNumber: '102', roomType: 'single', sharingCapacity: 1, participantIds: '[]',
     });
     const res = await request(makeApp())
       .post('/api/travel/trips/100/rooming')
       .set('Authorization', `Bearer ${tokenFor('MANAGER')}`)
-      .send({ roomNumber: '102', roomType: 'single', participantIds: [] });
+      .send({ roomNumber: '102', sharingCapacity: 1 });
     expect(res.status).toBe(201);
     expect(prisma.roomingAssignment.create).toHaveBeenCalled();
   });
@@ -365,6 +336,26 @@ describe('PATCH /api/travel/trips/:tripId/rooming/:roomId', () => {
     );
   });
 
+  test('admin updates a room to a custom sharing capacity', async () => {
+    prisma.roomingAssignment.findFirst.mockResolvedValue({
+      id: 50, tripId: 100, roomNumber: '101', roomType: 'twin', sharingCapacity: 2, participantIds: '[1,2]',
+    });
+    prisma.roomingAssignment.update.mockResolvedValue({
+      id: 50, tripId: 100, roomNumber: '101', roomType: 'custom', sharingCapacity: 6, participantIds: '[1,2]',
+    });
+    const res = await request(makeApp())
+      .patch('/api/travel/trips/100/rooming/50')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ sharingCapacity: 6 });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: 50, sharingCapacity: 6 });
+    expect(prisma.roomingAssignment.update).toHaveBeenCalledWith({
+      where: { id: 50 },
+      data: { sharingCapacity: 6, roomType: 'custom' },
+    });
+  });
+
   test('cross-trip roomId returns 404 ROOM_NOT_FOUND (no update)', async () => {
     prisma.roomingAssignment.findFirst.mockResolvedValue(null);
     const res = await request(makeApp())
@@ -389,18 +380,29 @@ describe('PATCH /api/travel/trips/:tripId/rooming/:roomId', () => {
     expect(prisma.roomingAssignment.update).not.toHaveBeenCalled();
   });
 
-  test('PATCH-time capacity check uses NEW roomType when both type+ids change', async () => {
+  test('staff cannot assign participants through the room configuration endpoint', async () => {
     prisma.roomingAssignment.findFirst.mockResolvedValue({
       id: 50, tripId: 100, roomNumber: '101', roomType: 'quad', participantIds: '[1,2,3,4]',
     });
-    // Shrinking quad → single while keeping 2 ids should fail single's cap of 1.
     const res = await request(makeApp())
       .patch('/api/travel/trips/100/rooming/50')
       .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
-      .send({ roomType: 'single', participantIds: [1, 2] });
+      .send({ participantIds: [1, 2] });
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'PARTICIPANT_ASSIGNMENT_TEACHER_ONLY' });
+    expect(prisma.roomingAssignment.update).not.toHaveBeenCalled();
+  });
+
+  test('staff cannot shrink a room below its current occupancy', async () => {
+    prisma.roomingAssignment.findFirst.mockResolvedValue({
+      id: 50, tripId: 100, roomNumber: '101', roomType: 'twin', participantIds: '[1,2]',
+    });
+    const res = await request(makeApp())
+      .patch('/api/travel/trips/100/rooming/50')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`)
+      .send({ sharingCapacity: 1 });
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: 'ROOM_CAPACITY_EXCEEDED' });
-    expect(res.body.error).toMatch(/single/);
     expect(prisma.roomingAssignment.update).not.toHaveBeenCalled();
   });
 
@@ -439,6 +441,19 @@ describe('DELETE /api/travel/trips/:tripId/rooming/:roomId', () => {
       .delete('/api/travel/trips/100/rooming/50')
       .set('Authorization', `Bearer ${tokenFor('MANAGER')}`);
     expect(res.status).toBe(403);
+    expect(prisma.roomingAssignment.delete).not.toHaveBeenCalled();
+  });
+
+  test('an assigned room must be cleared in the teacher portal before deletion', async () => {
+    prisma.tripParticipant.count.mockResolvedValue(1);
+    prisma.roomingAssignment.findFirst.mockResolvedValue({
+      id: 50, tripId: 100, roomNumber: '101', roomType: 'twin', participantIds: '[1]',
+    });
+    const res = await request(makeApp())
+      .delete('/api/travel/trips/100/rooming/50')
+      .set('Authorization', `Bearer ${tokenFor('ADMIN')}`);
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({ code: 'ROOM_HAS_ASSIGNMENTS' });
     expect(prisma.roomingAssignment.delete).not.toHaveBeenCalled();
   });
 

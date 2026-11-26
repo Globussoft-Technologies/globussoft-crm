@@ -7,15 +7,15 @@
  * — the most-recent travel-fork admin pages):
  *
  *   1. Page chrome: heading "TMC Trips" + Lucide Luggage icon + filter bar
- *      (status <select> + Refresh button) + "New Trip" CTA (always visible —
- *      no RBAC gate in the SUT).
+ *      an expandable multi-field filter panel, Refresh button, and "New Trip" CTA
+ *      (always visible — no RBAC gate in the SUT).
  *   2. Loading state: shows "Loading…" placeholder before first GET resolves
  *      (await findByText per CLAUDE.md tick #108 cron-learning).
- *   3. GET on mount: hits /api/travel/trips?limit=200 (no status when filter
- *      is empty) and renders one row per trip (table layout, 7 columns).
+ *   3. GET on mount renders one row per trip with the full 12-column table.
  *   4. Empty state: zero trips → "No trips yet. New trips spawn from the
  *      linked Deal in the sales pipeline." copy.
- *   5. Status filter: selecting "Confirmed" re-fetches with ?status=confirmed.
+ *   5. Filter panel: trip family, trip type, status, and departure-date range
+ *      can be combined and re-fetch with their query parameters after Apply.
  *   6. Status badge per row: renders the trip status text (lowercase in DOM,
  *      uppercased via CSS textTransform — the row for trip 101 contains the
  *      literal text "confirmed", 102 contains "in-trip", etc.).
@@ -66,9 +66,8 @@
  *     Tests OMIT the canWrite=false assertion path.
  *   - Prompt's status enum suggested "confirmed / in-trip / completed /
  *     cancelled" — pinned exactly via SUT's STATUSES array (lines 17-23).
- *   - Prompt mentioned "trip-type filter" — no trip-type filter exists.
- *     The only filter is status. School-contact-id filter is supported
- *     by the BACKEND query but NOT exposed in the page chrome.
+ *   - Trip family, trip type, and status are the selectable filters.
+ *     Search remains separate and covers trip code or destination.
  *   - Prompt mentioned navigation to TripDetail — pinned via getByRole
  *     ('link') with href /travel/trips/:id (not a row-onClick handler).
  *   - SUT's "Loading…" text is rendered via the &hellip; entity (literal
@@ -275,7 +274,8 @@ describe('<Trips /> — page chrome', () => {
       screen.getByRole('heading', { name: /TMC Trips/i }),
     ).toBeInTheDocument();
     expect(screen.getByLabelText(/Search trips/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Filter by status/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Filter trips/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Filter by status/i)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Reload list/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Create a new trip/i })).toBeInTheDocument();
     // Wait for the mount-time GET to settle.
@@ -293,6 +293,67 @@ describe('<Trips /> — page chrome', () => {
       expect(badge).toBeInTheDocument();
     });
     expect(screen.getByRole('table')).toBeInTheDocument();
+  });
+});
+
+describe('<Trips /> — resizable trip table', () => {
+  it('uses default widths and keeps the Trip Code column marked as frozen', async () => {
+    renderPage();
+    const table = await screen.findByRole('table');
+
+    expect(Array.from(table.querySelectorAll('col')).map((column) => column.style.width)).toEqual([
+      '190px', '210px', '280px', '120px', '150px', '240px',
+      '250px', '150px', '145px', '160px', '120px', '140px',
+    ]);
+    expect(table.style.borderCollapse).toBe('separate');
+    expect(table.querySelector('thead th:first-child')).toHaveClass('travel-trips-table__trip-code-header');
+    expect(table.querySelector('tbody tr td:first-child')).toHaveClass('travel-trips-table__trip-code-cell');
+    expect(within(table).getByRole('columnheader', { name: 'Actions' })).toHaveTextContent('Actions');
+    expect(Array.from(table.querySelectorAll('thead th')).every((header) => header.style.textAlign === 'left')).toBe(true);
+    expect(table.querySelector('tbody tr td:last-child').style.textAlign).toBe('left');
+    expect(within(table).getAllByRole('button', { name: /^Sort / }).every((button) => button.classList.contains('travel-trips-table__sort-button'))).toBe(true);
+    expect(screen.getAllByRole('separator', { name: /^Resize .* column$/ })).toHaveLength(12);
+
+    const scrollSync = table.closest('.top-scroll-sync');
+    const horizontalScrollbar = scrollSync.querySelector('.top-scroll-sync__detached-bottom');
+    expect(horizontalScrollbar.style.marginLeft).toBe('190px');
+    expect(horizontalScrollbar.style.width).toBe('calc(100% - 190px)');
+    expect(horizontalScrollbar.firstElementChild.style.width).toBe('1965px');
+    const tableViewport = scrollSync.querySelector('.travel-trips-table-viewport');
+    expect(tableViewport).toHaveClass('top-scroll-sync__bottom--hidden-horizontal-scrollbar');
+    expect(tableViewport.style.overflowX).toBe('hidden');
+    expect(tableViewport.style.overflowY).toBe('auto');
+    expect(tableViewport.style.scrollbarWidth).toBe('auto');
+  });
+
+  it('limits Trip Code resizing while other columns can grow and collapse to their minimum', async () => {
+    renderPage();
+    const table = await screen.findByRole('table');
+    const viewport = table.closest('.travel-trips-table-viewport');
+    Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 1200 });
+    const [tripCodeColumn, familyColumn] = table.querySelectorAll('col');
+    const tripCodeHandle = screen.getByRole('separator', { name: 'Resize Trip code column' });
+    const familyHandle = screen.getByRole('separator', { name: 'Resize Trip family column' });
+
+    fireEvent.pointerDown(tripCodeHandle, { button: 0, clientX: 100 });
+    fireEvent.pointerMove(window, { clientX: 1000 });
+    fireEvent.pointerUp(window);
+    expect(tripCodeColumn.style.width).toBe('600px');
+
+    fireEvent.pointerDown(tripCodeHandle, { button: 0, clientX: 1000 });
+    fireEvent.pointerMove(window, { clientX: 0 });
+    fireEvent.pointerUp(window);
+    expect(tripCodeColumn.style.width).toBe('150px');
+
+    fireEvent.pointerDown(familyHandle, { button: 0, clientX: 100 });
+    fireEvent.pointerMove(window, { clientX: 900 });
+    fireEvent.pointerUp(window);
+    expect(familyColumn.style.width).toBe('1010px');
+
+    fireEvent.pointerDown(familyHandle, { button: 0, clientX: 900 });
+    fireEvent.pointerMove(window, { clientX: 0 });
+    fireEvent.pointerUp(window);
+    expect(familyColumn.style.width).toBe('120px');
   });
 });
 
@@ -375,9 +436,10 @@ describe('<Trips /> — filter behavior', () => {
     await screen.findByText('TMC-AND-2026-MUMBAI-G7');
     fetchApiMock.mockClear();
     installFetchMock({ list: { trips: [TRIPS_DEFAULT[0]], total: 1, limit: 20, offset: 0 } });
-    fireEvent.change(screen.getByLabelText(/Filter by status/i), {
-      target: { value: 'confirmed' },
-    });
+    fireEvent.click(screen.getByRole('button', { name: /Filter trips/i }));
+    fireEvent.click(screen.getByLabelText(/Filter by status/i));
+    fireEvent.click(screen.getByLabelText('Confirmed'));
+    fireEvent.click(screen.getByRole('button', { name: /Apply filters/i }));
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(([u, o]) =>
         typeof u === 'string'
@@ -386,6 +448,65 @@ describe('<Trips /> — filter behavior', () => {
       );
       expect(call).toBeTruthy();
     });
+  });
+
+  it('applies trip family, type, status, and departure dates together', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fetchApiMock.mockClear();
+    installFetchMock({ list: { trips: [TRIPS_DEFAULT[0]], total: 1, limit: 20, offset: 0 } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Filter trips/i }));
+    const filterPanel = screen.getByRole('region', { name: /Trip filters/i });
+    expect(filterPanel).toHaveStyle({ position: 'relative' });
+    expect(filterPanel.nextElementSibling).toHaveClass('travel-trips-page__table-card');
+    expect(filterPanel.querySelectorAll('[role="group"]')).toHaveLength(3);
+    expect(filterPanel.querySelectorAll('input[type="date"]')).toHaveLength(2);
+    fireEvent.click(screen.getByLabelText(/Filter by trip family/i));
+    fireEvent.click(screen.getByLabelText('Primary'));
+    fireEvent.click(screen.getByLabelText('Variant'));
+    fireEvent.click(screen.getByLabelText(/Filter by trip type/i));
+    fireEvent.click(screen.getByLabelText('International'));
+    fireEvent.click(screen.getByLabelText('Domestic'));
+    fireEvent.click(screen.getByLabelText(/Filter by status/i));
+    fireEvent.click(screen.getByLabelText('Confirmed'));
+    fireEvent.click(screen.getByLabelText('Completed'));
+    fireEvent.change(screen.getByLabelText(/Depart from/i), {
+      target: { value: '2027-02-01' },
+    });
+    fireEvent.change(screen.getByLabelText(/Depart to/i), {
+      target: { value: '2027-02-28' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Apply filters/i }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([url, options]) => {
+        if (typeof url !== 'string' || !url.startsWith('/api/travel/trips') || (options?.method && options.method !== 'GET')) return false;
+        const params = new URL(`http://local${url}`).searchParams;
+        return params.getAll('family').join(',') === 'primary,variant'
+          && params.getAll('tripType').join(',') === 'international,domestic'
+          && params.getAll('status').join(',') === 'confirmed,completed'
+          && params.get('departFrom') === '2027-02-01'
+          && params.get('departTo') === '2027-02-28';
+      });
+      expect(call).toBeTruthy();
+    });
+  });
+
+  it('rejects a departure range where Depart from is after Depart to', async () => {
+    renderPage();
+    await screen.findByText('TMC-AND-2026-MUMBAI-G7');
+    fireEvent.click(screen.getByRole('button', { name: /Filter trips/i }));
+
+    const departFrom = screen.getByLabelText(/Depart from/i);
+    const departTo = screen.getByLabelText(/Depart to/i);
+    fireEvent.change(departFrom, { target: { value: '2027-02-28' } });
+    fireEvent.change(departTo, { target: { value: '2027-02-01' } });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(/Depart from must be on or before Depart to/i);
+    expect(departFrom).toHaveAttribute('max', '2027-02-01');
+    expect(departTo).toHaveAttribute('min', '2027-02-28');
+    expect(screen.getByRole('button', { name: /Apply filters/i })).toBeDisabled();
   });
 
   it('Refresh button re-fires the GET', async () => {
@@ -960,9 +1081,10 @@ describe('<Trips /> — search + pagination behavior', () => {
     await screen.findByText('TMC-PAGE-01');
     fetchApiMock.mockClear();
 
-    fireEvent.change(screen.getByLabelText(/Filter by status/i), {
-      target: { value: 'confirmed' },
-    });
+    fireEvent.click(screen.getByRole('button', { name: /Filter trips/i }));
+    fireEvent.click(screen.getByLabelText(/Filter by status/i));
+    fireEvent.click(screen.getByLabelText('Confirmed'));
+    fireEvent.click(screen.getByRole('button', { name: /Apply filters/i }));
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(([u, o]) =>

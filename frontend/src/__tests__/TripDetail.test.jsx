@@ -32,6 +32,8 @@
  *  11. Documents tab: admin-defined names and accepted file types render in
  *      the participant upload-status matrix.
  *  12. Documents tab: add/edit/remove requests use the trip requirement API.
+ *  13. Documents tab: the full trip consent document loads for editing and
+ *      updated clauses are sent to the requirement API.
  *  13. Load error: GET rejection surfaces notify.error with the body.error.
  *
  * Backend contract pinned (per backend/routes/travel_trips.js):
@@ -121,6 +123,7 @@ const notifyObj = {
   confirm: notifyConfirm,
   prompt: notifyPrompt,
 };
+const CONSENT_TERMS_TEMPLATE = 'TERMS AND CONDITIONS FOR INTERNATIONAL EDUCATIONAL TRAVEL PROGRAMMES These Terms and Conditions govern the booking and participation. 1. DEFINITIONS Unless the context otherwise requires: A. “Participant” means the student enrolled in the programme. 2. ACCEPTANCE OF TERMS A. By accepting these Terms, the Parent or Guardian agrees to the programme rules.';
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
@@ -152,6 +155,7 @@ function makeTrip(overrides = {}) {
       { id: 1, docType: 'School medical clearance', acceptedFileTypes: ['pdf', 'docx'], required: true },
       { id: 2, docType: 'Emergency contact letter', acceptedFileTypes: ['pdf', 'jpg'], required: true },
     ],
+    _count: { rooming: 0 },
     paymentPlan: null,
     createdAt: '2026-05-20T10:00:00.000Z',
     ...overrides,
@@ -163,6 +167,8 @@ function makeTrip(overrides = {}) {
 function installFetchMock({
   trip = makeTrip(),
   rooming = { rooming: [] },
+  roomCreate = { id: 7002, tripId: 101, roomNumber: '101', roomType: 'twin', sharingCapacity: 2, participantIds: '[]' },
+  roomUpdate = { id: 7001, tripId: 101, roomNumber: '101', roomType: 'twin', sharingCapacity: 2, participantIds: '[]' },
   participantPost = { id: 902, fullName: 'Test Add' },
   // Phase 8 — pending registrations + landing-page mocks default to
   // empty / not-linked so existing tests stay green.
@@ -175,6 +181,7 @@ function installFetchMock({
   parentLink = 'https://example.com/tmc/register/parent?token=abc',
   teachers = [],
 } = {}) {
+  let currentRooming = rooming;
   fetchApiMock.mockImplementation((url, opts) => {
     const method = opts?.method || 'GET';
     // GET /api/travel/trips/:id (single — exact match guards against the
@@ -182,6 +189,9 @@ function installFetchMock({
     if (method === 'GET' && /^\/api\/travel\/trips\/\d+$/.test(url)) {
       if (trip instanceof Error) return Promise.reject(trip);
       return Promise.resolve(trip);
+    }
+    if (method === 'GET' && /^\/api\/travel\/trips\/\d+\/documents$/.test(url)) {
+      return Promise.resolve({ documents: [], consentTermsTemplate: CONSENT_TERMS_TEMPLATE, consentTermsSaved: '' });
     }
     if (method === 'GET' && url === '/api/portal/tmc/staff/teachers') {
       return Promise.resolve({ teachers });
@@ -195,7 +205,19 @@ function installFetchMock({
     }
     // GET /api/travel/trips/:id/rooming
     if (method === 'GET' && /^\/api\/travel\/trips\/\d+\/rooming$/.test(url)) {
-      return Promise.resolve(rooming);
+      return Promise.resolve(currentRooming);
+    }
+    if (method === 'POST' && /^\/api\/travel\/trips\/\d+\/rooming$/.test(url)) {
+      if (Array.isArray(currentRooming?.rooming)) {
+        currentRooming = { ...currentRooming, rooming: [...currentRooming.rooming, roomCreate] };
+      }
+      return Promise.resolve(roomCreate);
+    }
+    if (method === 'PATCH' && /^\/api\/travel\/trips\/\d+\/rooming\/\d+$/.test(url)) {
+      return Promise.resolve(roomUpdate);
+    }
+    if (method === 'DELETE' && /^\/api\/travel\/trips\/\d+\/rooming\/\d+$/.test(url)) {
+      return Promise.resolve({ deleted: true });
     }
     // POST /api/travel/trips/:id/participants
     if (method === 'POST' && /^\/api\/travel\/trips\/\d+\/participants$/.test(url)) {
@@ -271,9 +293,9 @@ function installFetchMock({
 }
 
 // Render at /travel/trips/101 with the Routes + Route wrapper so useParams
-// reads { id: '101' }. The SUT does NOT consume AuthContext (no role gate),
-// so no Provider is needed.
-function renderPage(tripId = 101, entryState = null) {
+// reads { id: '101' }. The default role is ADMIN so room inventory controls
+// can be exercised; individual tests can pass a lower role to check read-only.
+function renderPage(tripId = 101, entryState = null, role = 'ADMIN') {
   let entry = `/travel/trips/${tripId}`;
   if (entryState) {
     if (typeof entryState === 'object' && (Object.prototype.hasOwnProperty.call(entryState, 'pathname') || Object.prototype.hasOwnProperty.call(entryState, 'search') || Object.prototype.hasOwnProperty.call(entryState, 'hash'))) {
@@ -288,7 +310,7 @@ function renderPage(tripId = 101, entryState = null) {
     }
   }
   const authValue = {
-    user: { role: 'ADMIN', tenant: { vertical: 'travel' } },
+    user: { role, tenant: { vertical: 'travel' } },
     tenant: { vertical: 'travel' },
     loading: false,
   };
@@ -464,6 +486,30 @@ describe('<TripDetail /> — Overview tab', () => {
         body: JSON.stringify({ teacherContactIds: [42, 43] }),
       }),
     ));
+  });
+
+  it('expands the teacher picker within the sharing layout without covering nearby actions', async () => {
+    installFetchMock({
+      trip: makeTrip({ teacherContactId: 42 }),
+      teachers: [
+        { id: 42, name: 'Asha Teacher' },
+        { id: 43, name: 'Mira Teacher' },
+      ],
+    });
+    renderPage();
+
+    const trigger = await screen.findByRole('button', { name: 'Assigned teachers: Asha Teacher' });
+    fireEvent.click(trigger);
+
+    const teacherMenu = await screen.findByRole('group', { name: 'Available TMC teachers' });
+    expect(teacherMenu.parentElement).toContainElement(trigger);
+    expect(teacherMenu.parentElement).toContainElement(teacherMenu);
+    expect(teacherMenu).toHaveStyle({ maxHeight: '240px', overflowY: 'auto' });
+    expect(teacherMenu.style.position).toBe('');
+    expect(screen.getByRole('button', { name: 'Generate parent link' })).toBeEnabled();
+    const landingPagesLink = screen.getByRole('link', { name: 'Go to Landing Pages' });
+    expect(landingPagesLink).toHaveAttribute('href', '/landing-pages');
+    expect(landingPagesLink).toHaveStyle({ opacity: '1', filter: 'none' });
   });
 
   it('copies the teacher portal registration link from trip sharing', async () => {
@@ -720,7 +766,7 @@ describe('<TripDetail /> — Participants tab', () => {
 });
 
 describe('<TripDetail /> — Rooming tab', () => {
-  it('switching to Rooming fires GET /api/travel/trips/:id/rooming + renders the read-only count caption', async () => {
+  it('switching to Rooming loads inventory and exposes admin setup controls', async () => {
     renderPage();
     await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fetchApiMock.mockClear();
@@ -735,24 +781,59 @@ describe('<TripDetail /> — Rooming tab', () => {
     // Empty rooming caption: "0 rooms · 1 of 1 participant unassigned"
     // (singular form for count === 1; rooming returns []).
     expect(await screen.findByText(/0 rooms/)).toBeInTheDocument();
-    // Download-XLSX link — the auth token is appended via ?_t=.
+    // Exports stay hidden on the trip setup page.
     expect(screen.queryByRole('link', { name: /Download rooming as XLSX/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Download rooming as PDF/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Auto-allocate/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Add room/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Add room/i })).toBeInTheDocument();
   });
 
-  it('filters orphaned participantIds from loaded rooms so the room-tile count + unassigned counter agree with the visible checkboxes', async () => {
+  it('admin adds a room number and sharing capacity without assigning participants', async () => {
+    installFetchMock({
+      roomCreate: { id: 7002, tripId: 101, roomNumber: '305', roomType: 'custom', sharingCapacity: 5, participantIds: '[]' },
+    });
+    renderPage();
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
+    fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Add room' }));
+
+    expect(screen.getByText(/Set a room number and the maximum number of participants/i)).toBeInTheDocument();
+    expect(screen.getByText(/Maximum number of participants teachers can assign to this room/i)).toBeInTheDocument();
+    const addRoomButton = screen.getByRole('button', { name: 'Add room' });
+    expect(addRoomButton).toBeDisabled();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Room number' }), { target: { value: '305' } });
+    expect(addRoomButton).toBeDisabled();
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Sharing capacity' }), { target: { value: '5' } });
+    expect(addRoomButton).toBeEnabled();
+    expect(screen.getByText('Room is ready to save.')).toBeInTheDocument();
+    expect(screen.queryByText(/Participants \(0 selected\)/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Add room' }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([url, options]) => (
+        url === '/api/travel/trips/101/rooming' && options?.method === 'POST'
+      ));
+      expect(call).toBeTruthy();
+      expect(JSON.parse(call[1].body)).toEqual({ roomNumber: '305', sharingCapacity: 5 });
+    });
+    expect(notifySuccess).toHaveBeenCalledWith('Room added for teacher assignment');
+  });
+
+  it('USER role can view room inventory but cannot add or assign rooms', async () => {
+    renderPage(101, null, 'USER');
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
+    fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
+    expect(await screen.findByText(/No rooms configured yet/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add room/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Assign participants/i })).not.toBeInTheDocument();
+  });
+
+  it('filters orphaned participantIds so room occupancy and the unassigned counter agree', async () => {
     // Regression: room.participantIds JSON had [901, 999] where 999 was a
     // since-deleted participant. Pre-fix the orphan inflated both the
-    // room-tile "X / capacity" readout (showed 2/2) AND the header
-    // "unassigned" count (used Set membership so 901 looked covered, but
-    // the only rendered checkbox was Anaya, so the visible state showed
-    // 1 box checked) — header read "1 room · 0 of 1 participant unassigned"
-    // while the tile said "2 / 2 assigned" with 1 visible check. Post-fix
-    // the orphan is dropped on load: tile shows 1/2 + header shows 0 of 1
-    // unassigned (still 0 because the surviving participant IS assigned),
-    // and the visible 1 checked box now agrees with both counts.
+    // room-tile capacity readout and made the header's unassigned count
+    // disagree with the current participant roster. The orphan should be
+    // dropped on load so only the surviving participant contributes.
     const tripFixture = makeTrip({
       participants: [
         { id: 901, fullName: 'Anaya Sharma' },
@@ -775,7 +856,7 @@ describe('<TripDetail /> — Rooming tab', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
     // Room tile capacity readout must reflect the SURVIVING participant
     // only — not the orphaned 999. Pre-fix this rendered "2 / 2 assigned".
-    expect(await screen.findByText(/twin \(1\/2\)/i)).toBeInTheDocument();
+    expect(await screen.findByText(/2 sharing \(1\/2\)/i)).toBeInTheDocument();
     expect(screen.queryByText(/2 \/ 2 assigned/)).toBeNull();
     // Header counter agrees with the tile: 1 valid participant who IS
     // assigned → 0 unassigned of 1 total.
@@ -795,8 +876,8 @@ describe('<TripDetail /> — Rooming tab', () => {
 //   - Participants add — POST rejection surfaces notify.error.
 //   - Participants add — Cancel closes the inline form.
 //   - Header date-format edges (null returnDate → "—" via the fmt() helper).
-//   - Rooming — Add-room form opens + capacity-by-type readout.
-//   - Rooming — empty-state "No rooming assignments yet" copy.
+//   - Rooming — admin creates room inventory with a sharing capacity.
+//   - Rooming — empty-state copy and role-specific controls.
 //   - Payment plan — loading-state then empty editor copy.
 //   - Payment plan — Add instalment + validation (missing dueDate).
 //   - Payment plan — total recomputes after adding rows.
@@ -867,19 +948,19 @@ describe('<TripDetail /> — Header date edge cases', () => {
   });
 });
 
-describe('<TripDetail /> - Rooming admin viewer', () => {
-  it('shows rooming counts but hides admin allocation controls when no rooms exist', async () => {
+describe('<TripDetail /> - Rooming admin setup', () => {
+  it('shows room counts and lets admins add room inventory when none exists', async () => {
     renderPage();
     await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
-    expect(await screen.findByText(/No rooming assignments yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/No rooms configured yet/i)).toBeInTheDocument();
     expect(screen.getByText(/0 rooms/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Auto-allocate/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Add room/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Add room/i })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Download rooming/i })).not.toBeInTheDocument();
   });
 
-  it('renders allocated rooms and participants without edit or delete controls', async () => {
+  it('allows admins to edit room number and sharing without assigning participants', async () => {
     const trip = makeTrip({
       participants: [{ id: 901, fullName: 'Anaya Sharma' }],
     });
@@ -891,6 +972,7 @@ describe('<TripDetail /> - Rooming admin viewer', () => {
           tripId: 101,
           roomNumber: '101',
           roomType: 'twin',
+          sharingCapacity: 2,
           participantIds: JSON.stringify([901]),
         }],
       },
@@ -900,8 +982,20 @@ describe('<TripDetail /> - Rooming admin viewer', () => {
     fireEvent.click(screen.getByRole('tab', { name: /Rooming/i }));
     expect(await screen.findByText('Room 101')).toBeInTheDocument();
     expect(screen.getByText('Anaya Sharma')).toBeInTheDocument();
-    expect(screen.queryByTitle('Edit room')).not.toBeInTheDocument();
-    expect(screen.queryByTitle('Delete room')).not.toBeInTheDocument();
+    expect(screen.getByTitle(/Unassign participants in the teacher portal before deleting/i)).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit room' }));
+    const roomNumber = screen.getByRole('textbox', { name: 'Room number' });
+    fireEvent.change(roomNumber, { target: { value: '102' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Sharing capacity' }), { target: { value: '6' } });
+    expect(screen.queryByText(/Participants \(1 selected\)/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save room' }));
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(([url, options]) => (
+        url === '/api/travel/trips/101/rooming/7001' && options?.method === 'PATCH'
+      ));
+      expect(call).toBeTruthy();
+      expect(JSON.parse(call[1].body)).toEqual({ roomNumber: '102', sharingCapacity: 6 });
+    });
   });
 });
 
@@ -1060,7 +1154,7 @@ describe('<TripDetail /> — Payment plan tab', () => {
 // ─── EXTENSION WAVE 2 — 2026-05-26 ──────────────────────────────────────
 //
 // Second extension pass. The first extension covered participants-remove,
-// participants-add-error, header date edges, rooming Add-room form open,
+// participants-add-error, header date edges, rooming assignment and admin room setup,
 // payment-plan editor + Add-instalment + dueDate validation.
 //
 // This wave pins the remaining uncovered surface:
@@ -1070,7 +1164,7 @@ describe('<TripDetail /> — Payment plan tab', () => {
 //      notify.error + no POST fires.
 //   3. Rooming — load failure (GET reject) → empty rooms state, NO crash.
 //   4. Rooming — RoomCard capacity guard: at-capacity unchecked boxes are
-//      disabled so the operator can't over-book a twin/triple/quad.
+//      disabled using the admin-configured room capacity.
 //   5. Payment plan — load with existing plan hydrates editor (instalment
 //      count + Edit-heading text + Delete-plan button visible).
 //   6. Payment plan — empty editor (no instalments) Save surfaces "Add at
@@ -1231,6 +1325,7 @@ describe('<TripDetail /> — dynamic document requirements', () => {
     renderPage();
     await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     fireEvent.click(screen.getByRole('tab', { name: /Documents/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Document collection/i }));
     await screen.findByRole('heading', { name: 'Documents to collect' });
   }
 
@@ -1269,6 +1364,67 @@ describe('<TripDetail /> — dynamic document requirements', () => {
     expect(screen.getByTestId('trip-document-actions')).toHaveStyle({ justifyContent: 'flex-start', width: '100%' });
     expect(screen.getByText('Pending')).toBeInTheDocument();
     expect(screen.queryByText(/Passport|Aadhaar|Visa documents/i)).not.toBeInTheDocument();
+  });
+
+  it('paginates participant documents and lets the admin move between pages', async () => {
+    const participants = Array.from({ length: 6 }, (_, index) => ({
+      id: 900 + index,
+      fullName: `Pagination Participant ${index + 1}`,
+      parentName: `Parent ${index + 1}`,
+    }));
+    await openDocumentsTab(makeTrip({ participants, documentRequirements: [] }));
+
+    expect(screen.getByText('Pagination Participant 1')).toBeInTheDocument();
+    expect(screen.getByText('Pagination Participant 5')).toBeInTheDocument();
+    expect(screen.queryByText('Pagination Participant 6')).not.toBeInTheDocument();
+    expect(screen.getByText('Showing 1-5 of 6 participants')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Next participants page' }));
+    expect(screen.queryByText('Pagination Participant 1')).not.toBeInTheDocument();
+    expect(screen.getByText('Pagination Participant 6')).toBeInTheDocument();
+    expect(screen.getByText('Showing 6-6 of 6 participants')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Previous participants page' }));
+    expect(screen.getByText('Pagination Participant 1')).toBeInTheDocument();
+    expect(screen.queryByText('Pagination Participant 6')).not.toBeInTheDocument();
+  });
+
+  it('shows configured requirements in a searchable compact card grid without a view toggle', async () => {
+    await openDocumentsTab();
+    const configuredRequirements = screen.getByTestId('trip-configured-requirements');
+    const cards = within(configuredRequirements).getByTestId('trip-requirement-cards');
+
+    expect(cards).toHaveAttribute('data-layout', 'grid');
+    expect(within(cards).getAllByTestId('trip-requirement-card')).toHaveLength(2);
+    const searchInput = screen.getByLabelText('Search configured requirements');
+    expect(searchInput).toHaveAttribute('placeholder', 'Search requirement...');
+    expect(searchInput).toHaveStyle({ width: '100%' });
+    expect(screen.queryByRole('button', { name: 'Grid view' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'List view' })).not.toBeInTheDocument();
+    fireEvent.change(searchInput, {
+      target: { value: 'Emergency contact' },
+    });
+    expect(within(cards).getAllByTestId('trip-requirement-card')).toHaveLength(1);
+    expect(within(cards).getByText('Emergency contact letter')).toBeInTheDocument();
+  });
+
+  it('keeps document collection collapsed by default while participant documents remain visible', async () => {
+    installFetchMock({ trip: makeTrip({ documentRequirements: [] }) });
+    renderPage();
+    await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
+    fireEvent.click(screen.getByRole('tab', { name: /Documents/i }));
+
+    const collectionButton = await screen.findByRole('button', { name: /Document collection/i });
+    expect(collectionButton).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('heading', { name: 'Documents to collect' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Participant documents' })).toBeInTheDocument();
+
+    fireEvent.click(collectionButton);
+    expect(await screen.findByRole('heading', { name: 'Documents to collect' })).toBeInTheDocument();
+    expect(collectionButton).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('trip-configured-requirements')).toHaveTextContent('No requirements added yet');
+    fireEvent.click(collectionButton);
+    expect(screen.queryByRole('heading', { name: 'Documents to collect' })).not.toBeInTheDocument();
   });
 
   it('opens participant details from the Participants tab identity cell', async () => {
@@ -1428,10 +1584,13 @@ describe('<TripDetail /> — dynamic document requirements', () => {
 
   it('creates an admin-defined requirement with the selected file types', async () => {
     await openDocumentsTab();
+    const documentNameInput = screen.getByLabelText('Document name');
+    expect(documentNameInput).toBeRequired();
+    expect(documentNameInput.closest('label')).toHaveTextContent(/Document name\s*\*/);
     fireEvent.change(screen.getByLabelText('Document name'), { target: { value: 'Travel insurance certificate' } });
     fireEvent.click(screen.getByRole('checkbox', { name: 'PDF' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'DOCX' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Add document' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add requirement' }));
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
@@ -1447,12 +1606,69 @@ describe('<TripDetail /> — dynamic document requirements', () => {
     expect(notifySuccess).toHaveBeenCalledWith('Document requirement added');
   });
 
-  it('creates a digital consent requirement that uses the approved trip terms', async () => {
+  it('blocks document requirement names that already exist on the trip', async () => {
+    await openDocumentsTab();
+    fireEvent.change(screen.getByLabelText('Document name'), { target: { value: '  school MEDICAL clearance  ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add requirement' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('A document requirement with this name already exists');
+    expect(fetchApiMock.mock.calls.some(
+      ([url, options]) => url === '/api/travel/trips/101/documents' && options?.method === 'POST',
+    )).toBe(false);
+  });
+
+  it('disables adding a second digital consent form while keeping its edit action available', async () => {
+    await openDocumentsTab(makeTrip({
+      documentRequirements: [{
+        id: 42,
+        docType: 'Consent form',
+        captureMode: 'digital_consent',
+        consentTerms: 'Existing clauses.',
+        required: true,
+      }],
+    }));
+
+    expect(screen.getByRole('radio', { name: 'Digital consent form' })).toBeDisabled();
+    expect(screen.getByText('A consent form is already configured. Edit or remove it below.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByRole('radio', { name: 'Digital consent form' })).toBeEnabled();
+    expect(screen.getByLabelText('Consent form terms')).toHaveValue('Existing clauses.');
+  });
+
+  it('shows the digital consent form preview and saves its editable terms', async () => {
     await openDocumentsTab(makeTrip({ tripType: 'international' }));
     fireEvent.change(screen.getByLabelText('Document name'), { target: { value: 'Parent consent form' } });
     fireEvent.click(screen.getByRole('radio', { name: 'Digital consent form' }));
-    expect(screen.getByText(/approved international travel terms/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Add document' }));
+    expect(screen.getByTestId('trip-consent-form-fields')).toBeInTheDocument();
+    expect(screen.getByText('Parent or guardian full name *')).toBeInTheDocument();
+    const termsEditor = await screen.findByLabelText('Consent form terms');
+    await waitFor(() => expect(termsEditor.value).toContain('TERMS AND CONDITIONS FOR INTERNATIONAL EDUCATIONAL TRAVEL PROGRAMMES\n\nThese Terms'));
+    expect(termsEditor.value).toContain('1. DEFINITIONS\nUnless the context otherwise requires:');
+    expect(termsEditor.value).toContain('\nA. “Participant” means');
+    expect(termsEditor.value).toContain('\nB. “Parent/Guardian” means');
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    const previewDialog = await screen.findByRole('dialog', { name: 'Parent consent preview' });
+    expect(previewDialog.parentElement.parentElement).toBe(document.body);
+    expect(previewDialog.getAttribute('style')).toContain('var(--modal-bg, #fff)');
+    expect(within(previewDialog).getByRole('heading', { name: 'TERMS AND CONDITIONS FOR INTERNATIONAL EDUCATIONAL TRAVEL PROGRAMMES' })).toBeInTheDocument();
+    expect(within(previewDialog).getByRole('heading', { name: '1. DEFINITIONS' })).toBeInTheDocument();
+    fireEvent.click(within(previewDialog).getByRole('button', { name: 'Close preview' }));
+    const editedTerms = `${termsEditor.value}\n\nADMIN ADDED CLAUSE`;
+    fireEvent.change(termsEditor, { target: { value: editedTerms } });
+    fireEvent.change(screen.getByLabelText('Document name'), { target: { value: '' } });
+    expect(screen.getByRole('button', { name: 'Add requirement' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, options]) => url === '/api/travel/trips/101' && options?.method === 'PATCH',
+      );
+      expect(call).toBeTruthy();
+      expect(JSON.parse(call[1].body)).toEqual({ consentTerms: editedTerms });
+    });
+    expect(notifySuccess).toHaveBeenCalledWith('Consent form saved');
+    fireEvent.change(screen.getByLabelText('Document name'), { target: { value: 'Parent consent form' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add requirement' }));
 
     await waitFor(() => {
       const call = fetchApiMock.mock.calls.find(
@@ -1464,8 +1680,40 @@ describe('<TripDetail /> — dynamic document requirements', () => {
         acceptedFileTypes: ['pdf', 'jpg', 'png'],
         required: true,
         captureMode: 'digital_consent',
+        consentTerms: editedTerms,
       });
     });
+  });
+
+  it('lets an admin edit and update terms on an existing digital consent form', async () => {
+    await openDocumentsTab(makeTrip({
+      documentRequirements: [{
+        id: 8,
+        docType: 'Parent consent form',
+        acceptedFileTypes: ['pdf'],
+        captureMode: 'digital_consent',
+        consentTerms: 'Current trip consent terms.',
+        required: true,
+      }],
+    }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByLabelText('Consent form terms')).toHaveValue('Current trip consent terms.');
+    fireEvent.change(screen.getByLabelText('Consent form terms'), {
+      target: { value: 'Updated consent terms for the next parent submissions.' },
+    });
+    expect(screen.getByLabelText('Consent form terms')).toHaveValue('Updated consent terms for the next parent submissions.');
+    fireEvent.change(screen.getByLabelText('Document name'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      const call = fetchApiMock.mock.calls.find(
+        ([url, options]) => url === '/api/travel/trips/101' && options?.method === 'PATCH',
+      );
+      expect(call).toBeTruthy();
+      expect(JSON.parse(call[1].body)).toEqual({ consentTerms: 'Updated consent terms for the next parent submissions.' });
+    });
+    expect(notifySuccess).toHaveBeenCalledWith('Consent form saved');
   });
 
   it('edits and removes a configured requirement without a document-type restriction', async () => {
@@ -1824,14 +2072,32 @@ describe('<TripDetail /> — Phase 8 Public Experience: LandingPageCard', () => 
 it('shows saved steps independently and opens the selected tab from either navigator', async () => {
   installFetchMock({ trip: makeTrip({ teacherContactId: 45 }), landingPage: { id: 90, slug: 'school-trip', status: 'PUBLISHED' } });
   renderPage();
-  expect(await screen.findByText('4 of 6 complete')).toBeInTheDocument();
+  expect(await screen.findByText('4 of 7 complete')).toBeInTheDocument();
   expect(screen.getAllByRole('button', { name: 'Step 5: Assign teacher, complete' })).toHaveLength(2);
   const docs = screen.getAllByRole('button', { name: 'Step 3: Documents, complete' });
   fireEvent.click(docs[1]);
   expect(screen.getByRole('tab', { name: 'Documents' })).toHaveAttribute('aria-selected', 'true');
   fireEvent.click(screen.getAllByRole('button', { name: 'Step 2: Payment plan, pending' })[0]);
   expect(screen.getByRole('tab', { name: 'Payment plan' })).toHaveAttribute('aria-selected', 'true');
-  expect(screen.getByText('4 of 6 complete')).toBeInTheDocument();
+  expect(screen.getByText('4 of 7 complete')).toBeInTheDocument();
+});
+
+it('marks Rooming complete in both progress bars after the admin adds a room', async () => {
+  installFetchMock();
+  renderPage();
+  await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
+  const roomingSteps = await screen.findAllByRole('button', { name: 'Step 7: Rooming, pending' });
+  expect(roomingSteps).toHaveLength(2);
+
+  fireEvent.click(roomingSteps[0]);
+  expect(screen.getByRole('tab', { name: /Rooming/i })).toHaveAttribute('aria-selected', 'true');
+  fireEvent.click(await screen.findByRole('button', { name: 'Add room' }));
+  fireEvent.change(screen.getByRole('textbox', { name: 'Room number' }), { target: { value: '701' } });
+  fireEvent.change(screen.getByRole('spinbutton', { name: 'Sharing capacity' }), { target: { value: '5' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Add room' }));
+
+  expect(await screen.findAllByRole('button', { name: 'Step 7: Rooming, complete' })).toHaveLength(2);
+  expect(screen.getByText('3 of 7 complete')).toBeInTheDocument();
 });
 it('restarts the landing highlight and moves it to the teacher row from the floating navigator', async () => {
   installFetchMock();

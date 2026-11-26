@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, Star, Sparkles, AlertCircle, ExternalLink, Search, X, LoaderCircle } from 'lucide-react';
+import { PanelTop, Plus, Copy, Trash2, Globe, FileEdit, Star, Sparkles, AlertCircle, ExternalLink, Search, X, LoaderCircle, LockKeyhole } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { formatPercent } from '../utils/percent';
 import { getLandingPageSharePath, getLandingPageShareUrl, isTravelLandingPage } from '../utils/landingPageUtils';
@@ -654,7 +654,10 @@ export default function LandingPages() {
       : '';
     const msg = `Delete "${name}"?${publishedLine}${submissionsLine}\n\nThis cannot be undone.`;
     if (!await notify.confirm(msg)) return;
-    await fetchApi(`/api/landing-pages/${id}`, { method: 'DELETE' });
+    const result = await fetchApi(`/api/landing-pages/${id}`, { method: 'DELETE' });
+    if (result?.promotionalWebsite?.removed === false) {
+      notify.info('Landing page deleted from CRM. The promotional website copy could not be removed and will remain unavailable.');
+    }
     loadPages();
   };
 
@@ -995,6 +998,12 @@ export default function LandingPages() {
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1rem' }}>
               <div style={{ border: '1px solid var(--border-color)', borderRadius: 8, padding: '0.85rem 0.95rem', background: 'rgba(255,255,255,0.38)' }}>
+                {tripLandingPageContext && (
+                  <div role="note" style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.55rem 0.65rem', marginBottom: '0.8rem', border: '1px solid var(--border-color)', borderRadius: 7, background: 'var(--subtle-bg)', color: 'var(--text-secondary)', fontSize: '0.76rem' }}>
+                    <LockKeyhole size={14} aria-hidden="true" />
+                    Trip details from TMC Trips are fixed here and can’t be edited.
+                  </div>
+                )}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.85rem' }}>
                   <div style={{ gridColumn: '1 / -1' }}>
                     <label htmlFor="gen-destination" style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', fontWeight: 600 }}>Destination *</label>
@@ -1006,13 +1015,14 @@ export default function LandingPages() {
                       placeholder="e.g. Umrah, Bali, Japan, Switzerland"
                       maxLength={80}
                       disabled={generating}
+                      readOnly={Boolean(tripLandingPageContext)}
                       className="input-field"
-                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem' }}
+                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem', ...(tripLandingPageContext ? { background: 'var(--subtle-bg)', cursor: 'not-allowed' } : {}) }}
                     />
                   </div>
                   <div>
                     <label htmlFor="gen-trip-type" style={{ display: 'block', fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.25rem', fontWeight: 600 }}>Trip type *</label>
-                    <select id="gen-trip-type" value={genForm.tripType} onChange={(e) => updateGenField('tripType', e.target.value)} disabled={generating} className="input-field" style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem' }}>
+                    <select id="gen-trip-type" value={genForm.tripType} onChange={(e) => updateGenField('tripType', e.target.value)} disabled={generating || Boolean(tripLandingPageContext)} className="input-field" style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem', ...(tripLandingPageContext ? { background: 'var(--subtle-bg)', cursor: 'not-allowed' } : {}) }}>
                       <option value="international">International trip</option>
                       <option value="domestic">Domestic trip</option>
                       <option value="day_trip">Day trip</option>
@@ -1028,8 +1038,9 @@ export default function LandingPages() {
                       value={genForm.durationDays}
                       onChange={(e) => updateGenField('durationDays', e.target.value)}
                       disabled={generating}
+                      readOnly={Boolean(tripLandingPageContext)}
                       className="input-field"
-                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem' }}
+                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem', ...(tripLandingPageContext ? { background: 'var(--subtle-bg)', cursor: 'not-allowed' } : {}) }}
                     />
                   </div>
                   <div>
@@ -1038,9 +1049,9 @@ export default function LandingPages() {
                       id="gen-subbrand"
                       value={genForm.subBrand}
                       onChange={(e) => updateGenField('subBrand', e.target.value)}
-                      disabled={generating}
+                      disabled={generating || Boolean(tripLandingPageContext)}
                       className="input-field"
-                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem' }}
+                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem', ...(tripLandingPageContext ? { background: 'var(--subtle-bg)', cursor: 'not-allowed' } : {}) }}
                       >
                         <option value="tmc">TMC (school trips)</option>
                         <option value="rfu">RFU (Umrah)</option>
@@ -1058,8 +1069,9 @@ export default function LandingPages() {
                       placeholder='e.g. "Pilgrims", "Honeymooners", "School students Grades 6-12"'
                       maxLength={200}
                       disabled={generating}
+                      readOnly={Boolean(tripLandingPageContext)}
                       className="input-field"
-                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem' }}
+                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem', ...(tripLandingPageContext ? { background: 'var(--subtle-bg)', cursor: 'not-allowed' } : {}) }}
                     />
                   </div>
                 </div>

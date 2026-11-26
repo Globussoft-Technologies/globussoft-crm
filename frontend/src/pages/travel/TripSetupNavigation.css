@@ -59,7 +59,7 @@ body:has(.ts-float) .landing-builder {
 .ts-summary>span,.ts-float>b {gap:6px;font-variant-numeric:tabular-nums}
 .ts-summary i,.ts-strip {display:block;width:96px;height:6px;border-radius:8px;background:#e9e9f2;overflow:hidden}
 .ts-summary i b,.ts-strip b {display:block;height:100%;background:#12b76a;transition:width .25s}
-.ts-dots {display:grid;grid-template-columns:repeat(6,minmax(0,1fr));isolation:isolate}
+.ts-dots {display:grid;grid-template-columns:repeat(7,minmax(0,1fr));isolation:isolate}
 .ts-ui .ts-dots button {position:relative;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:4px;font-size:12px!important;font-weight:600;padding:5px 1px!important;white-space:normal!important;height:auto!important;max-height:none!important;min-height:48px;line-height:1.25}
 .ts-dots button:is(:hover,[aria-current=step]) {background:#f1f2ff}
 .ts-header .ts-dots button[aria-current=step] {background:color-mix(in srgb,#707cf5 13%,transparent)}

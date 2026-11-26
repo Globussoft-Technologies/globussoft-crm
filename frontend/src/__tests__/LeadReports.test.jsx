@@ -88,6 +88,16 @@ const OVERVIEW = {
     { key: 'qualified-lost', label: 'Qualified / Lost', value: 0 },
     { key: 'won-churned', label: 'Won / Churned', value: 0 },
   ],
+  byStatus: [
+    { key: 'new', label: 'New', value: 6 },
+    { key: 'contacted', label: 'Contacted', value: 1 },
+    { key: 'interested', label: 'Interested', value: 0 },
+    { key: 'unqualified', label: 'Unqualified', value: 0 },
+    { key: 'qualified', label: 'Qualified', value: 0 },
+    { key: 'lost', label: 'Lost', value: 0 },
+    { key: 'won', label: 'Won', value: 0 },
+    { key: 'churned', label: 'Churned', value: 0 },
+  ],
   users: [{ id: 7, name: 'Asha Rao' }],
   truncated: false,
 };
@@ -187,7 +197,7 @@ function buildFetchApi(overrides = {}) {
 function renderPage(user = MANAGER) {
   return render(
     <MemoryRouter>
-      <AuthContext.Provider value={{ user, token: 'tk', tenant: { id: 1 }, loading: false }}>
+      <AuthContext.Provider value={{ user, token: 'tk', tenant: { id: 1, vertical: 'generic' }, loading: false }}>
         <LeadReports />
       </AuthContext.Provider>
     </MemoryRouter>,
@@ -230,7 +240,7 @@ describe('LeadReports — productivity tab', () => {
     expect(container.querySelector('.lead-reports-page__chart')).toHaveStyle({
       height: '560px',
     });
-    for (const label of ['Current leads created', 'Lead by source', 'Lead by lifecycle stage', 'Meeting', 'SMS', 'Email', 'WhatsApp']) {
+    for (const label of ['Current leads created', 'Lead by source', 'Lead by status', 'Meeting', 'SMS', 'Email', 'WhatsApp']) {
       expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
     }
     expect(screen.getByText('Query Builder')).toBeInTheDocument();
@@ -242,7 +252,7 @@ describe('LeadReports — productivity tab', () => {
     renderOverviewPage();
     const builder = await screen.findByRole('complementary', { name: 'Lead report query builder' });
     expect(within(builder).getAllByRole('button').map((button) => button.textContent)).toEqual([
-      'Current leads created', 'Lead by source', 'Lead by lifecycle stage', 'Meeting', 'SMS', 'Email', 'WhatsApp',
+      'Current leads created', 'Lead by source', 'Lead by status', 'Meeting', 'SMS', 'Email', 'WhatsApp',
     ]);
     const sourceMetric = within(builder).getByRole('button', { name: 'Lead by source' });
     fireEvent.click(sourceMetric);
@@ -260,7 +270,7 @@ describe('LeadReports — productivity tab', () => {
     fireEvent.click(within(toolbar).getByRole('button', { name: 'Donut chart' }));
     expect(within(toolbar).getByRole('button', { name: 'Donut chart' })).toHaveAttribute('aria-pressed', 'true');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Lead by lifecycle stage' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Lead by status' }));
     expect(within(toolbar).getByRole('button', { name: 'Donut chart' })).toHaveAttribute('aria-pressed', 'true');
   });
 
@@ -292,12 +302,25 @@ describe('LeadReports — productivity tab', () => {
     expect(within(builder).getByText(/Jul 19, 2026.*Aug 17, 2026/)).toBeInTheDocument();
   });
 
-  it('renders the dynamic lifecycle metric without duplicate detail tables', async () => {
+  it('labels the Generic CRM lifecycle metric as status without duplicate detail tables', async () => {
     renderOverviewPage();
-    fireEvent.click(await screen.findByRole('button', { name: 'Lead by lifecycle stage' }));
-    expect(screen.getByRole('heading', { name: 'Lead by lifecycle stage' })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Lead by status' }));
+    expect(screen.getByRole('heading', { name: 'Lead by status' })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Lifecycle stage' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Source' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Interested / Unqualified')).not.toBeInTheDocument();
+  });
+
+  it('keeps lifecycle-stage wording outside Generic CRM', async () => {
+    render(
+      <MemoryRouter>
+        <AuthContext.Provider value={{ user: MANAGER, token: 'tk', tenant: { id: 2, vertical: 'wellness' }, loading: false }}>
+          <LeadReports />
+        </AuthContext.Provider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole('button', { name: 'Lead by lifecycle stage' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Lead by status' })).toBeNull();
   });
 
   it('refreshes the overview when returning from the Leads page', async () => {

@@ -69,6 +69,41 @@ describe("ColumnPicker reorder", () => {
     fireEvent.click(screen.getByRole('button', { name: 'Manage lead fields' }));
     expect(manage).toHaveBeenCalledOnce();
   });
+
+  it('selects the complete dynamic Generic field catalog for the table', async () => {
+    const onColumnsChange = vi.fn();
+    render(
+      <ColumnPicker
+        tableKey="leads"
+        triggerLabel="View"
+        density="comfortable"
+        onColumnsChange={onColumnsChange}
+      />,
+    );
+    await waitFor(() => expect(screen.getByRole('button', { name: 'View' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'View' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select all fields' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/table-column-prefs/leads',
+        expect.objectContaining({
+          method: 'PUT',
+          body: JSON.stringify({
+            visible: [
+              'name', 'email', 'phone', 'company', 'aiScore', 'source',
+              'assignedTo', 'createdAt', 'cf_priority',
+            ],
+          }),
+        }),
+      );
+    });
+    expect(onColumnsChange).toHaveBeenLastCalledWith([
+      'name', 'email', 'phone', 'company', 'aiScore', 'source',
+      'assignedTo', 'createdAt', 'cf_priority',
+    ]);
+  });
   it("publishes the exact live catalog used by Customize table", async () => {
     const onAvailableColumnsChange = vi.fn();
     render(

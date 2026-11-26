@@ -302,7 +302,9 @@ const GENERIC_SIDEBAR_PAGE_SPECS_BASE = [
   { path: '/home', label: 'Home', description: 'Role-aware widget dashboard', hideForAdmin: true },
   { path: '/dashboard', label: 'Dashboard', description: 'Enterprise overview', requiredPermission: { module: 'dashboards', action: 'read' } },
   { path: '/inbox', label: 'Inbox', description: 'Unified inbox', requiredPermission: { module: 'communications', action: 'read' } },
-  { path: '/contacts', label: 'Contacts', description: 'Contact directory', requiredPermission: { module: 'contacts', action: 'read' } },
+  // Generic CRM: Contacts is intentionally hidden from navigation/search.
+  // Keep the access metadata active so direct routes retain their RBAC guard.
+  { path: '/contacts', label: 'Contacts', description: 'Contact directory', requiredPermission: { module: 'contacts', action: 'read' }, sidebarHidden: true },
   { path: '/pipeline', label: 'Deals', description: 'Manage deals by deal type and stage', searchPath: false, requiredPermission: { module: 'deals', action: 'read' } },
   { path: '/pipelines', label: 'Pipelines', description: 'Configure sales pipelines and stages', managerOnly: true, requiredPermission: { module: 'pipeline', action: 'write' } },
   { path: '/leads', label: 'Leads', description: 'Inbound + open leads', requiredPermission: { module: 'leads', action: 'read' } },
@@ -315,19 +317,19 @@ const GENERIC_SIDEBAR_PAGE_SPECS_BASE = [
   { path: '/calendar-sync', label: 'Calendar Sync', description: 'Google and Outlook calendar integration', requiredPermission: { module: 'calendar', action: 'read' } },
   { path: '/live-chat', label: 'Live Chat', description: 'Website visitor chat support', requiredPermission: { module: 'live_chat', action: 'read' } },
   { path: '/deal-insights', label: 'Deal Insights', description: 'AI-powered deal analytics', requiredPermission: { module: 'deal_insights', action: 'read' } },
-  { path: '/playbooks', label: 'Playbooks', description: 'Sales process workflows', requiredPermission: { module: 'playbooks', action: 'read' } },
+  { path: '/playbooks', label: 'Playbooks', description: 'Sales process workflows', requiredPermission: { module: 'playbooks', action: 'read' }, sidebarHidden: true },
   { path: '/booking-pages', label: 'Booking Pages', description: 'Customer booking form builder', requiredPermission: { module: 'booking_pages', action: 'read' }, sidebarHidden: true },
   { path: '/forms', label: 'Web Forms', description: 'Embedded lead capture forms', requiredPermission: { module: 'web_forms', action: 'read' } },
   { path: '/landing-sites', label: 'Landing Sites', description: 'Sector-aware landing site builder', requiredPermission: { module: 'marketing', action: 'read' } },
-  { path: '/signatures', label: 'E-Signatures', description: 'Signature request queue', requiredPermission: { module: 'signatures', action: 'read' } },
-  { path: '/document-templates', label: 'Doc Templates', description: 'Email, SMS, and document templates', aliases: ['templates', 'email templates', 'document templates'], requiredPermission: { module: 'document_templates', action: 'read' } },
+  { path: '/signatures', label: 'E-Signatures', description: 'Signature request queue', requiredPermission: { module: 'signatures', action: 'read' }, sidebarHidden: true },
+  { path: '/document-templates', label: 'Doc Templates', description: 'Email, SMS, and document templates', aliases: ['templates', 'email templates', 'document templates'], requiredPermission: { module: 'document_templates', action: 'read' }, sidebarHidden: true },
   { path: '/invoices', label: 'Invoices', description: 'Invoice ledger + payment links', requiredPermission: { module: 'invoices', action: 'read' } },
   // Generic CRM: Estimates is intentionally removed from search/navigation.
   // { path: '/estimates', label: 'Estimates', description: 'Quotes + estimates sent to customers', requiredPermission: { module: 'estimates', action: 'read' } },
   { path: '/quotes', label: 'Quotes', description: 'Build and manage customer quotes with GST line items', requiredPermission: { module: 'quotes', action: 'read' } },
   { path: '/expenses', label: 'Expenses', description: 'Team expense submissions', requiredPermission: { module: 'expenses', action: 'read' } },
-  { path: '/contracts', label: 'Contracts', description: 'Contract lifecycle management', requiredPermission: { module: 'contracts', action: 'read' } },
-  { path: '/projects', label: 'Projects', description: 'Project tracking + task boards', requiredPermission: { module: 'projects', action: 'read' } },
+  { path: '/contracts', label: 'Contracts', description: 'Contract lifecycle management', requiredPermission: { module: 'contracts', action: 'read' }, sidebarHidden: true },
+  { path: '/projects', label: 'Projects', description: 'Project tracking + task boards', requiredPermission: { module: 'projects', action: 'read' }, sidebarHidden: true },
   { path: '/forecasting', label: 'Forecasting', description: 'Sales forecast modeling', managerOnly: true, sidebarHidden: true },
   { path: '/quotas', label: 'Quotas', description: 'Sales quota management', managerOnly: true, sidebarHidden: true },
   { path: '/reports', label: 'Reports', description: 'CRM reports', managerOnly: true },
@@ -340,14 +342,16 @@ const GENERIC_SIDEBAR_PAGE_SPECS_BASE = [
   { path: '/territories', label: 'Territories', description: 'Sales territory mapping', managerOnly: true, requiredPermission: { module: 'territories', action: 'read' }, parent: 'Team & Territories' },
   { path: '/sales-teams', label: 'Teams', description: 'Manage sales team membership and ownership', managerOnly: true, requiredPermission: { module: 'staff', action: 'manage' }, parent: 'Team & Territories' },
   { path: '/marketing', label: 'Marketing Sequences', description: 'Email, SMS, WhatsApp, template, and webhook sequences', aliases: ['sequence', 'sequences', 'email sequences', 'sms sequences', 'whatsapp sequences', 'templates', 'webhooks'], managerOnly: true },
-  { path: '/sequences', label: 'Sequences', description: 'Multi-step automated outreach', managerOnly: true },
-  { path: '/ab-tests', label: 'A/B Tests', description: 'Marketing experiment builder', managerOnly: true },
-  { path: '/web-visitors', label: 'Web Visitors', description: 'Website visitor tracking', managerOnly: true },
-  { path: '/chatbots', label: 'Chatbots', description: 'Conversational AI builder', managerOnly: true },
-  { path: '/social', label: 'Social Media', description: 'Social listening + posting', managerOnly: true },
+  // Generic CRM: legacy Sequences stays routable but is hidden from navigation/search.
+  { path: '/sequences', label: 'Sequences', description: 'Multi-step automated outreach', managerOnly: true, sidebarHidden: true },
+  { path: '/ab-tests', label: 'A/B Tests', description: 'Marketing experiment builder', managerOnly: true, sidebarHidden: true },
+  // Generic CRM: Web Visitors stays routable but is hidden from navigation/search.
+  { path: '/web-visitors', label: 'Web Visitors', description: 'Website visitor tracking', managerOnly: true, sidebarHidden: true },
+  { path: '/chatbots', label: 'Chatbots', description: 'Conversational AI builder', managerOnly: true, sidebarHidden: true },
+  { path: '/social', label: 'Social Media', description: 'Social listening + posting', managerOnly: true, sidebarHidden: true },
   { path: '/knowledge-base', label: 'Knowledge Base', description: 'Internal + customer-facing knowledge articles', managerOnly: true, sidebarHidden: true },
   { path: '/surveys', label: 'Surveys', description: 'Survey campaigns + responses', managerOnly: true, sidebarHidden: true },
-  { path: '/sla', label: 'SLA Policies', description: 'Service level agreement setup', managerOnly: true },
+  { path: '/sla', label: 'SLA Policies', description: 'Service level agreement setup', managerOnly: true, sidebarHidden: true },
   { path: '/payments', label: 'Payments', description: 'Payment history + gateway transactions', managerOnly: true },
   { path: '/commissions', label: 'Commissions', description: 'Plot commissions, collection thresholds, and payout workflows', aliases: ['commission', 'payouts', 'plot payouts', 'deposit distribution'], managerOnly: true },
   { path: '/lead-scoring', label: 'Lead Scoring', description: 'Lead qualification engine', managerOnly: true, sidebarHidden: true },
@@ -363,14 +367,14 @@ const GENERIC_SIDEBAR_PAGE_SPECS_BASE = [
   { path: '/pickup-work-assignments', label: 'Assign Staff Work', description: 'Assign Transport, Site Visit, and Billing work to any staff member', adminOnly: true },
   { path: '/privacy', label: 'Privacy', description: 'GDPR / DSAR retention controls', adminOnly: true, requiredPermission: { module: 'settings', action: 'manage' } },
   { path: '/field-permissions', label: 'Field Permissions', description: 'Field-level access control', adminOnly: true, requiredPermission: { module: 'field_permissions', action: 'read' }, sidebarHidden: true },
-  { path: '/admin/csp-violations', label: 'CSP Violations', description: 'Content security policy logs', adminOnly: true, requiredPermission: { module: 'settings', action: 'manage' } },
+  { path: '/admin/csp-violations', label: 'CSP Violations', description: 'Content security policy logs', adminOnly: true, requiredPermission: { module: 'settings', action: 'manage' }, sidebarHidden: true },
   { path: '/admin/embed-allowlist', label: 'Embed Allowlist', description: 'iframe embed permissions', adminOnly: true, requiredPermission: { module: 'settings', action: 'manage' } },
-  { path: '/admin/status', label: 'Status', description: 'Platform status admin', adminOnly: true },
-  { path: '/commission-profiles', label: 'Commission Profiles', description: 'Commission rule configuration', adminOnly: true, requiredPermission: { module: 'staff', action: 'manage' } },
-  { path: '/commission-data', label: 'Commission Data', description: 'Commission analytics', adminOnly: true, requiredPermission: { module: 'payments', action: 'read' } },
+  { path: '/admin/status', label: 'Status', description: 'Platform status admin', adminOnly: true, sidebarHidden: true },
+  { path: '/commission-profiles', label: 'Commission Profiles', description: 'Commission rule configuration', adminOnly: true, requiredPermission: { module: 'staff', action: 'manage' }, sidebarHidden: true },
+  { path: '/commission-data', label: 'Commission Data', description: 'Commission analytics', adminOnly: true, requiredPermission: { module: 'payments', action: 'read' }, sidebarHidden: true },
   { path: '/revenue-goals', label: 'Revenue Goals', description: 'Revenue target configuration' },
-  { path: '/channels', label: 'Channels', description: 'SMS, WhatsApp, and call channel config', aliases: ['sms templates', 'whatsapp templates', 'push templates', 'webhooks'], adminOnly: true, requiredPermission: { module: 'integrations', action: 'manage' } },
-  { path: '/industry-templates', label: 'Industry Templates', description: 'Pre-built workflow templates', aliases: ['templates', 'workflow templates'], adminOnly: true, requiredPermission: { module: 'settings', action: 'read' } },
+  { path: '/channels', label: 'Channels', description: 'SMS, WhatsApp, and call channel config', aliases: ['sms templates', 'whatsapp templates', 'push templates', 'webhooks'], adminOnly: true, requiredPermission: { module: 'integrations', action: 'manage' }, sidebarHidden: true },
+  { path: '/industry-templates', label: 'Industry Templates', description: 'Pre-built workflow templates', aliases: ['templates', 'workflow templates'], adminOnly: true, requiredPermission: { module: 'settings', action: 'read' }, sidebarHidden: true },
   { path: '/sandbox', label: 'Sandbox', description: 'Testing + feature preview', adminOnly: true, requiredPermission: { module: 'sandbox', action: 'read' } },
   { path: '/objects', label: 'App Builder', description: 'Create custom data models', adminOnly: true, requiredPermission: { module: 'custom_objects', action: 'read' } },
   { path: '/currencies', label: 'Currencies', description: 'Multi-currency configuration', adminOnly: true, requiredPermission: { module: 'settings', action: 'manage' } },
@@ -384,7 +388,9 @@ const GENERIC_SIDEBAR_PAGE_SPECS_BASE = [
   { path: '/whatsapp', label: 'WhatsApp', description: 'Manage tenant-scoped WhatsApp conversations', requiredPermission: { module: 'whatsapp', action: 'read' } },
   { path: '/lead-reports', label: 'Lead Reports', description: 'Review lead productivity, quality, sources, and follow-ups', managerOnly: true },
   { path: '/field-config', label: 'Field Config', description: 'Configure Generic CRM lead fields, groups, and table columns', adminOnly: true },
-  { path: '/workflows', label: 'Workflows', description: 'Build trigger, condition, and action automations', requiredPermission: { module: 'workflows', action: 'read' } },
+  // Generic CRM: Workflows is intentionally hidden from navigation/search.
+  // Keep the access metadata active so direct routes retain their RBAC guard.
+  { path: '/workflows', label: 'Workflows', description: 'Build trigger, condition, and action automations', requiredPermission: { module: 'workflows', action: 'read' }, sidebarHidden: true },
 ];
 
 export const GENERIC_SIDEBAR_PAGE_SPECS = GENERIC_SIDEBAR_PAGE_SPECS_BASE.map((page) => {
@@ -510,7 +516,29 @@ const TMC_ACTIVE_ONLY_TRAVEL_PAGE_PATHS = new Set(['/travel/tmc/teachers']);
 // Entries returned by /api/pages/me are merged with the local catalogue.
 // Keep this deny-list Generic-only so a stale/server-provided entry cannot
 // make intentionally hidden pages appear in search again.
-const GENERIC_HIDDEN_PAGE_PATHS = new Set(['/lead-routing', '/estimates']);
+const GENERIC_HIDDEN_PAGE_PATHS = new Set([
+  '/contacts',
+  '/workflows',
+  '/sequences',
+  '/web-visitors',
+  '/ab-tests',
+  '/chatbots',
+  '/social',
+  '/playbooks',
+  '/sla',
+  '/contracts',
+  '/admin/csp-violations',
+  '/admin/status',
+  '/commission-profiles',
+  '/commission-data',
+  '/channels',
+  '/industry-templates',
+  '/signatures',
+  '/document-templates',
+  '/projects',
+  '/lead-routing',
+  '/estimates',
+]);
 
 export function isTenantPageHidden(path, hiddenPagePaths = []) {
   if (!path || !Array.isArray(hiddenPagePaths)) return false;

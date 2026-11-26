@@ -2031,6 +2031,11 @@ function WebhookSettingsModal({
           </label>
           <label>
             Callback URL
+            {isGenericCrm && (
+              <span className="required-mark" aria-hidden="true">
+                *
+              </span>
+            )}
             <input
               aria-label="Webhook callback URL"
               value={draft.url}
@@ -3328,7 +3333,13 @@ export default function Workflows({ webhookOnly = false, embedded = false }) {
   }
 
   if (history)
-    return <HistoryPanel workflow={history} onClose={() => setHistory(null)} />;
+    return (
+      <HistoryPanel
+        workflow={history}
+        onClose={() => setHistory(null)}
+        isGenericCrm={isGenericCrm}
+      />
+    );
 
   if (embedded) {
     return (
@@ -3360,6 +3371,7 @@ export default function Workflows({ webhookOnly = false, embedded = false }) {
             onReorder={reorderWorkflows}
             onRunNow={runNow}
             isGenericCrm={isGenericCrm}
+            emptyMessage={webhookOnly && isGenericCrm ? "No webhook available." : null}
           />
         </main>
       </div>
@@ -3488,6 +3500,7 @@ function WorkflowList({
   onReorder,
   onRunNow,
   isGenericCrm = false,
+  emptyMessage = null,
 }) {
   const [dragIndex, setDragIndex] = useState(null);
   const canReorder = view === "all";
@@ -3527,7 +3540,7 @@ function WorkflowList({
       ) : workflows.length === 0 ? (
         <div className="workflow-empty">
           <Activity size={42} />
-          <h3>No workflows found</h3>
+          <h3>{emptyMessage || "No workflows found"}</h3>
           <button className="workflow-primary" onClick={onCreate}>
             Create workflow
           </button>
@@ -4013,7 +4026,7 @@ function WorkflowEditor({
  * model has never had. Previous/Next were hardcoded `disabled` and the period
  * dropdown had an empty onChange.
  */
-function HistoryPanel({ workflow, onClose }) {
+function HistoryPanel({ workflow, onClose, isGenericCrm = false }) {
   const PAGE_SIZE = 25;
   const [logs, setLogs] = useState([]);
   const [total, setTotal] = useState(0);
@@ -4067,10 +4080,12 @@ function HistoryPanel({ workflow, onClose }) {
         .filter((log) => log.contactId)
         .map((log) => [
           log.contactId,
-          log.contactLabel || `Contact #${log.contactId}`,
+          log.contactLabel || `${isGenericCrm ? "Lead" : "Contact"} #${log.contactId}`,
         ]),
     ).entries(),
   ];
+  const recordFilterLabel = isGenericCrm ? "Filter by leads" : "Filter by contact";
+  const allRecordsLabel = isGenericCrm ? "All leads" : "All contacts";
 
   const statusLabel = (value) =>
     value === "SUCCESS"
@@ -4080,7 +4095,9 @@ function HistoryPanel({ workflow, onClose }) {
         : "Skipped";
 
   return (
-    <div className="workflow-history-overlay">
+    <div
+      className={`workflow-history-overlay ${isGenericCrm ? "workflow-history-overlay--generic" : ""}`}
+    >
       <div className="workflow-history-panel">
         <div className="workflow-history-head">
           <h2>ACTION HISTORY</h2>
@@ -4129,13 +4146,13 @@ function HistoryPanel({ workflow, onClose }) {
             </Select>
           </div>
           <label className="workflow-contact-filter">
-            Filter by contact
+            {recordFilterLabel}
             <Select
-              aria-label="Filter by contact"
+              aria-label={recordFilterLabel}
               value={contactFilter}
               onChange={changeFilter(setContactFilter)}
             >
-              <option value="">All contacts</option>
+              <option value="">{allRecordsLabel}</option>
               {contacts.map(([id, label]) => (
                 <option key={id} value={id}>
                   {label}

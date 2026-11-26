@@ -149,7 +149,8 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     render(<Pipelines />);
     // findByText: data-dependent text appears AFTER the mock fetch settles;
     // sync getByText is a CI-only race under shard load.
-    expect(await screen.findByText('Enterprise Sales')).toBeInTheDocument();
+    expect(await screen.findByText('Default Pipeline')).toBeInTheDocument();
+    expect(screen.queryByText('Enterprise Sales')).not.toBeInTheDocument();
     expect(screen.getByText('SMB Inbound')).toBeInTheDocument();
     expect(screen.getByText('Partner Channel')).toBeInTheDocument();
     // Description for the row with one renders inline.
@@ -168,7 +169,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
 
   it('disables the pipeline-card hover effect only in Generic CRM', async () => {
     const genericView = render(<Pipelines />);
-    const genericCard = (await screen.findByText('Enterprise Sales')).closest('.card');
+    const genericCard = (await screen.findByText('Default Pipeline')).closest('.card');
     expect(genericCard).toHaveClass('generic-pipeline-card');
     expect(genericView.container.querySelector('style')?.textContent).toContain('.generic-pipeline-card:hover');
     expect(genericView.container.querySelector('style')?.textContent).toContain('box-shadow: none !important');
@@ -186,7 +187,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
 
   it('opens the global Pipeline Stages manager from View all stages', async () => {
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     expect(screen.queryByRole('heading', { name: 'Pipeline Stages' })).not.toBeInTheDocument();
     const stagesButton = screen.getByRole('button', { name: 'View all stages' });
     expect(stagesButton.closest('header')).not.toBeNull();
@@ -238,7 +239,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
 
   it('adds a stage with the existing API contract and refreshes the stage list', async () => {
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     fireEvent.click(screen.getByRole('button', { name: 'View all stages' }));
     await screen.findByText('New Lead');
     fireEvent.change(screen.getByRole('textbox', { name: 'New pipeline stage name' }), { target: { value: 'Negotiation' } });
@@ -257,7 +258,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
 
   it('reorders and deletes stages from the Sales Pipelines page', async () => {
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     fireEvent.click(screen.getByRole('button', { name: 'View all stages' }));
     await screen.findByText('New Lead');
 
@@ -280,7 +281,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
 
   it('default-flagged pipeline shows the "Default" badge and hides Set-Default + Delete buttons', async () => {
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     // "Default" badge renders once (only the default row).
     const defaultBadges = screen.getAllByText(/^Default$/i);
     expect(defaultBadges.length).toBe(1);
@@ -292,7 +293,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
 
   it('does not link pipeline cards to the Deals and Pipelines page', async () => {
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     expect(screen.queryByRole('link', { name: /View Pipeline/i })).not.toBeInTheDocument();
   });
 
@@ -312,7 +313,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
 
   it('clicking "Create Pipeline" opens the modal with header "Create Pipeline" + Name/Description inputs', async () => {
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     fireEvent.click(screen.getByRole('button', { name: /Create Pipeline/i }));
     // Modal header.
     expect(screen.getByRole('heading', { name: /^Create Pipeline$/i })).toBeInTheDocument();
@@ -328,7 +329,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
 
   it('saving a Create with an empty name surfaces "Pipeline name is required" and does NOT POST', async () => {
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     fireEvent.click(screen.getByRole('button', { name: /Create Pipeline/i }));
 
     // Click the modal-footer submit (not the header CTA — both share the
@@ -346,7 +347,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
 
   it('does not create a Generic pipeline until at least one stage is added', async () => {
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     fireEvent.click(screen.getByRole('button', { name: /Create Pipeline/i }));
     fireEvent.change(screen.getByPlaceholderText(/e\.g\. Enterprise Sales/i), {
       target: { value: 'Stage-less Pipeline' },
@@ -362,7 +363,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
 
   it('saving a valid Create fires POST /api/pipelines with the form body and then refetches', async () => {
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     fireEvent.click(screen.getByRole('button', { name: /Create Pipeline/i }));
 
     fireEvent.change(screen.getByPlaceholderText(/e\.g\. Enterprise Sales/i), {
@@ -403,7 +404,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
 
   it('removing one unsaved stage removes only that stage', async () => {
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     fireEvent.click(screen.getByRole('button', { name: /Create Pipeline/i }));
 
     const addStageButton = screen.getAllByRole('button', { name: /Add Stage/i }).at(-1);
@@ -436,7 +437,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     });
 
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     fireEvent.click(screen.getByRole('button', { name: /Create Pipeline/i }));
     const existingStageSelect = await screen.findByRole('combobox', { name: /Select Existing Stage/i });
     await waitFor(() => expect(existingStageSelect.disabled).toBe(false));
@@ -454,7 +455,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
 
   it('Edit opens the modal with "Edit Pipeline" header prefilled with row data', async () => {
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     // Click an Edit button — pick the SMB Inbound row's Edit (non-default).
     // There are 3 Edit buttons (one per row); the second corresponds to SMB.
     const editButtons = screen.getAllByRole('button', { name: /^Edit$/i });
@@ -483,7 +484,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     });
 
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     fireEvent.click(screen.getAllByRole('button', { name: /^Edit$/i })[0]);
     const modal = (await screen.findByRole('heading', { name: 'Edit Pipeline' })).closest('.card');
     await waitFor(() => expect(within(modal).getAllByText('Required')).toHaveLength(2));
@@ -502,7 +503,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     });
 
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     fireEvent.click(screen.getAllByRole('button', { name: /^Edit$/i })[1]);
     const modal = (await screen.findByRole('heading', { name: 'Edit Pipeline' })).closest('.card');
     await waitFor(() => expect(within(modal).getAllByRole('button', { name: 'Remove stage' })).toHaveLength(2));
@@ -528,7 +529,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     });
 
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     fireEvent.click(screen.getAllByRole('button', { name: /^Edit$/i })[1]);
     const modal = screen.getByRole('heading', { name: /^Edit Pipeline$/i }).closest('.card');
     await within(modal).findByText('Discovery');
@@ -571,7 +572,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
       return defaultFetchMock(url, opts);
     });
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     fireEvent.click(screen.getAllByRole('button', { name: /^Edit$/i })[1]);
     const modal = screen.getByRole('heading', { name: /^Edit Pipeline$/i }).closest('.card');
     await within(modal).findByText('Qualified');
@@ -589,7 +590,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
 
   it('explains when no existing stages are available', async () => {
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     fireEvent.click(screen.getByRole('button', { name: /Create Pipeline/i }));
     const select = screen.getByRole('combobox', { name: /Select Existing Stage/i });
     await waitFor(() => expect(select.title).toBe('No existing stages are available.'));
@@ -599,7 +600,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
 
   it('saving an Edit fires PUT /api/pipelines/<id> with name+description; isDefault is NOT in the PUT body', async () => {
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     const editButtons = screen.getAllByRole('button', { name: /^Edit$/i });
     fireEvent.click(editButtons[1]); // SMB Inbound (id=12)
 
@@ -652,7 +653,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
     });
 
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     fireEvent.click(screen.getAllByRole('button', { name: /^Edit$/i })[1]);
     const modal = screen.getByRole('heading', { name: /^Edit Pipeline$/i }).closest('.card');
     expect(modal).toBeTruthy();
@@ -685,7 +686,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
 
   it('Edit + toggling isDefault ON fires PUT then POST /api/pipelines/<id>/set-default', async () => {
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     const editButtons = screen.getAllByRole('button', { name: /^Edit$/i });
     fireEvent.click(editButtons[1]); // SMB Inbound (id=12, isDefault=false)
 
@@ -713,7 +714,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
 
   it('clicking "Set Default" on a non-default card fires POST /api/pipelines/<id>/set-default and refetches', async () => {
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     // Two "Set Default" buttons exist (for the 2 non-default rows). Click the
     // first one — corresponds to SMB Inbound (id=12) per the seed order.
     const setDefaultButtons = screen.getAllByRole('button', { name: /^Set Default$/i });
@@ -737,7 +738,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
   it('clicking "Delete" confirms via notify.confirm with destructive=true; rejects skip the DELETE', async () => {
     confirmMock.mockResolvedValueOnce(false); // user cancels
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     const deleteButtons = screen.getAllByRole('button', { name: /^Delete$/i });
     fireEvent.click(deleteButtons[0]); // SMB Inbound (id=12)
 
@@ -759,7 +760,7 @@ describe('<Pipelines /> — sales-pipeline admin page', () => {
   it('confirming the Delete fires DELETE /api/pipelines/<id> and refetches', async () => {
     confirmMock.mockResolvedValue(true);
     render(<Pipelines />);
-    await screen.findByText('Enterprise Sales');
+    await screen.findByText('Default Pipeline');
     const deleteButtons = screen.getAllByRole('button', { name: /^Delete$/i });
     fireEvent.click(deleteButtons[0]); // SMB Inbound (id=12)
 

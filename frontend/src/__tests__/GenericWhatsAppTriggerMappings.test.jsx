@@ -281,6 +281,7 @@ describe('GenericWhatsAppTriggerMappings', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add next step' }));
 
     const canvas = screen.getByRole('region', { name: 'WhatsApp sequence steps' });
+    expect(canvas).toHaveClass('generic-sequence-canvas');
     expect(canvas).toHaveStyle({ overflowY: 'auto', overscrollBehaviorY: 'contain' });
     await waitFor(() => expect(scrollToMock).toHaveBeenCalledWith({ top: canvas.scrollHeight, behavior: 'smooth' }));
     expect(scrollIntoViewMock).not.toHaveBeenCalled();

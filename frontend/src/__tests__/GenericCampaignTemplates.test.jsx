@@ -56,7 +56,9 @@ describe('Generic CRM template personalization', () => {
     });
 
     render(<GenericCampaignTemplates />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Move template First template later' }));
+    const moveLater = await screen.findByRole('button', { name: 'Move template First template later' });
+    expect(moveLater.closest('.generic-template-card')).toBeInTheDocument();
+    fireEvent.click(moveLater);
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/email-templates/reorder', {
       method: 'PUT',
@@ -154,6 +156,11 @@ describe('Generic CRM template personalization', () => {
   it('clears the saved draft and resets the new-template form', async () => {
     render(<GenericCampaignTemplates />);
     fireEvent.click(await screen.findByRole('button', { name: 'Create New Template' }));
+    expect(screen.getByRole('dialog', { name: 'Create campaign template' })).toHaveStyle({
+      boxSizing: 'border-box',
+      overflowY: 'auto',
+      overflowX: 'hidden',
+    });
     fireEvent.change(screen.getByLabelText('Template Name'), { target: { value: 'Temporary draft' } });
     fireEvent.change(screen.getByLabelText('Subject'), { target: { value: 'Temporary subject' } });
     const body = screen.getByRole('textbox', { name: 'Email body' });
@@ -498,6 +505,7 @@ describe('Generic CRM template personalization', () => {
 
     render(<GenericCampaignTemplates />);
     const defaultTitle = await screen.findByText(/New lead .* welcome & pickup\/plot/i);
+    expect(defaultTitle.closest('article')).toHaveClass('generic-template-card');
     fireEvent.click(within(defaultTitle.closest('article')).getByRole('button', { name: 'Edit' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Save Template' }));
 

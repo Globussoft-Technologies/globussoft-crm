@@ -438,7 +438,7 @@ describe('cron/sequenceEngine — processStep email', () => {
     expect(message.subject).toBe('{{unknown}}');
     expect(message.body).toBe('<Legacy> {{unknown}}');
   });
-  test('Travel uses its tenant sender while Generic and Wellness keep the platform sender', async () => {
+  test('Travel and Generic use their tenant sender while Wellness keeps the platform sender', async () => {
     prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
     resolveSendGridConfig.mockResolvedValue({
       apiKey: '',
@@ -452,16 +452,25 @@ describe('cron/sequenceEngine — processStep email', () => {
     expect(resolveSendGridConfig).toHaveBeenCalledWith(73);
     expect(prisma.emailMessage.create.mock.calls[0][0].data.from).toBe('Acme Travel <sequences@travel.test>');
 
-    for (const vertical of ['generic', 'wellness']) {
-      prisma.emailMessage.create.mockClear();
-      resolveSendGridConfig.mockClear();
-      prisma.tenant.findUnique.mockResolvedValue({ vertical });
-      await processStep(stepWith(), enrollmentWith({ tenantId: 81 }));
-      if (vertical === 'generic') expect(resolveSendGridConfig).toHaveBeenCalledWith(81);
-      else expect(resolveSendGridConfig).not.toHaveBeenCalled();
-      expect(prisma.emailMessage.create.mock.calls[0][0].data.from).toMatch(/@/);
-      expect(prisma.emailMessage.create.mock.calls[0][0].data.from).not.toContain('travel.test');
-    }
+    prisma.emailMessage.create.mockClear();
+    resolveSendGridConfig.mockClear().mockResolvedValue({
+      apiKey: '',
+      fromEmail: 'indhupriya0904@gmail.com',
+      fromName: 'NEXUSSOFT',
+      source: 'tenant',
+    });
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'generic' });
+    await processStep(stepWith(), enrollmentWith({ tenantId: 81 }));
+    expect(resolveSendGridConfig).toHaveBeenCalledWith(81);
+    expect(prisma.emailMessage.create.mock.calls[0][0].data.from).toBe('NEXUSSOFT <indhupriya0904@gmail.com>');
+
+    prisma.emailMessage.create.mockClear();
+    resolveSendGridConfig.mockClear();
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'wellness' });
+    await processStep(stepWith(), enrollmentWith({ tenantId: 82, sequence: { tenant: { vertical: 'wellness' } } }));
+    expect(resolveSendGridConfig).not.toHaveBeenCalled();
+    expect(prisma.emailMessage.create.mock.calls[0][0].data.from).toMatch(/@/);
+    expect(prisma.emailMessage.create.mock.calls[0][0].data.from).not.toContain('gmail.com');
   });
   test('happy path: renders template + writes EmailMessage + advances', async () => {
     const enrollment = enrollmentWith();
@@ -718,6 +727,12 @@ describe('cron/sequenceEngine — Generic Email/SMS branch steps', () => {
 
   test('Email condition action continues to the explicitly authored next step', async () => {
     prisma.emailTemplate.findFirst.mockResolvedValue({ id: 9, channel: 'EMAIL', subject: 'Thanks', body: 'Hi {{contact.name}}' });
+    resolveSendGridConfig.mockResolvedValue({
+      apiKey: '',
+      fromEmail: 'indhupriya0904@gmail.com',
+      fromName: 'NEXUSSOFT',
+      source: 'tenant',
+    });
     const conditionJson = JSON.stringify({
       version: 2,
       logic: 'ALL',
@@ -729,6 +744,7 @@ describe('cron/sequenceEngine — Generic Email/SMS branch steps', () => {
     await expect(processStep(stepWith({ kind: 'condition', position: 2, conditionJson }), enrollmentWith({ contactId: 7 })))
       .resolves.toEqual({ advance: false, jumpTo: 3, nextRun: null });
     expect(prisma.emailMessage.create).toHaveBeenCalledTimes(1);
+    expect(prisma.emailMessage.create.mock.calls[0][0].data.from).toBe('NEXUSSOFT <indhupriya0904@gmail.com>');
   });
 
   test('Generic condition action persists the frontend New status as backend Lead', async () => {

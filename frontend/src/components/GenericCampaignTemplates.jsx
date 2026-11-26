@@ -26,7 +26,7 @@ const GENERIC_SMS_MESSAGE_LIMIT = 150;
 function SortableTemplateCard({ template, index, total, disabled, onMove, children }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: String(template.id), disabled });
   return (
-    <div ref={setNodeRef} className="card" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.72 : 1, boxShadow: isDragging ? '0 16px 34px rgba(40, 52, 120, 0.22)' : undefined, position: 'relative', zIndex: isDragging ? 2 : 'auto' }}>
+    <div ref={setNodeRef} className="card generic-template-card" data-dragging={isDragging ? 'true' : undefined} style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.72 : 1, boxShadow: isDragging ? '0 16px 34px rgba(40, 52, 120, 0.22)' : undefined, position: 'relative', zIndex: isDragging ? 2 : 'auto' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', margin: '-0.35rem -0.35rem 0', color: 'var(--text-secondary)' }}>
         <button type="button" aria-label={`Drag template ${template.name} to reorder`} title="Drag to reorder" disabled={disabled} {...attributes} {...listeners} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', border: 0, background: 'transparent', color: 'inherit', padding: '0.3rem', cursor: disabled ? 'not-allowed' : 'grab', touchAction: 'none' }}><GripVertical size={17} /></button>
         <span style={{ fontSize: '0.7rem', marginRight: 'auto' }}>Drag to reorder</span>
@@ -873,7 +873,7 @@ export default function GenericCampaignTemplates({ embeddedCreateChannel = '', i
       </>}
 
       {editor && <div className="generic-template-backdrop" onClick={() => { setEditor(null); onEmbeddedClose?.(); }} style={modalBackdropStyle}>
-        <div role="dialog" aria-label={editor.id ? 'Edit campaign template' : 'Create campaign template'} onClick={event => event.stopPropagation()} className="card modal generic-template-scrollbar generic-template-modal" style={modalStyle}>
+        <div role="dialog" aria-label={editor.id ? 'Edit campaign template' : 'Create campaign template'} onClick={event => event.stopPropagation()} className="card modal generic-template-scrollbar generic-template-modal" style={templateEditorModalStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
             <h3 style={{ margin: 0 }}>{editor.id ? 'Edit Template' : 'New Template'}</h3>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>{!editor.id && <button type="button" className="btn-secondary" onClick={clearTemplateDraft}>Clear draft</button>}<button type="button" onClick={() => { setEditor(null); onEmbeddedClose?.(); }} aria-label="Close" style={iconButtonStyle}><X size={20} /></button></div>
@@ -981,3 +981,4 @@ const personalizationMenuStyle = { display: 'grid', gap: '0.4rem', padding: '0.6
 const richEditorStyle = { flex: 1, minHeight: '320px', padding: '0.75rem', border: '1px solid var(--border-color)', borderRadius: '8px', background: 'var(--surface-color)', color: 'var(--text-primary)', outline: 'none', lineHeight: 1.55, overflowY: 'auto', whiteSpace: 'pre-wrap' };
 const modalBackdropStyle = { position: 'fixed', inset: 0, background: 'var(--overlay-bg, rgba(0,0,0,0.55))', backdropFilter: 'blur(6px)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.25rem' };
 const modalStyle = { width: '100%', maxWidth: '960px', maxHeight: '90vh', overflow: 'auto', padding: '1.25rem 1.5rem', background: 'var(--modal-bg, var(--surface-color))', border: '1px solid var(--border-color)', borderRadius: '14px' };
+const templateEditorModalStyle = { ...modalStyle, boxSizing: 'border-box', overflowY: 'auto', overflowX: 'hidden' };

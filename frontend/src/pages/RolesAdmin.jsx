@@ -1,4 +1,4 @@
-import { useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { createPortal } from 'react-dom';
 import { AuthContext } from '../App';
@@ -34,6 +34,26 @@ const DATA_SCOPE_OPTIONS = ['OWN', 'TEAM', 'ALL'];
 const SUB_BRAND_OPTIONS = Object.entries(SUB_BRAND_LABEL);
 
 const ROLES_PAGE_SIZE = 12;
+const GENERIC_UI_HIDDEN_MODULES = new Set([
+  'contacts', 'workflows', 'sequences', 'web_visitors',
+  'ab_tests', 'chatbots', 'social', 'playbooks', 'sla', 'contracts',
+  'csp_violations', 'admin_status', 'commission_profiles', 'commission_data',
+  'channels', 'industry_templates',
+  'signatures', 'document_templates', 'projects',
+]);
+const GENERIC_UI_HIDDEN_PAGE_PATHS = new Set([
+  '/contacts', '/workflows', '/sequences', '/web-visitors',
+  '/ab-tests', '/chatbots', '/social', '/playbooks', '/sla', '/contracts',
+  '/admin/csp-violations', '/admin/status', '/commission-profiles',
+  '/commission-data', '/channels', '/industry-templates',
+  '/signatures', '/document-templates', '/projects',
+]);
+
+function filterGenericUiPages(pages, vertical) {
+  if (!Array.isArray(pages)) return [];
+  if (vertical !== 'generic') return pages;
+  return pages.filter((page) => !GENERIC_UI_HIDDEN_PAGE_PATHS.has(page?.path));
+}
 
 // Admin UI for the RBAC role + permission system. Mirrors the endpoints
 // under /api/roles (see backend/routes/roles.js). Tenant scoping is enforced
@@ -1165,6 +1185,7 @@ export default function RolesAdmin() {
         <EditRoleModal
           role={editRole}
           isTravel={isTravel}
+          vertical={tenantVertical}
           activeSubBrand={activeSubBrand}
           onClose={() => setEditRole(null)}
           onSuccess={async () => {
@@ -1209,7 +1230,7 @@ function CreateRoleModal({ isTravel, isGeneric, vertical, activeSubBrand, module
     fetchApi('/api/pages/catalog')
       .then((res) => {
         if (cancelled) return;
-        setPageCatalog(Array.isArray(res?.catalog) ? res.catalog : []);
+        setPageCatalog(filterGenericUiPages(res?.catalog, vertical));
       })
       .catch(() => {
         if (!cancelled) setPageCatalog([]);
@@ -1217,7 +1238,7 @@ function CreateRoleModal({ isTravel, isGeneric, vertical, activeSubBrand, module
     return () => {
       cancelled = true;
     };
-  }, [isGeneric]);
+  }, [isGeneric, vertical]);
   const landingPages = useMemo(() => {
     const selected = new Set(
       form.permissions.map(({ module, action }) => `${module}.${action}`),
@@ -1423,6 +1444,7 @@ function CreateRoleModal({ isTravel, isGeneric, vertical, activeSubBrand, module
           disabled={isLoading}
           error={errors.landingPath}
           pagesOverride={isGeneric ? landingPages : undefined}
+          vertical={vertical}
         />
         {error && (
           <div role="alert" style={errBoxStyle}>{error}</div>
@@ -1464,7 +1486,7 @@ function CreateRoleModal({ isTravel, isGeneric, vertical, activeSubBrand, module
 
 // ───────────────────────── Edit role modal ───────────────────────────
 
-function EditRoleModal({ role, isTravel, onClose, onSuccess }) {
+function EditRoleModal({ role, isTravel, vertical, onClose, onSuccess }) {
   const [form, setForm] = useState({
     name: role.name || '',
     key: role.key || '',
@@ -1606,6 +1628,7 @@ function EditRoleModal({ role, isTravel, onClose, onSuccess }) {
           disabled={isLoading}
           error={errors.landingPath}
           roleId={role.id}
+          vertical={vertical}
         />
         {error && (
           <div role="alert" style={errBoxStyle}>{error}</div>
@@ -1625,7 +1648,7 @@ function EditRoleModal({ role, isTravel, onClose, onSuccess }) {
 
 // ───────────────────── Landing path field (shared) ───────────────────
 
-function LandingPathField({ value, onChange, disabled, error, roleId, pagesOverride }) {
+function LandingPathField({ value, onChange, disabled, error, roleId, pagesOverride, vertical }) {
   // The dropdown is dynamically populated from /api/roles/:id/accessible-
   // pages — only pages this role has the required permissions for show
   // up. When roleId is undefined (Create flow, before the role exists),
@@ -1654,7 +1677,7 @@ function LandingPathField({ value, onChange, disabled, error, roleId, pagesOverr
           : Array.isArray(res?.catalog)
             ? res.catalog
             : [];
-        setPages(list);
+        setPages(filterGenericUiPages(list, vertical));
         setLoadingPages(false);
       })
       .catch(() => {
@@ -1665,7 +1688,7 @@ function LandingPathField({ value, onChange, disabled, error, roleId, pagesOverr
     return () => {
       cancelled = true;
     };
-  }, [roleId, pagesOverride]);
+  }, [roleId, pagesOverride, vertical]);
 
   // If the currently-saved path isn't in the dropdown list (e.g. perms
   // were revoked since it was set), surface that to the admin instead of
@@ -1748,8 +1771,23 @@ function validateLandingPathClient(value) {
 function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMode = false, onClose, onSaved, onApply }) {
   const matrix = useMemo(() => (Array.isArray(modules) ? modules : []), [modules]);
   const domainList = useMemo(() => (Array.isArray(domains) ? domains : []), [domains]);
-  const displayMatrix = matrix;
-  const displayDomainList = domainList;
+  const displayMatrix = useMemo(
+    () => vertical === 'generic'
+      ? matrix.filter(({ module }) => !GENERIC_UI_HIDDEN_MODULES.has(module))
+      : matrix,
+    [matrix, vertical],
+  );
+  const displayDomainList = useMemo(
+    () => vertical === 'generic'
+      ? domainList.map((domain) => ({
+          ...domain,
+          modules: (domain.modules || []).filter((module) => !GENERIC_UI_HIDDEN_MODULES.has(
+            typeof module === 'string' ? module : module?.module,
+          )),
+        }))
+      : domainList,
+    [domainList, vertical],
+  );
   // Build the set of currently-catalogued "module.action" strings so we
   // can filter the role's stored grants through it. A grant whose module
   // is no longer in the catalog (e.g. `billing.delete` after the v3.8.x
@@ -1792,6 +1830,32 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
   }, [role, catalogKeys]);
 
   const [selected, setSelected] = useState(initial);
+  const previousInitialRef = useRef(initial);
+  useEffect(() => {
+    const previousInitial = previousInitialRef.current;
+    previousInitialRef.current = initial;
+    setSelected((current) => {
+      const next = new Set(current);
+      const keys = new Set([...previousInitial, ...initial]);
+      let changed = false;
+
+      // A visibility/catalog refresh can make a previously stored grant
+      // renderable while this modal is already open. Adopt server changes
+      // only for keys the admin has not edited locally; this keeps an
+      // in-progress draft intact while restoring newly available grants.
+      for (const key of keys) {
+        const wasInitiallySelected = previousInitial.has(key);
+        const isInitiallySelected = initial.has(key);
+        const isCurrentlySelected = current.has(key);
+        if (isCurrentlySelected !== wasInitiallySelected || isInitiallySelected === wasInitiallySelected) continue;
+        if (isInitiallySelected) next.add(key);
+        else next.delete(key);
+        changed = true;
+      }
+
+      return changed ? next : current;
+    });
+  }, [initial]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   // Search query filters the matrix on module name, description,
@@ -1829,7 +1893,7 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
       .then((res) => {
         if (cancelled) return;
         const list = Array.isArray(res?.catalog) ? res.catalog : [];
-        setPageCatalog(list);
+        setPageCatalog(filterGenericUiPages(list, vertical));
       })
       .catch(() => {
         // Non-fatal — the hint is supplementary, the picker still works.
@@ -1837,7 +1901,7 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [vertical]);
 
   const wellnessPresentationByModule = useMemo(() => {
     if (vertical !== 'wellness') return {};
@@ -1921,8 +1985,14 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
     if (reviewFilter === 'changed') return keys.some((key) => selected.has(key) !== initial.has(key));
     return true;
   };
+  const displayKeys = new Set(
+    displayMatrix.flatMap(({ module, actions }) =>
+      (actions || []).map((action) => `${module}.${action}`)),
+  );
+  const visibleSelectedCount = [...selected]
+    .filter((key) => displayKeys.has(key)).length;
   const changedCount = [...new Set([...initial, ...selected])]
-    .filter((key) => selected.has(key) !== initial.has(key)).length;
+    .filter((key) => displayKeys.has(key) && selected.has(key) !== initial.has(key)).length;
 
   const notify = useNotify();
 
@@ -2129,7 +2199,7 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
         <div role="group" aria-label="Review permissions" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginTop: '0.65rem' }}>
           {[
             ['all', 'All'],
-            ['selected', `Selected (${selected.size})`],
+            ['selected', `Selected (${visibleSelectedCount})`],
             ['changed', `Changed (${changedCount})`],
           ].map(([value, label]) => (
             <button
@@ -2508,7 +2578,7 @@ function PermissionsModal({ role, modules, domains, readOnly, vertical, draftMod
 
       <ModalActions>
         <span style={{ flex: 1, fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-          {selected.size} permission{selected.size === 1 ? '' : 's'} selected
+          {visibleSelectedCount} permission{visibleSelectedCount === 1 ? '' : 's'} selected
           {normalizedQuery && (
             <span style={{ marginLeft: '0.5rem', opacity: 0.8 }}>
               · filtered by “{searchQuery.trim()}”

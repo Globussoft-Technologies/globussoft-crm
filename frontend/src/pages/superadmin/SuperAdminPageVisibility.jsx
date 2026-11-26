@@ -10,6 +10,13 @@ const surfaceStyle = {
 };
 
 const REQUIRED_PAGE_PATHS = new Set(["/home", "/dashboard", "/wellness", "/travel"]);
+const GENERIC_UI_HIDDEN_PAGE_PATHS = new Set([
+  "/contacts", "/workflows", "/sequences", "/web-visitors",
+  "/ab-tests", "/chatbots", "/social", "/playbooks", "/sla", "/contracts",
+  "/admin/csp-violations", "/admin/status", "/commission-profiles",
+  "/commission-data", "/channels", "/industry-templates",
+  "/signatures", "/document-templates", "/projects",
+]);
 
 function buildQuery(params) {
   const query = new URLSearchParams();
@@ -102,8 +109,12 @@ export default function SuperAdminPageVisibility() {
   }, [tenantId]);
 
   const pages = useMemo(
-    () => (Array.isArray(visibility?.pages) ? visibility.pages : []),
-    [visibility?.pages],
+    () => {
+      const catalog = Array.isArray(visibility?.pages) ? visibility.pages : [];
+      if (visibility?.vertical !== "generic") return catalog;
+      return catalog.filter((page) => !GENERIC_UI_HIDDEN_PAGE_PATHS.has(page.path));
+    },
+    [visibility?.pages, visibility?.vertical],
   );
   const filteredPages = useMemo(() => {
     const term = search.trim().toLowerCase();

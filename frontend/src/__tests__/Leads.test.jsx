@@ -204,6 +204,96 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     });
   });
 
+  it('shows all editable Generic fields in Customize fields and submits a selected field', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/tenant-settings/generic.fieldConfig') {
+        return Promise.resolve({
+          value: JSON.stringify({ fieldOverrides: { industry: { quickAdd: false } } }),
+        });
+      }
+      if (url === '/api/table-column-prefs/leads') {
+        return Promise.resolve({
+          availableColumns: [
+            { key: 'name', label: 'Name' },
+            { key: 'email', label: 'Email' },
+            { key: 'industry', label: 'Service Type' },
+            { key: 'utm_source', label: 'UTM Source' },
+          ],
+        });
+      }
+      return defaultFetchMock(url, opts);
+    });
+
+    renderLeads({
+      user: { userId: 1, role: 'ADMIN' },
+      tenant: { id: 1, vertical: 'generic' },
+      loading: false,
+    });
+    await waitFor(() =>
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/table-column-prefs/leads', { silent: true }),
+    );
+    openDrawer();
+
+    const createDialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    fireEvent.click(within(createDialog).getByRole('button', {
+      name: 'Customize Create Lead fields',
+    }));
+    const picker = await screen.findByRole('dialog', {
+      name: 'Customize Create Lead fields',
+    });
+    expect(within(picker).getByRole('checkbox', { name: 'Service Type' })).toBeEnabled();
+    expect(within(picker).queryByRole('checkbox', { name: 'UTM Source' })).toBeNull();
+    expect(within(picker).getByRole('button', { name: 'Select all fields' })).toBeVisible();
+
+    fireEvent.click(within(picker).getByRole('checkbox', { name: 'Service Type' }));
+    fireEvent.click(within(picker).getByRole('button', { name: 'Apply' }));
+    const serviceType = within(createDialog).getByLabelText('Service Type');
+    fireEvent.change(serviceType, { target: { value: 'Consulting' } });
+    fireEvent.change(within(createDialog).getByPlaceholderText('Full Name'), {
+      target: { value: 'Priya Sharma' },
+    });
+    fireEvent.change(within(createDialog).getByPlaceholderText('Email Address'), {
+      target: { value: 'priya@example.com' },
+    });
+    fireEvent.click(within(createDialog).getByRole('button', { name: /Add Lead/i }));
+
+    await waitFor(() => {
+      const createCall = fetchApiMock.mock.calls.find(
+        ([url, options]) => url === '/api/contacts' && options?.method === 'POST',
+      );
+      expect(createCall).toBeDefined();
+      expect(JSON.parse(createCall[1].body).industry).toBe('Consulting');
+    });
+  });
+
+  it('toggles between selecting and deselecting all optional Generic Create Lead fields', async () => {
+    renderLeads({
+      user: { userId: 1, role: 'ADMIN' },
+      tenant: { id: 1, vertical: 'generic' },
+      loading: false,
+    });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
+    openDrawer();
+
+    const createDialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    fireEvent.click(within(createDialog).getByRole('button', {
+      name: 'Customize Create Lead fields',
+    }));
+    const picker = await screen.findByRole('dialog', {
+      name: 'Customize Create Lead fields',
+    });
+
+    fireEvent.click(within(picker).getByRole('button', { name: 'Select all fields' }));
+    expect(within(picker).getByRole('button', { name: 'Deselect all fields' })).toBeVisible();
+    expect(within(picker).getByRole('checkbox', { name: 'Company' })).toBeChecked();
+
+    fireEvent.click(within(picker).getByRole('button', { name: 'Deselect all fields' }));
+    expect(within(picker).getByRole('button', { name: 'Select all fields' })).toBeVisible();
+    expect(within(picker).getByRole('checkbox', { name: 'Company' })).not.toBeChecked();
+    expect(within(picker).getByRole('checkbox', { name: 'Full Name' })).toBeChecked();
+    expect(within(picker).getByRole('checkbox', { name: 'Full Name' })).toBeDisabled();
+  });
+
   it('removes Website URL from Generic customization when Quick-add is turned off', async () => {
     window.localStorage.setItem('globuscrm.leads.createFields.v3.1.1', JSON.stringify({
       visible: ['name', 'email', 'company', 'website'],

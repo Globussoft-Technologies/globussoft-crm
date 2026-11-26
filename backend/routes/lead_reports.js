@@ -45,6 +45,30 @@ const STAGES_SETTING_KEY = "leads.funnel.stages";
 const MAX_ROWS = 20000;
 const MAX_LIST_ROWS = 500;
 
+const GENERIC_LEAD_STATUS_BUCKETS = [
+  { key: "new", label: "New", values: ["new", "lead"] },
+  { key: "contacted", label: "Contacted", values: ["contacted", "prospect"] },
+  { key: "interested", label: "Interested", values: ["interested"] },
+  { key: "unqualified", label: "Unqualified", values: ["unqualified", "junk"] },
+  { key: "qualified", label: "Qualified", values: ["qualified"] },
+  { key: "lost", label: "Lost", values: ["lost"] },
+  { key: "won", label: "Won", values: ["won", "customer"] },
+  { key: "churned", label: "Churned", values: ["churned"] },
+];
+
+function buildGenericLeadStatusCounts(contacts) {
+  const buckets = GENERIC_LEAD_STATUS_BUCKETS.map(({ key, label }) => ({ key, label, value: 0 }));
+  const bucketByValue = new Map();
+  GENERIC_LEAD_STATUS_BUCKETS.forEach((definition, index) => {
+    for (const value of definition.values) bucketByValue.set(value, buckets[index]);
+  });
+  for (const contact of contacts) {
+    const bucket = bucketByValue.get(String(contact.status || "").trim().toLowerCase());
+    if (bucket) bucket.value += 1;
+  }
+  return buckets;
+}
+
 // ─── Shared request parsing ──────────────────────────────────────────
 
 /**
@@ -184,6 +208,7 @@ async function loadLifecycleStageConfig(tenantId) {
 router.get("/overview", async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
+    const isGeneric = (req.user.vertical || "generic") === "generic";
     const range = await resolveOverviewRange(req);
     if (range.error) return res.status(range.error.status).json(range.error);
     const { to, preset } = range;
@@ -200,11 +225,14 @@ router.get("/overview", async (req, res) => {
       deletedAt: null,
       ...(ownerId === null ? {} : { assignedToId: ownerId }),
     };
-    const lifecycleConfig = await loadLifecycleStageConfig(tenantId);
+    const lifecycleConfig = isGeneric
+      ? { stages: [], optionToStageId: new Map(), statusToStageId: new Map() }
+      : await loadLifecycleStageConfig(tenantId);
 
     const [
       users,
       contacts,
+      statusContacts,
       activities,
       tasks,
       emails,
@@ -231,6 +259,19 @@ router.get("/overview", async (req, res) => {
         orderBy: { createdAt: "desc" },
         take: MAX_ROWS,
       }),
+      isGeneric
+        ? prisma.contact.findMany({
+          where: {
+            tenantId,
+            createdAt,
+            deletedAt: null,
+            ...(ownerId === null ? {} : { assignedToId: ownerId }),
+          },
+          select: { status: true },
+          orderBy: { createdAt: "desc" },
+          take: MAX_ROWS,
+        })
+        : Promise.resolve([]),
       prisma.activity.findMany({
         where: { tenantId, createdAt, contact: leadRelationWhere },
         select: { id: true, type: true, createdAt: true },
@@ -324,6 +365,7 @@ router.get("/overview", async (req, res) => {
       .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label));
     const bySource = ranked(sourceCounts);
     const byLifecycleStage = Array.from(lifecycleCounts.values());
+    const byStatus = isGeneric ? buildGenericLeadStatusCounts(statusContacts) : undefined;
 
     res.json({
       preset,
@@ -338,12 +380,14 @@ router.get("/overview", async (req, res) => {
         whatsapp: whatsappTotal,
         leadSources: bySource.length,
         lifecycleStages: lifecycleConfig.stages.length,
+        ...(isGeneric ? { statuses: GENERIC_LEAD_STATUS_BUCKETS.length } : {}),
       },
       series,
       bySource,
       byLifecycleStage,
+      ...(isGeneric ? { byStatus } : {}),
       users: users.map((user) => ({ id: user.id, name: user.name || user.email })),
-      truncated: allRows.some((rows) => rows.length >= MAX_ROWS),
+      truncated: allRows.some((rows) => rows.length >= MAX_ROWS) || statusContacts.length >= MAX_ROWS,
     });
   } catch (err) {
     console.error("[lead-reports/overview]", err);

@@ -320,6 +320,12 @@ export default function ColumnPicker({
     );
   };
 
+  const handleSelectAll = () => {
+    setDraftVisible(
+      normalizeColumnOrder(available.map((column) => column.key)),
+    );
+  };
+
   const handleDeleteField = async (column) => {
     const definition = deletableColumns.find((item) => item.key === column.key);
     if (!definition?.id) return;
@@ -658,9 +664,16 @@ export default function ColumnPicker({
             </div>
           )}
           <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", padding: "0.6rem 0.75rem", borderTop: "1px solid var(--border-color)" }}>
-            <button type="button" onClick={handleReset} disabled={saving} className="btn-secondary" style={{ fontSize: "0.8rem", padding: "0.4rem 0.8rem" }}>
-              Reset
-            </button>
+            <div style={{ display: "flex", gap: "0.4rem" }}>
+              <button type="button" onClick={handleReset} disabled={saving} className="btn-secondary" style={{ fontSize: "0.8rem", padding: "0.4rem 0.8rem" }}>
+                Reset
+              </button>
+              {showGenericLeadClearSelection && (
+                <button type="button" onClick={handleSelectAll} disabled={saving} className="btn-secondary" style={{ fontSize: "0.8rem", padding: "0.4rem 0.8rem" }}>
+                  Select all fields
+                </button>
+              )}
+            </div>
             <div style={{ display: "flex", gap: "0.5rem" }}>
               {selectedDeleteKeys.length > 0 && (
                 <button

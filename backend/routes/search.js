@@ -16,6 +16,7 @@ const {
   isPathHidden,
 } = require("../lib/tenantPageVisibility");
 const { getCatalogForVertical, getAccessiblePages } = require("../lib/pageCatalog");
+const { getSetting, KEYS } = require("../lib/tenantSettings");
 
 const router = express.Router();
 
@@ -481,6 +482,18 @@ router.get("/", verifyToken, async (req, res) => {
         : null;
     const searchFilter = searchContains(query);
     const normalizedQuery = normalizeSearchText(query);
+    let genericLeadOwnerId = null;
+    if (vertical === "generic" && !["ADMIN", "MANAGER"].includes(req.user.role)) {
+      const leadVisibility = await getSetting(
+        tenantId,
+        KEYS.GENERIC_LEAD_VISIBILITY,
+        {
+          coerce: (value) => String(value || "closed").trim().toLowerCase(),
+          fallback: "closed",
+        },
+      ).catch(() => "closed");
+      if (leadVisibility !== "open") genericLeadOwnerId = req.user.userId;
+    }
 
     // Always use all searchable entities and filter visibility per vertical + access level
     const queryPromises = {};
@@ -549,6 +562,13 @@ router.get("/", verifyToken, async (req, res) => {
         Object.assign(where, entity.genericFixedWhere);
       }
       if (entity.fixedWhere) Object.assign(where, entity.fixedWhere);
+      // Keep Omnibar lead results aligned with GET /api/contacts/:id. In a
+      // closed Generic lead bucket, staff can open only their own assigned
+      // leads; returning another user's lead here creates a valid /leads/:id
+      // link that immediately resolves to "Contact not found".
+      if (entity.key === "leads" && genericLeadOwnerId != null) {
+        where.assignedToId = genericLeadOwnerId;
+      }
       if (entity.scopeToUser) where.userId = req.user.userId;
       if (entity.assignmentScope) {
         const customerIds = await getAssignedCustomerIds(entity.assignmentScope);
@@ -566,7 +586,7 @@ router.get("/", verifyToken, async (req, res) => {
           ],
         }];
       }
-      if (entity.model === 'patient') {
+      if (entity.model === 'contact' || entity.model === 'patient') {
         where.deletedAt = null;
       }
 

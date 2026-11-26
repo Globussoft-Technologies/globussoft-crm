@@ -914,6 +914,71 @@ body[data-vertical="generic"] main.generic-page-content .reports-page__table-she
     flex-shrink: 0;
   }
 
+  /* Email, SMS and WhatsApp sequences are fixed-size Generic CRM workspaces.
+     Keep the page inside the app viewport and suppress both outer scrollbar
+     tracks. Long builders remain wheel/touch scrollable inside their canvas,
+     but the canvas track stays hidden so the workspace does not shift. */
+  .marketing-page--generic-sequence {
+    width: 100%;
+    max-width: 100%;
+    height: 100% !important;
+    min-height: 0;
+    box-sizing: border-box;
+    overflow: hidden !important;
+  }
+
+  .marketing-page--generic-sequence > .marketing-page__sequence-surface {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow-x: hidden;
+    overflow-y: auto;
+    scrollbar-width: none;
+    overscroll-behavior: contain;
+  }
+
+  .marketing-page--generic-sequence
+    > .marketing-page__sequence-surface::-webkit-scrollbar,
+  .marketing-page--generic-sequence .generic-sequence-canvas::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  .marketing-page--generic-sequence .marketing-campaign-grid,
+  .marketing-page--generic-sequence .generic-sequence-builder {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .marketing-page--generic-sequence .generic-sequence-builder {
+    height: 100%;
+    min-height: 0;
+    margin-bottom: 0 !important;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .marketing-page--generic-sequence .generic-sequence-canvas {
+    flex: 1 1 auto;
+    width: 100%;
+    min-width: 0;
+    min-height: 0 !important;
+    max-width: 100%;
+    max-height: none !important;
+    height: auto !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    scrollbar-width: none;
+    scrollbar-gutter: auto !important;
+  }
+
   .marketing-page--generic:has(> .workflow-page) {
     overflow: hidden;
   }
@@ -3201,6 +3266,43 @@ body[data-vertical="generic"] main.generic-page-content .reports-page__table-she
   transform: translateY(-4px);
   box-shadow: 0 12px 25px rgba(0, 0, 0, 0.4);
   border-color: rgba(255, 255, 255, 0.15);
+}
+
+/* Generic CRM Landing Sites uses stationary management cards. */
+.landing-sites-page--generic .card:hover {
+  transform: none;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  border-color: var(--border-color);
+}
+
+.landing-sites-page--generic .card:hover::before {
+  left: -100%;
+  transition: none;
+}
+
+/* Generic CRM Email, SMS and WhatsApp template/sequence cards stay still on
+   hover. Drag transforms are explicitly excluded so reordering keeps working;
+   buttons, previews and all other card actions are unaffected. */
+body[data-vertical="generic"]
+  :is(.generic-template-card, .generic-sequence-card):not(
+    [data-dragging="true"]
+  ):hover {
+  transform: none;
+  border-color: var(--border-color);
+}
+
+body[data-vertical="generic"] .generic-template-card:not(:hover) {
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+body[data-vertical="generic"] .generic-template-card:hover {
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+body[data-vertical="generic"]
+  :is(.generic-template-card, .generic-sequence-card)::before {
+  display: none;
+  content: none;
 }
 
 .btn-primary {
@@ -10168,6 +10270,82 @@ body[data-vertical="generic"]
 }
 .workflow-history-overlay {
   background: rgba(0, 0, 0, 0.55);
+}
+
+/* The Marketing > Webhooks history drawer belongs only to Generic CRM. Keep
+   its working surface fully opaque (the shared surface token is deliberately
+   translucent) and keep the highlighted summary controls on one toolbar row.
+   Other verticals retain the shared history layout above. */
+body[data-vertical="generic"]
+  .workflow-history-overlay--generic
+  .workflow-history-panel {
+  width: min(88vw, 1600px);
+  background: var(--modal-bg, #fff);
+  background-image: none;
+  opacity: 1;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  isolation: isolate;
+}
+body[data-vertical="generic"]
+  .workflow-history-overlay--generic
+  .workflow-history-meta {
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  gap: 20px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+body[data-vertical="generic"]
+  .workflow-history-overlay--generic
+  .workflow-history-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+body[data-vertical="generic"]
+  .workflow-history-overlay--generic
+  .workflow-history-name br {
+  display: none;
+}
+body[data-vertical="generic"]
+  .workflow-history-overlay--generic
+  .workflow-history-filters,
+body[data-vertical="generic"]
+  .workflow-history-overlay--generic
+  .workflow-history-filters > div,
+body[data-vertical="generic"]
+  .workflow-history-overlay--generic
+  .workflow-history-filters label,
+body[data-vertical="generic"]
+  .workflow-history-overlay--generic
+  .workflow-contact-filter {
+  display: flex;
+  align-items: center;
+  flex-flow: row nowrap;
+}
+body[data-vertical="generic"]
+  .workflow-history-overlay--generic
+  .workflow-history-filters,
+body[data-vertical="generic"]
+  .workflow-history-overlay--generic
+  .workflow-history-filters > div {
+  gap: 12px;
+}
+body[data-vertical="generic"]
+  .workflow-history-overlay--generic
+  .workflow-history-filters label {
+  gap: 4px;
+}
+body[data-vertical="generic"]
+  .workflow-history-overlay--generic
+  .workflow-contact-filter {
+  width: auto;
+  gap: 8px;
+}
+body[data-vertical="generic"]
+  .workflow-history-overlay--generic
+  .workflow-contact-filter .workflow-select {
+  width: 260px;
 }
 
 /* The header and workflow navigation are stationary; only the centre column

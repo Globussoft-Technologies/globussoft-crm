@@ -953,6 +953,24 @@ describe('WebForms builder page', () => {
     expect(within(picker).getByRole('button', { name: /^Company phonecustom$/i })).toBeInTheDocument();
   }, 10000); // Builder setup and picker rendering need CI runner headroom.
 
+  test('hides redundant Generic fields and shows the pickup field key', async () => {
+    renderPage(FORM_FIXTURE, [
+      { id: 11, fieldKey: 'pickup', label: 'pickup', fieldType: 'text' },
+      { id: 12, fieldKey: 'jobRoles', label: 'Job Roles', fieldType: 'text' },
+      { id: 13, fieldKey: 'organization', label: 'Organization', fieldType: 'text' },
+    ]);
+
+    await openBuilder();
+    fireEvent.click(screen.getByRole('button', { name: /Add contact fields/i }));
+    const picker = screen.getByPlaceholderText('Type to search').closest('.wf-field-picker');
+
+    expect(within(picker).getByRole('button', { name: /^pickuppickup$/i })).toBeInTheDocument();
+    expect(within(picker).queryByText('Job Roles')).toBeNull();
+    expect(within(picker).queryByText('Organization')).toBeNull();
+    expect(within(picker).getByRole('button', { name: /^Job Title(title)?$/i })).toBeInTheDocument();
+    expect(within(picker).getByRole('button', { name: /^Company(company)?$/i })).toBeInTheDocument();
+  }, 10000);
+
   test('does not show the lead-field plus action in the Travel form picker', async () => {
     renderTravelPage();
     await openBuilder();

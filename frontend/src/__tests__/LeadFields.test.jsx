@@ -114,6 +114,7 @@ beforeEach(() => {
           { key: "phone", label: "Phone" },
           { key: "company", label: "Company" },
           { key: "title", label: "Job Title" },
+          { key: "industry", label: "Service Type" },
           { key: "source", label: "Source" },
           { key: "utm_source", label: "UTM Source" },
           { key: "actions", label: "Actions", lockedVisible: true },
@@ -272,7 +273,7 @@ describe("<LeadFields />", () => {
     expect(screen.queryByText("Alpha")).not.toBeInTheDocument();
   });
 
-  it("locks fixed Quick-add fields and disables unsupported system fields", async () => {
+  it("locks fixed Quick-add fields, enables editable fields, and disables automatic fields", async () => {
     authContextValue.tenant = { vertical: "generic" };
     const user = userEvent.setup();
 
@@ -288,6 +289,7 @@ describe("<LeadFields />", () => {
     const emailRow = screen.getByRole("button", { name: "Email" }).closest(".field-config-row");
     const unsupportedRow = screen.getByRole("button", { name: "UTM Source" }).closest(".field-config-row");
     const companyRow = screen.getByRole("button", { name: "Company" }).closest(".field-config-row");
+    const industryRow = screen.getByRole("button", { name: "Service Type" }).closest(".field-config-row");
 
     for (const row of [nameRow, emailRow]) {
       const quickAdd = within(row).getAllByRole("checkbox")[1];
@@ -299,10 +301,15 @@ describe("<LeadFields />", () => {
     expect(unsupportedQuickAdd).toBeDisabled();
     expect(within(leadIdRow).getAllByRole("checkbox").every((checkbox) => checkbox.disabled)).toBe(true);
 
+    const industryQuickAdd = within(industryRow).getAllByRole("checkbox")[1];
+    expect(industryQuickAdd).toBeEnabled();
+    await user.click(industryQuickAdd);
+
     await user.click(within(companyRow).getAllByRole("checkbox")[1]);
     await waitFor(() => expect(serverFieldConfig).not.toBeNull());
     expect(serverFieldConfig.fieldOverrides.name.quickAdd).toBe(true);
     expect(serverFieldConfig.fieldOverrides.email.quickAdd).toBe(true);
+    expect(serverFieldConfig.fieldOverrides.industry.quickAdd).toBe(true);
   });
 
   it("restores collapsed generic groups after leaving and returning to Field Config", async () => {
@@ -497,7 +504,7 @@ describe("<LeadFields />", () => {
       const saveCall = fetchApiMock.mock.calls.find(([url, options]) => {
         if (url !== "/api/tenant-settings/generic.fieldConfig" || options?.method !== "PUT") return false;
         const saved = JSON.parse(JSON.parse(options.body).value);
-        return saved.fieldOrder?.["Basic Information"]?.join(",") === "id,email,company,name,title";
+        return saved.fieldOrder?.["Basic Information"]?.join(",") === "id,email,company,name,title,industry";
       });
       expect(saveCall).toBeTruthy();
     });

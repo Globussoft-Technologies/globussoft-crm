@@ -74,7 +74,29 @@ describe('filterSidebarPages', () => {
 
     expect(getGenericAccessByPath('/clients')).toMatchObject({ sidebarHidden: true });
     expect(pages.some((page) => page.path === '/clients')).toBe(false);
-    expect(pages.some((page) => page.path === '/contacts')).toBe(true);
+    expect(getGenericAccessByPath('/contacts')).toMatchObject({
+      sidebarHidden: true,
+      requiredPermission: { module: 'contacts', action: 'read' },
+    });
+    expect(pages.some((page) => page.path === '/contacts')).toBe(false);
+    expect(getGenericAccessByPath('/sequences')).toMatchObject({ sidebarHidden: true });
+    expect(pages.some((page) => page.path === '/sequences')).toBe(false);
+    expect(getGenericAccessByPath('/web-visitors')).toMatchObject({ sidebarHidden: true });
+    expect(pages.some((page) => page.path === '/web-visitors')).toBe(false);
+    const newlyHiddenPaths = [
+      '/ab-tests', '/chatbots', '/social', '/playbooks', '/sla', '/contracts',
+      '/admin/csp-violations', '/admin/status', '/commission-profiles',
+      '/commission-data', '/channels', '/industry-templates',
+      '/signatures', '/document-templates', '/projects',
+    ];
+    for (const path of newlyHiddenPaths) {
+      expect(getGenericAccessByPath(path)).toMatchObject({ sidebarHidden: true });
+      expect(pages.some((page) => page.path === path)).toBe(false);
+    }
+    expect(filterSidebarPages(
+      newlyHiddenPaths.map((path) => ({ path, label: path })),
+      { vertical: 'generic' },
+    )).toEqual([]);
     expect(getGenericAccessByPath('/landing-sites')).not.toMatchObject({ sidebarHidden: true });
     expect(pages.some((page) => page.path === '/landing-sites')).toBe(true);
   });
@@ -155,7 +177,9 @@ describe('filterSidebarPages', () => {
     ]));
     expect(manager.some((page) => page.path === '/commissions')).toBe(true);
     expect(getGenericSidebarPages({ isAdmin: false, isManager: false, permissionsReady: true, hasPermission: () => true }).some((page) => page.path === '/commissions')).toBe(true);
-    expect(manager).toContainEqual(expect.objectContaining({ path: '/workflows' }));
+    expect(manager.some((page) => page.path === '/contacts')).toBe(false);
+    expect(manager.some((page) => page.path === '/workflows')).toBe(false);
+    expect(manager.some((page) => page.path === '/sequences')).toBe(false);
     expect(genericRoleGuardProps('/workflows')).toEqual({
       requiredPermission: { module: 'workflows', action: 'read' },
     });

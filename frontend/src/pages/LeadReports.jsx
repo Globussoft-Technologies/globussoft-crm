@@ -267,8 +267,9 @@ function ScheduleVisitLink({ type = 'Site Visit', className = 'btn-secondary', c
 
 export default function LeadReports() {
   const notify = useNotify();
-  const { user } = useContext(AuthContext) || {};
+  const { user, tenant } = useContext(AuthContext) || {};
   const isAdmin = user?.role === 'ADMIN';
+  const isGeneric = tenant?.vertical === 'generic';
 
   const tab = 'overview';
   const [from, setFrom] = useState('');
@@ -481,7 +482,7 @@ export default function LeadReports() {
       {!loading && !error && current && (
         <>
           {tab === 'overview' && (
-            <OverviewTab d={current} metric={overviewMetric} onMetricChange={setOverviewMetric} />
+            <OverviewTab d={current} metric={overviewMetric} onMetricChange={setOverviewMetric} isGeneric={isGeneric} />
           )}
           {tab === 'productivity' && <ProductivityTab d={current} period={period} />}
           {tab === 'quality' && <QualityTab d={current} />}
@@ -514,10 +515,15 @@ export default function LeadReports() {
 
 // ─── 5. Daily / Weekly / Monthly productivity ────────────────────────
 
-function OverviewTab({ d, metric, onMetricChange }) {
+function OverviewTab({ d, metric, onMetricChange, isGeneric }) {
   const [chartType, setChartType] = useState('bar');
   const totals = d.totals || {};
-  const selected = OVERVIEW_METRICS.find((item) => item.value === metric) || OVERVIEW_METRICS[0];
+  const overviewMetrics = OVERVIEW_METRICS.map((item) =>
+    isGeneric && item.value === 'byLifecycleStage'
+      ? { ...item, label: 'Lead by status' }
+      : item,
+  );
+  const selected = overviewMetrics.find((item) => item.value === metric) || overviewMetrics[0];
   const isBreakdown = metric === 'bySource' || metric === 'byLifecycleStage';
   const isCommunication = ['sms', 'emails', 'whatsapp'].includes(metric);
   const communicationTotalLabel = {
@@ -532,7 +538,7 @@ function OverviewTab({ d, metric, onMetricChange }) {
   const chartData = metric === 'bySource'
     ? d.bySource || []
     : metric === 'byLifecycleStage'
-      ? d.byLifecycleStage || []
+      ? (isGeneric ? d.byStatus || [] : d.byLifecycleStage || [])
       : d.series || [];
   const aggregateTotal = isBreakdown
     ? chartData.reduce((sum, row) => sum + (Number(row.value) || 0), 0)
@@ -628,7 +634,7 @@ function OverviewTab({ d, metric, onMetricChange }) {
           <p className="lead-reports-page__panel-sub">Lead metrics include contacts created in the selected period that are still leads. Converted leads are excluded; these are not historical acquisition totals.</p>
           <p className="lead-reports-page__query-label">Select metric</p>
           <div className="lead-reports-page__metric-list">
-            {OVERVIEW_METRICS.map((item) => (
+            {overviewMetrics.map((item) => (
               <button
                 key={item.value}
                 type="button"

@@ -759,7 +759,10 @@ export default function LandingSites() {
 
   return (
 
-    <div style={{ padding: '2rem', height: '100%', minHeight: 0, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', overflow: 'hidden', animation: 'fadeIn 0.3s ease' }}>
+    <div
+      className={`landing-sites-page${tenantVertical === 'generic' ? ' landing-sites-page--generic' : ''}`}
+      style={{ padding: '2rem', height: '100%', minHeight: 0, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', overflow: 'hidden', animation: 'fadeIn 0.3s ease' }}
+    >
 
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.75rem', gap: '1rem', flexWrap: 'wrap' }}>
 

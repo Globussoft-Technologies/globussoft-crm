@@ -37,7 +37,6 @@ import {
   UsersRound,
   FileText,
   FileSpreadsheet,
-  FolderKanban,
   IndianRupee,
   Trophy,
   ShoppingBag,
@@ -46,8 +45,6 @@ import {
   Calendar,
   Shield,
   ShieldCheck,
-  // #917 slice 5  CSP Violations admin nav entry icon.
-  ShieldAlert,
   ScrollText,
   TrendingUp,
   BookOpen,
@@ -57,7 +54,6 @@ import {
   MessageSquare,
   Eye,
   BadgePercent,
-  Bot,
   FileSignature,
   Award,
   CreditCard,
@@ -87,8 +83,6 @@ import {
   Calculator,
   // Used by the dynamic page-catalog ?? ? sidebar icon lookup for /portal
   UserCircle,
-  // Cron PRD Priority A #1  LLM Spend admin dashboard
-  Activity,
   // #898  Campaigns sidebar surfacing (Email / SMS / Push)
   Megaphone,
   // Travel CRM vertical (Day 1 scaffolding  Phase 1 per docs/TRAVEL_CRM_PRD.md 7)
@@ -989,10 +983,19 @@ const Sidebar = ({
     };
     refresh();
     const onInvalidate = () => refresh();
+    const onVisibilityStorage = (event) => {
+      if (event.key === "globuscrm:tenant-page-visibility-updated") refresh();
+    };
     window.addEventListener("sidebar:pages-changed", onInvalidate);
+    window.addEventListener("tenant:page-visibility-changed", onInvalidate);
+    window.addEventListener("storage", onVisibilityStorage);
+    window.addEventListener("focus", onInvalidate);
     return () => {
       cancelled = true;
       window.removeEventListener("sidebar:pages-changed", onInvalidate);
+      window.removeEventListener("tenant:page-visibility-changed", onInvalidate);
+      window.removeEventListener("storage", onVisibilityStorage);
+      window.removeEventListener("focus", onInvalidate);
     };
   }, [permissionsKey]);
 
@@ -1850,7 +1853,17 @@ function renderWellnessNav({
   // the nav entry is suppressed. Marketing keeps just SMS / Email Blasts
   // + Landing Sites; Social Media, A/B Tests and Booking Pages are hidden
   // by request.
-  const hiddenSidebarPaths = new Set(["/wellness/whatsapp", "/social", "/ab-tests", "/booking-pages"]);
+  const hiddenSidebarPaths = new Set([
+    "/wellness/whatsapp",
+    "/social",
+    "/ab-tests",
+    "/booking-pages",
+    // Wellness already renders working external-launcher buttons for these
+    // integrations below. Suppress only the duplicate catalog links, whose
+    // internal SPA paths are not Wellness destinations and currently 404.
+    "/integrations/adsgpt",
+    "/integrations/callified",
+  ]);
   for (const page of accessiblePages) {
     if (!page || !page.category || !page.path) continue;
     if (hiddenSidebarPaths.has(page.path)) continue;
@@ -2793,11 +2806,17 @@ function renderGenericNav({
         <Link to="/forms" icon={Code} label="Web Forms" requiredPermission={{ module: "web_forms", action: "read" }} />
         <Link to="/landing-sites" icon={PanelTop} label="Landing Sites" requiredPermission={{ module: "marketing", action: "read" }} />
         <Link to="/marketing" icon={Send} label="Marketing Campaign" managerOnly requiredPermission={{ module: "marketing", action: "read" }} />
-        <Link to="/sequences" icon={Network} label="Sequences" managerOnly requiredPermission={{ module: "marketing", action: "read" }} />
-        <Link to="/ab-tests" icon={PenTool} label="A/B Tests" managerOnly requiredPermission={{ module: "ab_tests", action: "read" }} />
-        <Link to="/web-visitors" icon={Eye} label="Web Visitors" managerOnly requiredPermission={{ module: "analytics", action: "read" }} />
-        <Link to="/chatbots" icon={Bot} label="Chatbots" managerOnly requiredPermission={{ module: "chatbots", action: "read" }} />
-        <Link to="/social" icon={Send} label="Social Media" managerOnly requiredPermission={{ module: "social", action: "read" }} />
+        {/* Generic CRM: the legacy Sequences page is hidden from navigation.
+            The route remains available so existing direct links keep working. */}
+        {/* <Link to="/sequences" icon={Network} label="Sequences" managerOnly requiredPermission={{ module: "marketing", action: "read" }} /> */}
+        {/* Generic CRM: these pages are hidden from navigation only. Their
+            routes and permissions remain active for existing direct links. */}
+        {/* <Link to="/ab-tests" icon={PenTool} label="A/B Tests" managerOnly requiredPermission={{ module: "ab_tests", action: "read" }} /> */}
+        {/* Generic CRM: Web Visitors is hidden from navigation only. The route
+            and feature remain available for direct-link use. */}
+        {/* <Link to="/web-visitors" icon={Eye} label="Web Visitors" managerOnly requiredPermission={{ module: "analytics", action: "read" }} /> */}
+        {/* <Link to="/chatbots" icon={Bot} label="Chatbots" managerOnly requiredPermission={{ module: "chatbots", action: "read" }} /> */}
+        {/* <Link to="/social" icon={Send} label="Social Media" managerOnly requiredPermission={{ module: "social", action: "read" }} /> */}
         <Link to="/surveys" icon={ClipboardList} label="Surveys" managerOnly requiredPermission={{ module: "surveys", action: "read" }} />
       </>)}
 
@@ -2808,11 +2827,13 @@ function renderGenericNav({
       </>)}
 
       {renderGroup("Sales", <>
-        <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} />
+        {/* Generic CRM: Contacts is intentionally hidden from navigation.
+            The route and feature remain available for direct-link use. */}
+        {/* <Link to="/contacts" icon={Users} label="Contacts" requiredPermission={{ module: "contacts", action: "read" }} /> */}
         <Link to="/clients" icon={Building2} label="Clients" requiredPermission={{ module: "contacts", action: "read" }} />
         <Link to="/pipeline" icon={Briefcase} label="Deals" requiredPermission={{ module: "deals", action: "read" }} />
         <Link to="/deal-insights" icon={Eye} label="Deal Insights" requiredPermission={{ module: "deal_insights", action: "read" }} />
-        <Link to="/playbooks" icon={FileText} label="Playbooks" requiredPermission={{ module: "playbooks", action: "read" }} />
+        {/* <Link to="/playbooks" icon={FileText} label="Playbooks" requiredPermission={{ module: "playbooks", action: "read" }} /> */}
         <Link to="/booking-pages" icon={Calendar} label="Booking Pages" requiredPermission={{ module: "booking_pages", action: "read" }} />
         <Link to="/pipelines" icon={GitBranch} label="Pipelines" managerOnly requiredPermission={{ module: "pipeline", action: "write" }} />
         <Link to="/forecasting" icon={TrendingUp} label="Forecasting" managerOnly />
@@ -2822,21 +2843,23 @@ function renderGenericNav({
       {renderGroup("Work Management", <>
         <Link to="/tasks" icon={CheckSquare} label="Task Queue" count={counts.tasks} requiredPermission={{ module: "tasks", action: "read" }} />
         <Link to="/approvals" icon={CheckSquare} label="Approvals" managerOnly requiredPermission={{ module: "staff", action: "manage" }} />
-        <Link to="/workflows" icon={GitBranch} label="Workflows" requiredPermission={{ module: "workflows", action: "read" }} />
+        {/* Generic CRM: Workflows is intentionally hidden from navigation.
+            The route and feature remain available for direct-link use. */}
+        {/* <Link to="/workflows" icon={GitBranch} label="Workflows" requiredPermission={{ module: "workflows", action: "read" }} /> */}
       </>)}
 
       {renderGroup("Customer Support", <>
         <Link to="/tickets" icon={Ticket} label="Tickets" count={counts.tickets} requiredPermission={{ module: "tickets", action: "read" }} />
         <Link to="/live-chat" icon={MessageSquare} label="Live Chat" requiredPermission={{ module: "live_chat", action: "read" }} />
         <Link to="/knowledge-base" icon={BookOpen} label="Knowledge Base" managerOnly />
-        <Link to="/sla" icon={Target} label="SLA Policies" managerOnly requiredPermission={{ module: "sla", action: "read" }} />
+        {/* <Link to="/sla" icon={Target} label="SLA Policies" managerOnly requiredPermission={{ module: "sla", action: "read" }} /> */}
       </>)}
 
       {renderGroup("Documents & Delivery", <>
-        <Link to="/signatures" icon={FileSignature} label="E-Signatures" requiredPermission={{ module: "signatures", action: "read" }} />
-        <Link to="/document-templates" icon={FileText} label="Doc Templates" requiredPermission={{ module: "document_templates", action: "read" }} />
-        <Link to="/contracts" icon={FileText} label="Contracts" requiredPermission={{ module: "contracts", action: "read" }} />
-        <Link to="/projects" icon={FolderKanban} label="Projects" requiredPermission={{ module: "projects", action: "read" }} />
+        {/* <Link to="/signatures" icon={FileSignature} label="E-Signatures" requiredPermission={{ module: "signatures", action: "read" }} /> */}
+        {/* <Link to="/document-templates" icon={FileText} label="Doc Templates" requiredPermission={{ module: "document_templates", action: "read" }} /> */}
+        {/* <Link to="/contracts" icon={FileText} label="Contracts" requiredPermission={{ module: "contracts", action: "read" }} /> */}
+        {/* <Link to="/projects" icon={FolderKanban} label="Projects" requiredPermission={{ module: "projects", action: "read" }} /> */}
       </>)}
 
       {renderGroup("Finance", <>
@@ -2882,13 +2905,13 @@ function renderGenericNav({
       {renderGroup("Administration", <>
         <Link to="/audit-log" icon={ScrollText} label="Audit Log" adminOnly />
         <Link to="/privacy" icon={Shield} label="Privacy" adminOnly />
-        <Link to="/admin/csp-violations" icon={ShieldAlert} label="CSP Violations" adminOnly />
+        {/* <Link to="/admin/csp-violations" icon={ShieldAlert} label="CSP Violations" adminOnly /> */}
         <Link to="/admin/embed-allowlist" icon={Shield} label="Embed Allowlist" adminOnly />
-        <Link to="/admin/status" icon={Activity} label="Status" adminOnly />
-        <Link to="/commission-profiles" icon={Award} label="Commission Profiles" adminOnly />
-        <Link to="/commission-data" icon={Award} label="Commission Data" adminOnly />
-        <Link to="/channels" icon={Radio} label="Channels" adminOnly />
-        <Link to="/industry-templates" icon={Building2} label="Industry Templates" adminOnly />
+        {/* <Link to="/admin/status" icon={Activity} label="Status" adminOnly /> */}
+        {/* <Link to="/commission-profiles" icon={Award} label="Commission Profiles" adminOnly /> */}
+        {/* <Link to="/commission-data" icon={Award} label="Commission Data" adminOnly /> */}
+        {/* <Link to="/channels" icon={Radio} label="Channels" adminOnly /> */}
+        {/* <Link to="/industry-templates" icon={Building2} label="Industry Templates" adminOnly /> */}
         <Link to="/currencies" icon={IndianRupee} label="Currencies" adminOnly />
         <Link to="/data-import-export" icon={Database} label="Import / Export" managerOnly requiredPermission={{ module: "settings", action: "manage" }} />
       </>)}

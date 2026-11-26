@@ -1008,8 +1008,13 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
 
   const goNeighbor = async (dir) => {
     try {
+      const neighborListUrl = isGenericLeadsDetail
+        ? '/api/contacts?status=Lead&includeCrmStatuses=true&limit=200'
+        : isLeadsDetail
+          ? '/api/contacts?status=Lead&limit=200'
+          : '/api/contacts?limit=200';
       const list = await fetchApi(
-        isLeadsDetail ? '/api/contacts?status=Lead&limit=200' : '/api/contacts?limit=200',
+        neighborListUrl,
         { silent: true },
       );
       const arr = Array.isArray(list) ? list : list?.data || [];

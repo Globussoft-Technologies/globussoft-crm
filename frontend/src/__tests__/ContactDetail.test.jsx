@@ -552,7 +552,7 @@ describe('ContactDetail — current profile contract', () => {
   it('keeps Generic CRM neighbor navigation in Leads and labels it as leads', async () => {
     const baseFetch = makeFetchImpl();
     fetchApiMock.mockImplementation((url, opts) => {
-      if (url === '/api/contacts?status=Lead&limit=200') {
+      if (url === '/api/contacts?status=Lead&includeCrmStatuses=true&limit=200') {
         return Promise.resolve([{ id: 42 }, { id: 43 }]);
       }
       return baseFetch(url, opts);
@@ -564,10 +564,47 @@ describe('ContactDetail — current profile contract', () => {
     fireEvent.click(profile.getByRole('button', { name: 'Next lead' }));
 
     await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts?status=Lead&limit=200', { silent: true });
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts?status=Lead&includeCrmStatuses=true&limit=200', { silent: true });
     });
     expect(await screen.findByRole('heading', { name: 'Leads' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Contacts' })).not.toBeInTheDocument();
+  });
+
+  it('keeps Generic CRM neighbor navigation available after a lead status change', async () => {
+    let savedContact = { ...BASE_CONTACT, status: 'Lead', lifecycleStageKey: 'new' };
+    const baseFetch = makeFetchImpl({
+      contact: { kind: 'ok', data: savedContact },
+    });
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/42' && opts?.method === 'PATCH') {
+        savedContact = { ...savedContact, ...JSON.parse(opts.body) };
+        return Promise.resolve(savedContact);
+      }
+      if (url === '/api/contacts?status=Lead&includeCrmStatuses=true&limit=200') {
+        return Promise.resolve([{ ...savedContact }, { id: 43, status: 'Lead' }]);
+      }
+      if (url === '/api/contacts/42' && (!opts || (opts.method || 'GET') === 'GET')) {
+        return Promise.resolve(savedContact);
+      }
+      return baseFetch(url, opts);
+    });
+    renderPage({ listType: 'leads', vertical: 'generic', renderBackdrop: false });
+
+    const profile = await getProfile();
+    const pipeline = await screen.findByRole('group', { name: 'Lead status stages' });
+    fireEvent.click(within(pipeline).getByRole('button', { name: 'Contacted' }));
+    await waitFor(() => expect(savedContact.status).toBe('Contacted'));
+
+    fireEvent.click(profile.getByRole('button', { name: 'Next lead' }));
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/contacts?status=Lead&includeCrmStatuses=true&limit=200',
+        { silent: true },
+      );
+    });
+    expect(notifyObj.info).not.toHaveBeenCalledWith('This is the first lead.');
+    expect(notifyObj.info).not.toHaveBeenCalledWith('This is the last lead.');
   });
 
   it('keeps wellness neighbor navigation in Leads', async () => {

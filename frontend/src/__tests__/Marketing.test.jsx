@@ -170,7 +170,9 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     wireFetch();
     renderMarketing(GENERIC_USER);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Move sequence Q4 Holiday Promo later' }));
+    const moveLater = await screen.findByRole('button', { name: 'Move sequence Q4 Holiday Promo later' });
+    expect(moveLater.closest('.generic-sequence-card')).toBeInTheDocument();
+    fireEvent.click(moveLater);
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/marketing/campaigns/reorder', {
       method: 'PUT',
@@ -231,12 +233,46 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     const heading = await screen.findByRole('heading', { name: 'Marketing Sequences' });
     expect(heading).toBeInTheDocument();
     expect(heading.closest('.marketing-page')).toHaveClass('marketing-page--generic');
+    expect(heading.closest('.marketing-page')).toHaveStyle({
+      width: '100%',
+      maxWidth: '100%',
+      minWidth: '0',
+      boxSizing: 'border-box',
+      overflowX: 'hidden',
+    });
+    expect(heading.closest('.marketing-page')).toHaveClass('marketing-page--generic-sequence');
+    expect(document.querySelector('.marketing-page__sequence-surface')).toBeInTheDocument();
     expect(heading.closest('.marketing-page__header')).toBeInTheDocument();
     for (const name of ['Webhooks', 'Email Sequences', 'SMS Sequences', 'WhatsApp Sequences']) {
       expect(screen.getByRole('button', { name })).toBeInTheDocument();
     }
     expect(screen.queryByRole('button', { name: 'Embedded Forms' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Push Campaigns' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['Email', null, 'No Email sequence available.'],
+    ['SMS', 'SMS Sequences', 'No SMS sequence available.'],
+    ['WhatsApp', 'WhatsApp Sequences', 'No WhatsApp sequence available.'],
+  ])('shows a Generic CRM empty state when no %s sequence data exists', async (_label, tabName, emptyMessage) => {
+    wireFetch({ campaigns: [], sms: [], whatsapp: [] });
+    renderMarketing(GENERIC_USER);
+
+    if (tabName) {
+      fireEvent.click(await screen.findByRole('button', { name: tabName }));
+      fireEvent.click(await screen.findByRole('button', { name: 'View sequences' }));
+    }
+
+    expect(await screen.findByRole('status', { name: 'Empty sequence list' })).toHaveTextContent(emptyMessage);
+  });
+
+  it('shows the same Generic CRM empty state when no webhook data exists', async () => {
+    wireFetch({ campaigns: [] });
+    renderMarketing(GENERIC_USER);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Webhooks' }));
+
+    expect(await screen.findByText('No webhook available.')).toBeInTheDocument();
   });
 
   it('opens only the configuration matching each Generic CRM sequence channel', async () => {
@@ -335,9 +371,11 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     const emailTab = screen.getByRole('button', { name: 'Email Sequences' });
     expect(templatesTab.style.background).toBe('var(--primary-color, var(--accent-color))');
     expect(emailTab.style.background).toBe('transparent');
+    expect(templatesTab.closest('.marketing-page')).not.toHaveClass('marketing-page--generic-sequence');
 
     fireEvent.click(emailTab);
 
+    expect(emailTab.closest('.marketing-page')).toHaveClass('marketing-page--generic-sequence');
     expect(templatesTab.style.background).toBe('transparent');
     expect(templatesTab.style.color).toBe('var(--text-secondary)');
     expect(emailTab.style.background).toBe('var(--primary-color)');
@@ -395,7 +433,8 @@ describe('<Marketing /> — Generic campaign workflow', () => {
     const listUrl = source === 'whatsapp'
       ? `/api/marketing/campaigns?channel=${channel}`
       : '/api/marketing/campaigns?paginate=1';
-    await screen.findByText(sequence.name);
+    const sequenceTitle = await screen.findByText(sequence.name);
+    expect(sequenceTitle.closest('.generic-sequence-card')).toBeInTheDocument();
     const listCallsBeforePlay = fetchApiMock.mock.calls.filter(([url]) => String(url).startsWith(listUrl)).length;
 
     fireEvent.click(screen.getByRole('button', { name: `Play sequence ${sequence.name}` }));

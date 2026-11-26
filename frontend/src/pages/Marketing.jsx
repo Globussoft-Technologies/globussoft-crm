@@ -135,7 +135,8 @@ function GenericCampaignCard({ campaign, onOpen, onPause, onPlay, onCopy, onDele
   return (
     <div
       ref={setNodeRef}
-      className="card campaign-card"
+      className="card campaign-card generic-sequence-card"
+      data-dragging={isDragging ? 'true' : undefined}
       data-selected={selectionMode && selected ? 'true' : undefined}
       style={{
         padding: '1.25rem 1.35rem',
@@ -350,6 +351,7 @@ export default function Marketing() {
     : visibleCampaigns;
   const activeSequenceChannel = activeTab === 'whatsapp' ? 'WHATSAPP' : (activeTab === 'sms' ? 'SMS' : 'EMAIL');
   const activeSequenceLabel = activeTab === 'whatsapp' ? 'WhatsApp' : (activeTab === 'sms' ? 'SMS' : 'email');
+  const isGenericSequencePage = isGeneric && ['campaigns', 'sms', 'whatsapp'].includes(activeTab);
   const pageDraftIds = isGeneric && ['campaigns', 'sms', 'whatsapp'].includes(activeTab)
     ? displayedCampaigns.filter(c => c.status === 'Draft' && (c.channel || 'EMAIL') === activeSequenceChannel).map(c => c.id)
     : [];
@@ -998,7 +1000,17 @@ ${fields.map(f => {
   }
 
   return (
-    <div className={`marketing-page${isGeneric ? ' marketing-page--generic' : ''}`} style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column', animation: 'fadeIn 0.5s ease-out' }}>
+    <div
+      className={`marketing-page${isGeneric ? ' marketing-page--generic' : ''}${isGenericSequencePage ? ' marketing-page--generic-sequence' : ''}`}
+      style={{
+        padding: '2rem',
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        animation: 'fadeIn 0.5s ease-out',
+        ...(isGeneric ? { width: '100%', maxWidth: '100%', minWidth: 0, boxSizing: 'border-box', overflowX: 'hidden' } : {}),
+      }}
+    >
       {isGeneric && <SequenceUnsavedChangesGuard active={sequenceBuilderOpen && sequenceBuilderDirty} notify={notify} onDiscard={() => setSequenceBuilderDirty(false)} />}
       <header className="marketing-page__header" style={{ marginBottom: '0.75rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
@@ -1071,7 +1083,7 @@ ${fields.map(f => {
 
       {/* ─── Email Campaigns Tab ─── */}
       {(activeTab === 'campaigns' || (isGeneric && (activeTab === 'sms' || activeTab === 'whatsapp'))) && (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+        <div className="marketing-page__sequence-surface" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           {isGeneric && sequenceBuilderOpen && activeTab === 'whatsapp' && <GenericWhatsAppTriggerMappings
             campaigns={campaigns}
             editCampaignId={editingSequenceId}
@@ -1213,6 +1225,14 @@ ${fields.map(f => {
                     ? 'Choose a trigger and an approved WhatsApp template above, then save to create and activate the sequence.'
                     : `Choose a trigger and ${activeTab === 'sms' ? 'SMS' : 'email'} template above, then save to create and activate the sequence.`
                   : 'Launch your first email campaign to start tracking engagement.'}</p>
+              </div>
+            )}
+            {isGeneric && displayedCampaigns.length === 0 && (
+              <div role="status" aria-label="Empty sequence list" style={{ gridColumn: '1 / -1', padding: '4rem', textAlign: 'center', background: 'var(--subtle-bg-2)', borderRadius: '12px', border: '1px dashed var(--border-color)' }}>
+                <Megaphone size={48} color="var(--text-secondary)" style={{ opacity: 0.3, margin: '0 auto 1rem' }} />
+                <h3 style={{ fontSize: '1.25rem', fontWeight: '600' }}>
+                  {`No ${activeTab === 'sms' ? 'SMS' : activeTab === 'whatsapp' ? 'WhatsApp' : 'Email'} sequence available.`}
+                </h3>
               </div>
             )}
             </div>

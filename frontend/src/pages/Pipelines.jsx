@@ -342,7 +342,7 @@ const Pipelines = () => {
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', minWidth: 0 }}>
                   <GitBranch size={20} style={{ color: 'var(--accent-color)', flexShrink: 0 }} />
                   <h3 style={{ fontSize: '1.05rem', fontWeight: '600', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {p.name}
+                    {isGeneric && p.isDefault ? 'Default Pipeline' : p.name}
                   </h3>
                 </div>
                 {p.isDefault && (

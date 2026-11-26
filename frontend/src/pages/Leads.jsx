@@ -82,6 +82,7 @@ import { runLeadBatches } from '../utils/leadBulkWork';
 import { useLeadCheckboxDrag } from '../utils/useLeadCheckboxDrag';
 import { buildAssistantFilterState } from "../utils/leadAssistantFilters";
 import { richTextToPlainText } from "../utils/richText";
+import { GENERIC_LEAD_QUICK_ADD_FIELDS } from "../utils/genericLeadQuickAddFields";
 import {
   GENERIC_LEAD_STATUS_EDIT_OPTIONS,
   GENERIC_LEAD_STATUS_FILTER_OPTIONS,
@@ -2321,6 +2322,9 @@ function CreateLeadFieldsPicker({
     (field) =>
       !normalizedQuery || field.label.toLowerCase().includes(normalizedQuery),
   );
+  const allFieldsSelected = fields.every(
+    (field) => field.lockedVisible || draftVisible.has(field.key),
+  );
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -2529,11 +2533,21 @@ function CreateLeadFieldsPicker({
           <button
             type="button"
             className="btn-secondary"
-            onClick={() =>
-              setDraftVisible(new Set(fields.map((field) => field.key)))
-            }
+            onClick={() => {
+              if (allFieldsSelected) {
+                setDraftVisible(
+                  new Set(
+                    fields
+                      .filter((field) => field.lockedVisible)
+                      .map((field) => field.key),
+                  ),
+                );
+                return;
+              }
+              setDraftVisible(new Set(fields.map((field) => field.key)));
+            }}
           >
-            Show all
+            {allFieldsSelected ? "Deselect all fields" : "Select all fields"}
           </button>
           <div style={{ display: "flex", gap: "0.5rem" }}>
             <button type="button" className="btn-secondary" onClick={onClose}>
@@ -3636,66 +3650,29 @@ const Leads = ({ initialListState = null } = {}) => {
       active = false;
     };
   }, [isGeneric]);
-  const createLeadFieldCatalog = useMemo(
-    () => [
-      {
-        key: "name",
-        configId: "name",
-        label: "Full Name",
-        required: true,
-        lockedVisible: true,
-        lockedRequired: true,
-      },
-      {
-        key: "email",
-        configId: "email",
-        label: "Email Address",
-        required: true,
-        lockedVisible: true,
+  const createLeadFieldCatalog = useMemo(() => {
+    const availableSystemFields = new Map(
+      genericFieldConfigCatalog.map((field) => [field.key, field]),
+    );
+    const coreKeys = new Set(["name", "email", "company", "title", "phone", "website", "source"]);
+    const systemFields = GENERIC_LEAD_QUICK_ADD_FIELDS
+      .filter((field) => coreKeys.has(field.key) || availableSystemFields.has(field.key))
+      .map((field) => ({
+        ...field,
+        label: coreKeys.has(field.key)
+          ? field.label
+          : availableSystemFields.get(field.key)?.label || field.label,
+        configId: field.key,
+        required: field.key === "name" || field.key === "email",
+        lockedVisible: field.key === "name" || field.key === "email",
         lockedRequired:
-          (tenantFieldConfig?.fieldOverrides?.email?.required ??
-            tenantFieldConfig?.fieldOverrides?.email?.isRequired) === true,
-      },
-      {
-        key: "company",
-        configId: "company",
-        label: "Company",
-        required: false,
-        lockedVisible: false,
-        lockedRequired: false,
-      },
-      {
-        key: "title",
-        configId: "title",
-        label: "Job Title",
-        required: false,
-        lockedVisible: false,
-        lockedRequired: false,
-      },
-      {
-        key: "phone",
-        configId: "phone",
-        label: "Phone",
-        required: false,
-        lockedVisible: false,
-        lockedRequired: false,
-      },
-      {
-        key: "website",
-        configId: "website",
-        label: "Website URL",
-        required: false,
-        lockedVisible: false,
-        lockedRequired: false,
-      },
-      {
-        key: "source",
-        configId: "source",
-        label: "Lead Source",
-        required: false,
-        lockedVisible: false,
-        lockedRequired: false,
-      },
+          field.key === "name" ||
+          (field.key === "email" &&
+            (tenantFieldConfig?.fieldOverrides?.email?.required ??
+              tenantFieldConfig?.fieldOverrides?.email?.isRequired) === true),
+      }));
+    return [
+      ...systemFields,
       ...customFieldDefs.map((field) => ({
         key: `custom:${field.fieldKey}`,
         configId: `custom:${field.id}`,
@@ -3704,9 +3681,8 @@ const Leads = ({ initialListState = null } = {}) => {
         lockedVisible: false,
         lockedRequired: false,
       })),
-    ],
-    [customFieldDefs, tenantFieldConfig],
-  );
+    ];
+  }, [customFieldDefs, genericFieldConfigCatalog, tenantFieldConfig]);
   const tenantQuickAddSnapshot = useMemo(() => {
     const overrides = tenantFieldConfig?.fieldOverrides || {};
     return Object.fromEntries(
@@ -3807,6 +3783,23 @@ const Leads = ({ initialListState = null } = {}) => {
     () => new Set(createLeadRequiredFieldKeys),
     [createLeadRequiredFieldKeys],
   );
+  const createLeadAdditionalSystemFields = useMemo(() => {
+    const dedicatedFieldKeys = new Set([
+      "name",
+      "email",
+      "company",
+      "title",
+      "phone",
+      "website",
+      "source",
+    ]);
+    return createLeadFieldCatalog.filter(
+      (field) =>
+        !dedicatedFieldKeys.has(field.key) &&
+        !field.key.startsWith("custom:") &&
+        createLeadVisibleFieldSet.has(field.key),
+    );
+  }, [createLeadFieldCatalog, createLeadVisibleFieldSet]);
   // Generic + Travel "Customize table" column-visibility picker
   // (personal per-user preference  see components/ColumnPicker.jsx).
   // null = "not loaded yet, show every builtin column" so the table never
@@ -7356,6 +7349,16 @@ const Leads = ({ initialListState = null } = {}) => {
         key === "anniversary" ||
         key === "gst" ||
         key === "billingStateCode" ||
+        (isGeneric &&
+          leadColumnKeySet.has(key) &&
+          key !== "actions" &&
+          !CALLIFIED_LEAD_COLUMN_KEYS.has(key) &&
+          ![
+            "interestedPlotArea",
+            "pickupLocation",
+            "plotAssign",
+            "overallPickupStatus",
+          ].includes(key)) ||
         customFieldByKey.has(key),
     )
     .map((key) => {
@@ -7441,10 +7444,11 @@ const Leads = ({ initialListState = null } = {}) => {
       if (key === "billingStateCode")
         return { key, label: "Billing State Code" };
       const field = customFieldByKey.get(key);
+      const catalogField = leadColumnCatalog.find((column) => column.key === key);
       return {
         key,
-        label: field?.label || key,
-        customField: true,
+        label: field?.label || catalogField?.label || key,
+        customField: Boolean(field),
         field,
       };
     });
@@ -10081,7 +10085,21 @@ const Leads = ({ initialListState = null } = {}) => {
         );
       }
       default:
-        return null;
+        if (!isGeneric) return null;
+        return (
+          <td
+            style={getBodyCellStyle(column.key, {
+              color: "var(--text-secondary)",
+              fontSize: "0.875rem",
+            })}
+            title={lead[column.key] == null ? undefined : String(lead[column.key])}
+            onClick={(event) => event.stopPropagation()}
+          >
+            {lead[column.key] == null || lead[column.key] === ""
+              ? "—"
+              : String(lead[column.key])}
+          </td>
+        );
     }
   };
   const renderLeadNameBodyCell = (lead) => (
@@ -15959,6 +15977,46 @@ const Leads = ({ initialListState = null } = {}) => {
                   </select>
                 </div>
               )}
+
+              {isGeneric && createLeadAdditionalSystemFields.map((field) => {
+                const required = createLeadRequiredFieldSet.has(field.key);
+                const inputId = `create-lead-${field.key}`;
+                const commonProps = {
+                  id: inputId,
+                  name: field.key,
+                  className: "input-field",
+                  required,
+                  value: newLead[field.key] || "",
+                  onChange: (event) => handleChange(field.key, event.target.value),
+                };
+                return (
+                  <div key={field.key}>
+                    <label htmlFor={inputId} style={createLeadFieldLabelStyle}>
+                      {field.label}
+                      {required && (
+                        <span aria-hidden="true" className="required-mark" style={requiredMarkStyle}>
+                          *
+                        </span>
+                      )}
+                    </label>
+                    {field.inputType === "textarea" ? (
+                      <textarea
+                        {...commonProps}
+                        rows={3}
+                        maxLength={2000}
+                        placeholder={field.label}
+                      />
+                    ) : (
+                      <input
+                        {...commonProps}
+                        type={field.inputType || "text"}
+                        maxLength={field.maxLength || 191}
+                        placeholder={field.label}
+                      />
+                    )}
+                  </div>
+                );
+              })}
 
               {/* #600  wellness extras: treatment of interest (dropdown of
                     catalog services + a free-text "Other" fallback if the

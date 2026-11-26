@@ -490,6 +490,51 @@ describe('GET /api/search — global search envelope', () => {
     expect(getUserPermissions).toHaveBeenCalledWith(TENANT_ID, USER_ID, 'generic');
   });
 
+  test('generic staff search returns only leads they can open when lead visibility is closed', async () => {
+    const res = await request(makeApp({ role: 'USER', userId: USER_ID })).get('/api/search?q=amita');
+
+    expect(res.status).toBe(200);
+    const leadCall = prisma.contact.findMany.mock.calls.find(
+      ([options]) => options?.where?.status === 'Lead',
+    );
+    expect(leadCall).toBeTruthy();
+    expect(leadCall[0].where).toMatchObject({
+      tenantId: TENANT_ID,
+      status: 'Lead',
+      assignedToId: USER_ID,
+      deletedAt: null,
+    });
+  });
+
+  test('generic staff search can return all leads when tenant lead visibility is open', async () => {
+    prisma.tenantSetting.findUnique.mockImplementation(({ where }) => (
+      where?.tenantId_key?.key === 'generic.leads.visibility'
+        ? Promise.resolve({ value: 'open' })
+        : Promise.resolve(null)
+    ));
+
+    const res = await request(makeApp({ role: 'USER', userId: USER_ID })).get('/api/search?q=amita');
+
+    expect(res.status).toBe(200);
+    const leadCall = prisma.contact.findMany.mock.calls.find(
+      ([options]) => options?.where?.status === 'Lead',
+    );
+    expect(leadCall).toBeTruthy();
+    expect(leadCall[0].where).not.toHaveProperty('assignedToId');
+    expect(leadCall[0].where).toHaveProperty('deletedAt', null);
+  });
+
+  test('generic admin search excludes soft-deleted leads before linking to their detail page', async () => {
+    const res = await request(makeApp({ role: 'ADMIN' })).get('/api/search?q=amita');
+
+    expect(res.status).toBe(200);
+    const leadCall = prisma.contact.findMany.mock.calls.find(
+      ([options]) => options?.where?.status === 'Lead',
+    );
+    expect(leadCall).toBeTruthy();
+    expect(leadCall[0].where).toMatchObject({ status: 'Lead', deletedAt: null });
+  });
+
   test('generic tenant-hidden pages suppress their page-backed record categories', async () => {
     prisma.tenantSetting.findUnique.mockResolvedValue({
       value: JSON.stringify({ hiddenPaths: ['/invoices', '/marketing', '/pipelines', '/whatsapp'] }),

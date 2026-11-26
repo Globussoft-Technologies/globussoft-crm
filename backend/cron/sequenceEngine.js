@@ -125,7 +125,7 @@ function shortenUrlSafe(args) {
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY;
 const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || 'noreply@crm.globusdemos.com';
 
-async function resolveSequenceTravelProvider(tenantId) {
+async function resolveSequenceEmailProvider(tenantId) {
   let tenant = null;
   try {
     tenant = await prisma.tenant.findUnique({
@@ -135,7 +135,7 @@ async function resolveSequenceTravelProvider(tenantId) {
   } catch (_error) {
     return null;
   }
-  return String(tenant?.vertical || '').toLowerCase() === 'travel'
+  return ['generic', 'travel'].includes(String(tenant?.vertical || '').toLowerCase())
     ? resolveSendGridConfig(tenantId)
     : null;
 }
@@ -873,8 +873,9 @@ async function executeReceiverAction(action, enrollment, ctx, stepId = null) {
   if (!template || !enrollment.contact?.email) return {};
   const subject = renderGenericTemplate(normalizeGenericTemplatePlaceholders(template.subject || 'Follow-up'), ctx);
   const body = renderGenericTemplate(normalizeGenericTemplatePlaceholders(template.body || ''), ctx, { html: true });
+  const emailProvider = await resolveSequenceEmailProvider(enrollment.tenantId);
   const outbound = await prisma.emailMessage.create({
-    data: { subject, body, from: FROM_EMAIL, to: enrollment.contact.email, direction: 'OUTBOUND', contactId: enrollment.contact.id, tenantId: enrollment.tenantId, threadId: `seq-${enrollment.id}`, read: true },
+    data: { subject, body, from: sequenceSenderIdentity(emailProvider), to: enrollment.contact.email, direction: 'OUTBOUND', contactId: enrollment.contact.id, tenantId: enrollment.tenantId, threadId: `seq-${enrollment.id}`, read: true },
   });
   const trackedBody = await addGenericEmailTracking(outbound.id, body, enrollment.tenantId);
   const delivery = await sendEmail({ tenantId: enrollment.tenantId, to: enrollment.contact.email, subject, text: body, html: trackedBody });
@@ -952,7 +953,7 @@ async function processStep(step, enrollment) {
     // kind='flyer'. Resolves to a list of attachment descriptors. Errors per
     // ref are caught internally — the surrounding step send always proceeds.
     const attachments = await resolveStepAttachments(step, enrollment, 'email');
-    const travelProvider = await resolveSequenceTravelProvider(enrollment.tenantId);
+    const emailProvider = await resolveSequenceEmailProvider(enrollment.tenantId);
 
     const firstSequenceEmail = isGenericSequence
       ? !(await prisma.emailMessage.findFirst({
@@ -968,7 +969,7 @@ async function processStep(step, enrollment) {
       data: {
         subject,
         body,
-        from: sequenceSenderIdentity(travelProvider),
+        from: sequenceSenderIdentity(emailProvider),
         to,
         direction: 'OUTBOUND',
         contactId: enrollment.contact.id,
@@ -1026,9 +1027,9 @@ async function processStep(step, enrollment) {
           await prisma.emailTracking.updateMany({ where: { emailId: outboundMessage.id, type: 'open' }, data: { type: 'bounce' } }).catch(() => {});
         }
       }
-    } else if (travelProvider?.apiKey || SENDGRID_API_KEY) {
+    } else if (emailProvider?.apiKey || SENDGRID_API_KEY) {
       // Preserve the existing Travel/Wellness sequence delivery behavior.
-      trySendGridSend(to, subject, body, attachments, travelProvider).catch(() => {});
+      trySendGridSend(to, subject, body, attachments, emailProvider).catch(() => {});
     }
     return { advance: true };
   }

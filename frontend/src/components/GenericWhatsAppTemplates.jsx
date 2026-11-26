@@ -166,7 +166,7 @@ export default function GenericWhatsAppTemplates({ hideCreateButton = false, mer
       {unsubmittedDefaults.length > 0 && <div style={{ display: 'contents' }}>
         <div style={{ display: 'contents' }}>
           {unsubmittedDefaults.map(item => (
-            <article key={item.key} className="card" style={{ padding: '1.1rem', display: 'flex', flexDirection: 'column', gap: '0.65rem', minWidth: 0 }}>
+            <article key={item.key} className="card generic-template-card" style={{ padding: '1.1rem', display: 'flex', flexDirection: 'column', gap: '0.65rem', minWidth: 0 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}><strong style={{ fontSize: '0.95rem' }}>{item.key === 'existingLead' ? 'Lead details updated' : item.label}</strong><button type="button" aria-label={`Preview ${item.label}`} title="Preview template" onClick={() => openPreview({ ...item, category: 'UTILITY', language: META_LANGUAGE })} style={previewIconButtonStyle}><FileText size={18} /></button></div>
               <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>Generic CRM default · Meta approval required</span>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', lineHeight: 1.5, overflowWrap: 'anywhere', margin: 0 }}>{item.body}</p>
@@ -182,7 +182,7 @@ export default function GenericWhatsAppTemplates({ hideCreateButton = false, mer
         ) : templates.length === 0 && sequenceTemplates.length === 0 ? <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem' }}>No templates yet. Edit a default card above or create a new template.</p> : (
           <div style={{ display: 'contents' }}>
             {templates.map(template => (
-              <article key={template.id} className="card" style={{ padding: '1.1rem', display: 'flex', flexDirection: 'column', gap: '0.55rem', minWidth: 0 }}>
+              <article key={template.id} className="card generic-template-card" style={{ padding: '1.1rem', display: 'flex', flexDirection: 'column', gap: '0.55rem', minWidth: 0 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
                   <strong style={{ overflowWrap: 'anywhere' }}>{DEFAULTS.find(item => item.name === template.name)?.label || template.name}</strong>
                   <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.4rem' }}><MetaStatusBadge status={template.status} /><button type="button" aria-label={`Preview ${template.name}`} title="Preview template" onClick={() => openPreview(template)} style={previewIconButtonStyle}><FileText size={18} /></button></div>
@@ -196,7 +196,7 @@ export default function GenericWhatsAppTemplates({ hideCreateButton = false, mer
               </article>
             ))}
             {sequenceTemplates.map(template => (
-              <article key={`sequence-${template.id}`} className="card" style={{ padding: '1.1rem', display: 'flex', flexDirection: 'column', gap: '0.55rem', minWidth: 0 }}>
+              <article key={`sequence-${template.id}`} className="card generic-template-card" style={{ padding: '1.1rem', display: 'flex', flexDirection: 'column', gap: '0.55rem', minWidth: 0 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem' }}><strong style={{ overflowWrap: 'anywhere' }}>{template.name}</strong><div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}><span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>SEQUENCE</span><button type="button" aria-label={`Preview ${template.name}`} title="Preview template" onClick={() => openPreview(template)} style={previewIconButtonStyle}><FileText size={18} /></button></div></div>
                 <div style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>{template.category || 'General'} · Sequence copy</div>
                 <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', lineHeight: 1.5, overflowWrap: 'anywhere', margin: 0 }}>{(template.body || '').replace(/<[^>]+>/g, '').slice(0, 180)}</p>

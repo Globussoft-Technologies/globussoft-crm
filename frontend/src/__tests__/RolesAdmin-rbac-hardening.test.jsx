@@ -212,16 +212,16 @@ describe('role key editing', () => {
             id: 502,
             name: 'Receptionist',
             key: 'RECEPTIONIST',
-            permissions: [{ module: 'contacts', action: 'read' }],
+            permissions: [{ module: 'roles', action: 'read' }],
           }
         : { roles: [], tenantId: 11 },
       '/api/roles/catalog': { ...CATALOG, vertical: 'generic' },
       '/api/pages/catalog': {
         catalog: [{
-          label: 'Contacts',
-          path: '/contacts',
-          category: 'CRM Core',
-          requiredPermissions: [{ module: 'contacts', action: 'read' }],
+          label: 'Roles',
+          path: '/settings/roles',
+          category: 'Admin & Platform',
+          requiredPermissions: [{ module: 'roles', action: 'read' }],
         }],
       },
     }, 'generic');
@@ -237,14 +237,14 @@ describe('role key editing', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Add permission' }));
     const draftDialog = await screen.findByRole('dialog', { name: 'Permissions: Receptionist' });
-    fireEvent.click(draftDialog.querySelector('[aria-describedby="perm-desc-contacts-read"]'));
+    fireEvent.click(draftDialog.querySelector('[aria-describedby="perm-desc-roles-read"]'));
     fireEvent.click(within(draftDialog).getByRole('button', { name: 'Apply permissions' }));
     expect(await screen.findByText('1 permission selected')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Create role' }));
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/roles', expect.objectContaining({
       method: 'POST',
-      body: expect.stringContaining('"permissions":[{"module":"contacts","action":"read"}]'),
+      body: expect.stringContaining('"permissions":[{"module":"roles","action":"read"}]'),
     })));
     expect(screen.queryByRole('dialog', { name: 'Permissions: Receptionist' })).toBeNull();
   });
@@ -824,6 +824,70 @@ describe('Per-vertical MODULE_DESCRIPTIONS overrides', () => {
 });
 
 describe('tenant page visibility in the permission matrix', () => {
+  it('checks a stored grant when its page becomes available while the modal is open', async () => {
+    let catalog = {
+      catalog: { roles: ['read', 'manage'] },
+      modules: [{ module: 'roles', actions: ['read', 'manage'] }],
+      domains: [{ domain: 'Admin & Platform', modules: [{ module: 'roles', actions: ['read', 'manage'] }] }],
+      hiddenModules: ['deals'],
+      vertical: 'generic',
+    };
+    const roleWithStoredDealAccess = {
+      ...ADMIN_ROLE,
+      permissions: [...ADMIN_ROLE.permissions, { module: 'deals', action: 'read' }],
+      unavailablePermissions: [{ module: 'deals', action: 'read' }],
+    };
+
+    renderPage([roleWithStoredDealAccess], { '/api/roles/catalog': () => catalog }, 'generic');
+    fireEvent.click(await screen.findByRole('button', { name: /View permissions for Administrator/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Permissions: Administrator/i });
+    expect(within(dialog).queryByText('Deals')).not.toBeInTheDocument();
+
+    catalog = {
+      catalog: { roles: ['read', 'manage'], deals: ['read'] },
+      modules: [
+        { module: 'roles', actions: ['read', 'manage'] },
+        { module: 'deals', actions: ['read'] },
+      ],
+      domains: [
+        { domain: 'CRM Core', modules: [{ module: 'deals', actions: ['read'] }] },
+        { domain: 'Admin & Platform', modules: [{ module: 'roles', actions: ['read', 'manage'] }] },
+      ],
+      hiddenModules: [],
+      vertical: 'generic',
+    };
+    fireEvent(window, new CustomEvent('tenant:page-visibility-changed'));
+
+    expect(await within(dialog).findByText('Deals')).toBeInTheDocument();
+    expect(dialog.querySelector('[aria-describedby="perm-desc-deals-read"]')).toBeChecked();
+  });
+
+  it('counts only visible checked permissions while preserving hidden stored grants', async () => {
+    const roleWithHiddenGrant = {
+      ...ADMIN_ROLE,
+      permissions: [
+        { module: 'roles', action: 'read' },
+        { module: 'roles', action: 'manage' },
+        { module: 'deals', action: 'read' },
+      ],
+      unavailablePermissions: [{ module: 'deals', action: 'read' }],
+    };
+    const catalog = {
+      catalog: { roles: ['read', 'manage'] },
+      modules: [{ module: 'roles', actions: ['read', 'manage'] }],
+      domains: [{ domain: 'Admin & Platform', modules: [{ module: 'roles', actions: ['read', 'manage'] }] }],
+      hiddenModules: ['deals'],
+      vertical: 'generic',
+    };
+
+    renderPage([roleWithHiddenGrant], { '/api/roles/catalog': catalog }, 'generic');
+    fireEvent.click(await screen.findByRole('button', { name: /View permissions for Administrator/i }));
+    const dialog = await screen.findByRole('dialog', { name: /Permissions: Administrator/i });
+
+    expect(within(dialog).getByRole('button', { name: 'Selected (2)' })).toBeInTheDocument();
+    expect(within(dialog).getByText('2 permissions selected')).toBeInTheDocument();
+  });
+
   it('uses separate Wellness sidebar names and descriptions for Wellness modules', async () => {
     const catalog = {
       catalog: {
@@ -919,32 +983,71 @@ describe('tenant page visibility in the permission matrix', () => {
     expect(within(dialog).getByText('Supplier integration credentials and access settings.')).toBeInTheDocument();
   });
 
-  it('shows the Generic Workflows permission card with its sidebar name', async () => {
+  it('hides requested Generic-only modules from the permission matrix without dropping stored grants', async () => {
+    const extraHiddenModules = [
+      'ab_tests', 'chatbots', 'social', 'playbooks', 'sla', 'contracts',
+      'csp_violations', 'admin_status', 'commission_profiles', 'commission_data',
+      'channels', 'industry_templates',
+      'signatures', 'document_templates', 'projects',
+    ];
     const catalog = {
       ...CATALOG,
       vertical: 'generic',
-      catalog: { ...CATALOG.catalog, workflows: ['read', 'write', 'update', 'delete', 'manage'] },
+      catalog: {
+        ...CATALOG.catalog,
+        workflows: ['read', 'write', 'update', 'delete', 'manage'],
+        sequences: ['read', 'write', 'update', 'delete', 'manage'],
+        web_visitors: ['read'],
+        ...Object.fromEntries(extraHiddenModules.map((module) => [module, ['read']])),
+      },
       modules: [
         ...CATALOG.modules,
         { module: 'workflows', actions: ['read', 'write', 'update', 'delete', 'manage'] },
+        { module: 'sequences', actions: ['read', 'write', 'update', 'delete', 'manage'] },
+        { module: 'web_visitors', actions: ['read'] },
+        ...extraHiddenModules.map((module) => ({ module, actions: ['read'] })),
       ],
       domains: [
         ...CATALOG.domains,
-        { domain: 'Automation', modules: [{ module: 'workflows', actions: ['read', 'write', 'update', 'delete', 'manage'] }] },
+        { domain: 'Automation', modules: [
+          { module: 'workflows', actions: ['read', 'write', 'update', 'delete', 'manage'] },
+          { module: 'sequences', actions: ['read', 'write', 'update', 'delete', 'manage'] },
+        ] },
+        { domain: 'Analytics', modules: [
+          { module: 'web_visitors', actions: ['read'] },
+        ] },
+        { domain: 'Hidden Generic Pages', modules: extraHiddenModules.map((module) => ({ module, actions: ['read'] })) },
       ],
       hiddenModules: [],
     };
 
-    const roleWithWorkflowAccess = {
+    const roleWithAutomationAccess = {
       ...ADMIN_ROLE,
-      permissions: [...ADMIN_ROLE.permissions, { module: 'workflows', action: 'read' }],
+      permissions: [
+        ...ADMIN_ROLE.permissions,
+        { module: 'workflows', action: 'read' },
+        { module: 'sequences', action: 'read' },
+        { module: 'web_visitors', action: 'read' },
+        ...extraHiddenModules.map((module) => ({ module, action: 'read' })),
+      ],
     };
-    renderPage([roleWithWorkflowAccess], { '/api/roles/catalog': catalog }, 'generic');
+    renderPage([roleWithAutomationAccess], { '/api/roles/catalog': catalog }, 'generic');
     fireEvent.click(await screen.findByRole('button', { name: /View permissions for Administrator/i }));
     await screen.findByText(/Permissions: Administrator/i);
 
-    expect(screen.getByText('Workflows')).toBeInTheDocument();
-    expect(screen.getByText('Build trigger, condition, and action automations')).toBeInTheDocument();
+    expect(screen.queryByText('Workflows')).not.toBeInTheDocument();
+    expect(screen.queryByText('Build trigger, condition, and action automations')).not.toBeInTheDocument();
+    expect(screen.queryByText('Sequences')).not.toBeInTheDocument();
+    expect(screen.queryByText('Multi-step email/SMS drip cadences and enrollments.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Web Visitors')).not.toBeInTheDocument();
+    for (const label of [
+      'A/B Tests', 'Chatbots', 'Social Media', 'Playbooks', 'SLA Policies', 'Contracts',
+      'CSP Violations', 'Status', 'Commission Profiles', 'Commission Data', 'Channels',
+      'Industry Templates',
+      'E-Signatures', 'Doc Templates', 'Projects',
+    ]) {
+      expect(screen.queryByText(label)).not.toBeInTheDocument();
+    }
 
     fireEvent.click(screen.getByRole('button', { name: /Save permissions/i }));
     await waitFor(() => {
@@ -953,6 +1056,11 @@ describe('tenant page visibility in the permission matrix', () => {
       );
       expect(saveCall).toBeTruthy();
       expect(JSON.parse(saveCall[1].body).permissions).toContainEqual({ module: 'workflows', action: 'read' });
+      expect(JSON.parse(saveCall[1].body).permissions).toContainEqual({ module: 'sequences', action: 'read' });
+      expect(JSON.parse(saveCall[1].body).permissions).toContainEqual({ module: 'web_visitors', action: 'read' });
+      for (const module of extraHiddenModules) {
+        expect(JSON.parse(saveCall[1].body).permissions).toContainEqual({ module, action: 'read' });
+      }
     });
   });
 

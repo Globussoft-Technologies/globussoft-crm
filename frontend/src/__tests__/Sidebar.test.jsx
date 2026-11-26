@@ -361,6 +361,28 @@ beforeEach(() => {
   });
 });
 
+describe('tenant page visibility refresh', () => {
+  it('refetches accessible pages after same-window, cross-tab, and focus visibility updates', async () => {
+    renderSidebar({ vertical: 'generic', role: 'ADMIN' });
+
+    const pageFetchCount = () => fetchApiMock.mock.calls
+      .filter(([url]) => url === '/api/pages/me').length;
+    await waitFor(() => expect(pageFetchCount()).toBe(1));
+
+    fireEvent(window, new CustomEvent('tenant:page-visibility-changed'));
+    await waitFor(() => expect(pageFetchCount()).toBe(2));
+
+    fireEvent(window, new StorageEvent('storage', {
+      key: 'globuscrm:tenant-page-visibility-updated',
+      newValue: JSON.stringify({ tenantId: 1, at: Date.now() }),
+    }));
+    await waitFor(() => expect(pageFetchCount()).toBe(3));
+
+    fireEvent.focus(window);
+    await waitFor(() => expect(pageFetchCount()).toBe(4));
+  });
+});
+
 describe('TMC teacher onboarding navigation', () => {
   it('shows the teacher page under Administration when TMC is selected', () => {
     renderSidebar({ vertical: 'travel', role: 'ADMIN', activeSubBrand: 'tmc' });
@@ -389,11 +411,13 @@ afterEach(() => {
 
 describe('Sidebar — load-bearing render surface', () => {
   describe('Generic vertical', () => {
-    it('renders core generic nav items (Dashboard / Contacts / Pipeline / Leads / Tickets)', () => {
+    it('renders core generic nav items while hiding Contacts, Workflows, and Web Visitors', () => {
       renderSidebar({ vertical: 'generic', role: 'ADMIN' });
       // Core links visible to all roles — pin a representative few.
       expect(screen.getByText('Dashboard')).toBeTruthy();
-      expect(screen.getByText('Contacts')).toBeTruthy();
+      expect(screen.queryByText('Contacts')).toBeNull();
+      expect(screen.queryByText('Workflows')).toBeNull();
+      expect(screen.queryByText('Web Visitors')).toBeNull();
       expect(screen.getByText('Deals')).toBeTruthy();
       // "Leads" label appears as both the nav label and possibly badge text;
       // accept either by checking we have at least one match.
@@ -539,7 +563,6 @@ describe('Sidebar — load-bearing render surface', () => {
         'Sales',
         'Work Management',
         'Customer Support',
-        'Documents & Delivery',
         'Finance',
         'Analytics & Reports',
         'Team & Access',
@@ -621,6 +644,24 @@ describe('Sidebar — load-bearing render surface', () => {
 
       expect(screen.getByRole('button', { name: 'Open AdsGPT' })).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Open Callified dashboard' })).toBeNull();
+    });
+
+    it('hides duplicate internal integration links but keeps the Wellness launchers', async () => {
+      renderSidebar({
+        vertical: 'wellness',
+        role: 'ADMIN',
+        accessiblePages: [
+          { category: 'Manager', path: '/integrations/adsgpt', label: 'AdsGPT' },
+          { category: 'Manager', path: '/integrations/callified', label: 'Callified' },
+        ],
+      });
+
+      await waitFor(() => {
+        expect(document.querySelector('a[href="/integrations/adsgpt"]')).toBeNull();
+        expect(document.querySelector('a[href="/integrations/callified"]')).toBeNull();
+      });
+      expect(screen.getByRole('button', { name: 'Open AdsGPT' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Open Callified dashboard' })).toBeInTheDocument();
     });
 
     it('renders Landing Sites in the Marketing section for wellness tenants', async () => {
@@ -1034,12 +1075,12 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(screen.getByText('Privacy')).toBeTruthy();
       // Settings is admin-only here.
       expect(screen.getByText('Settings')).toBeTruthy();
-      expect(screen.getByText('Workflows')).toBeTruthy();
+      expect(screen.queryByText('Workflows')).toBeNull();
     });
 
-    it('shows Workflows when the Generic CRM role has workflows.read', () => {
+    it('keeps Workflows hidden when the Generic CRM role has workflows.read', () => {
       renderSidebar({ vertical: 'generic', role: 'USER', permissions: [...GENERIC_USER_PERMS, 'workflows.read'] });
-      expect(screen.getByText('Workflows')).toBeTruthy();
+      expect(screen.queryByText('Workflows')).toBeNull();
     });
 
     it('hides standalone Workflows when the Generic CRM role lacks workflows.read', () => {
@@ -1068,9 +1109,13 @@ describe('Sidebar — load-bearing render surface', () => {
 
     it('keeps requested product pages out of the Generic CRM sidebar but shows Landing Sites', () => {
       const hiddenLabels = [
-        'Clients', 'Booking Pages', 'Forecasting', 'Quotas', 'Converted Leads',
+        'Contacts', 'Workflows', 'Clients', 'Booking Pages', 'Forecasting', 'Quotas', 'Converted Leads',
         'Lead Scoring', 'Approvals', 'Knowledge Base',
         'Surveys', 'Dashboards', 'Custom Reports', 'Field Permissions',
+        'A/B Tests', 'Chatbots', 'Social Media', 'Playbooks', 'SLA Policies', 'Contracts',
+        'CSP Violations', 'Status', 'Commission Profiles', 'Commission Data', 'Channels',
+        'Industry Templates',
+        'E-Signatures', 'Doc Templates', 'Projects',
       ];
 
       for (const role of ['ADMIN', 'MANAGER']) {
@@ -1079,7 +1124,7 @@ describe('Sidebar — load-bearing render surface', () => {
           expect(screen.queryByText(label), `${label} should be hidden for ${role}`).toBeNull();
         }
         expect(screen.getByText('Landing Sites')).toBeTruthy();
-        expect(screen.getByText('Workflows')).toBeTruthy();
+        expect(screen.queryByText('Workflows')).toBeNull();
         unmount();
       }
     });
@@ -1118,14 +1163,9 @@ describe('Sidebar — load-bearing render surface', () => {
     // shipped the page + route mount at /admin/csp-violations; this slice
     // adds the Sidebar nav entry. The two cases below assert the entry is
     // gated to ADMIN role exactly like Audit Log + Field Permissions.
-    it('reveals CSP Violations admin entry for ADMIN role under generic', () => {
+    it('hides CSP Violations admin entry for ADMIN role under generic', () => {
       renderSidebar({ vertical: 'generic', role: 'ADMIN' });
-      const link = screen.getByText('CSP Violations');
-      expect(link).toBeTruthy();
-      // The anchor href should point at /admin/csp-violations.
-      const anchor = link.closest('a');
-      expect(anchor).toBeTruthy();
-      expect(anchor.getAttribute('href')).toBe('/admin/csp-violations');
+      expect(screen.queryByText('CSP Violations')).toBeNull();
     });
 
     it('hides CSP Violations admin entry for USER and MANAGER roles', () => {
@@ -1833,10 +1873,10 @@ describe('Sidebar — load-bearing render surface', () => {
     });
   });
 
-  describe('Generic Sequences + Marketing manager cluster', () => {
-    it('renders separate Marketing and Sequences links while Lead Routing stays hidden', () => {
+  describe('Generic Marketing manager cluster', () => {
+    it('keeps legacy Sequences and Lead Routing hidden while Marketing remains available', () => {
       renderSidebar({ vertical: 'generic', role: 'MANAGER' });
-      expect(screen.getByText('Sequences').closest('a')).toHaveAttribute('href', '/sequences');
+      expect(screen.queryByText('Sequences')).toBeNull();
       const marketingCampaignLink = screen.getByText('Marketing Campaign').closest('a');
       expect(marketingCampaignLink).toBeTruthy();
       expect(marketingCampaignLink.getAttribute('href')).toBe('/marketing');

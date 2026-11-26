@@ -315,6 +315,7 @@ describe('GenericChannelTriggerMappings', () => {
 
     const label = channel === 'SMS' ? 'SMS' : 'Email';
     const canvas = screen.getByRole('region', { name: `${label} sequence steps` });
+    expect(canvas).toHaveClass('generic-sequence-canvas');
     expect(canvas).toHaveStyle({ overflowY: 'auto', overscrollBehaviorY: 'contain' });
     await waitFor(() => expect(scrollToMock).toHaveBeenCalledWith({ top: canvas.scrollHeight, behavior: 'smooth' }));
     expect(scrollIntoViewMock).not.toHaveBeenCalled();

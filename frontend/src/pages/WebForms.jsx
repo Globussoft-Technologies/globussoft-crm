@@ -156,6 +156,11 @@ const GENERIC_RESERVED_FIELD_IDENTITIES = new Set(
     .flatMap((field) => [field.value, field.label])
     .map(normalizeGenericFieldIdentity),
 );
+const GENERIC_REDUNDANT_LEAD_FIELD_IDENTITIES = new Set([
+  "jobroles",
+  "job_roles",
+  "organization",
+]);
 
 const CONTACT_FIELD_LABELS = Object.fromEntries(ALL_CONTACT_FIELD_OPTIONS.map((item) => [item.value, item.label]));
 
@@ -6549,6 +6554,8 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], scope =
       ? (leadFields || []).filter((item) => (
         !GENERIC_RESERVED_FIELD_IDENTITIES.has(normalizeGenericFieldIdentity(item.fieldKey))
         && !GENERIC_RESERVED_FIELD_IDENTITIES.has(normalizeGenericFieldIdentity(item.label))
+        && !GENERIC_REDUNDANT_LEAD_FIELD_IDENTITIES.has(normalizeGenericFieldIdentity(item.fieldKey))
+        && !GENERIC_REDUNDANT_LEAD_FIELD_IDENTITIES.has(normalizeGenericFieldIdentity(item.label))
       ))
       : (leadFields || []);
     const seen = new Set(safeLeadFields.map((item) => item.fieldKey));
@@ -6556,7 +6563,9 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], scope =
       !seen.has(item.fieldKey)
       && (scope !== "generic"
         || (!GENERIC_RESERVED_FIELD_IDENTITIES.has(normalizeGenericFieldIdentity(item.fieldKey))
-          && !GENERIC_RESERVED_FIELD_IDENTITIES.has(normalizeGenericFieldIdentity(item.label))))
+          && !GENERIC_RESERVED_FIELD_IDENTITIES.has(normalizeGenericFieldIdentity(item.label))
+          && !GENERIC_REDUNDANT_LEAD_FIELD_IDENTITIES.has(normalizeGenericFieldIdentity(item.fieldKey))
+          && !GENERIC_REDUNDANT_LEAD_FIELD_IDENTITIES.has(normalizeGenericFieldIdentity(item.label))))
     ))];
     return effective
       .filter((item) => matches(item.label, item.fieldKey))
@@ -6975,7 +6984,7 @@ function FieldPicker({ open, anchorRef, leadFields, existingFields = [], scope =
 
 
 
-                <small>custom</small>
+                <small>{normalizeGenericFieldIdentity(item.fieldKey) === "pickup" ? item.fieldKey : "custom"}</small>
 
 
 
@@ -13812,6 +13821,7 @@ function WebFormsContent({ scope = "generic", formLocation = null, navigateForm 
         .wf-library-page-header {
           display: grid;
           gap: 16px;
+          padding-top: 2px;
           min-width: 0;
           position: relative;
           z-index: 2;

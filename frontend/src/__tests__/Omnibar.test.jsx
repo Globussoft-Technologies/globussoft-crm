@@ -350,7 +350,7 @@ describe('Omnibar (inline top-bar)', () => {
     expect(screen.queryByRole('option', { name: /Shared Inbox/i })).not.toBeInTheDocument();
   });
 
-  it('shows Marketing Sequences, the standalone Sequences page, and matching sequence records in Generic CRM', async () => {
+  it('shows Marketing Sequences and campaign records while hiding the standalone Sequences surface in Generic CRM', async () => {
     fetchApi.mockImplementation((url) => {
       if (url.startsWith('/api/pages/me')) {
         return Promise.resolve({
@@ -382,8 +382,8 @@ describe('Omnibar (inline top-bar)', () => {
 
     expect(await screen.findByRole('option', { name: /Holiday nurture sequence/i }, { timeout: 2000 })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /Marketing Sequences/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /^Sequences/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Hidden visual sequence/i })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /^Sequences/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Hidden visual sequence/i })).not.toBeInTheDocument();
   });
 
   it('launches searchable external integrations through their canonical sidebar action', async () => {
@@ -528,7 +528,7 @@ describe('Omnibar (inline top-bar)', () => {
     input.focus();
     fireEvent.change(input, { target: { value: 'directory' } });
     await screen.findByText(/^Pages$/i, {}, { timeout: 2000 });
-    expect(screen.getByText('Contacts')).toBeInTheDocument();
+    expect(screen.queryByText('Contacts')).not.toBeInTheDocument();
     expect(screen.getByText('Patients')).toBeInTheDocument();
   });
 
@@ -860,7 +860,7 @@ describe('Omnibar (inline top-bar)', () => {
     expect(screen.getByText('Webhooks')).toBeInTheDocument();
   });
 
-  it('groups matching Generic CRM data beneath its visible sidebar pages', async () => {
+  it('groups matching Generic CRM data beneath visible sidebar pages and suppresses hidden-page records', async () => {
     fetchApi.mockImplementation((url) => {
       if (url.startsWith('/api/pages/me')) return Promise.resolve({ pages: [] });
       return Promise.resolve({
@@ -884,12 +884,12 @@ describe('Omnibar (inline top-bar)', () => {
 
     expect(await screen.findByRole('option', { name: /Titan Lead/i }, { timeout: 2000 })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /Retail Pipeline/i })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: /Qualification Playbook/i })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /Qualification Playbook/i })).not.toBeInTheDocument();
     expect(screen.getByRole('option', { name: /Initial qualification/i })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /Initial WhatsApp reply/i })).toBeInTheDocument();
     expect(screen.getByText('Leads', { selector: 'h4' })).toBeInTheDocument();
     expect(screen.getByText('Pipelines', { selector: 'h4' })).toBeInTheDocument();
-    expect(screen.getByText('Playbooks', { selector: 'h4' })).toBeInTheDocument();
+    expect(screen.queryByText('Playbooks', { selector: 'h4' })).not.toBeInTheDocument();
     expect(screen.getByText('Tasks', { selector: 'h4' })).toBeInTheDocument();
     expect(screen.getByText('WhatsApp', { selector: 'h4' })).toBeInTheDocument();
     const sectionLabels = screen.getAllByRole('heading', { level: 4 })
@@ -897,6 +897,28 @@ describe('Omnibar (inline top-bar)', () => {
     expect(sectionLabels.indexOf('Leads')).toBeLessThan(sectionLabels.indexOf('Pipelines'));
     expect(sectionLabels.indexOf('Leads')).toBeLessThan(sectionLabels.indexOf('Tasks'));
     expect(sectionLabels.indexOf('Leads')).toBeLessThan(sectionLabels.indexOf('WhatsApp'));
+  });
+
+  it('opens a Generic CRM lead search result on the Leads detail route', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url.startsWith('/api/pages/me')) return Promise.resolve({ pages: [] });
+      return Promise.resolve({
+        leads: [{ id: 501, name: 'Titan Lead', email: 'titan@example.test', status: 'Lead' }],
+      });
+    });
+
+    await renderOmnibarWithAuth({
+      user: { userId: 1, role: 'ADMIN' },
+      token: 'tk',
+      tenant: { vertical: 'generic' },
+      loading: false,
+    });
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'titan' } });
+    fireEvent.click(await screen.findByRole('option', { name: /Titan Lead/i }, { timeout: 2000 }));
+
+    expect(navigateMock).toHaveBeenCalledWith('/leads/501');
   });
 
   it('renders the requested Generic CRM report, settings, goal, and work-page data without role records', async () => {

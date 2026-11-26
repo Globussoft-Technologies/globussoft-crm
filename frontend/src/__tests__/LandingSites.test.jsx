@@ -138,6 +138,17 @@ describe('<LandingSites /> wellness generate modal', () => {
     vi.useRealTimers();
   });
 
+  it('scopes stationary cards to the Generic CRM landing-sites page', async () => {
+    const { container, unmount } = renderPage('generic');
+    await waitFor(() => expect(screen.getByText('Landing Site Library')).toBeInTheDocument());
+    expect(container.querySelector('.landing-sites-page')).toHaveClass('landing-sites-page--generic');
+
+    unmount();
+    const wellness = renderPage('wellness');
+    await waitFor(() => expect(screen.getByText('Landing Site Library')).toBeInTheDocument());
+    expect(wellness.container.querySelector('.landing-sites-page')).not.toHaveClass('landing-sites-page--generic');
+  });
+
   it('renders a fixed wellness text field instead of the sector dropdown', async () => {
     const user = userEvent.setup();
     renderPage('wellness');

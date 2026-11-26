@@ -41,4 +41,43 @@ describe('lead overview', () => {
     expect(result.status).toBe(200);
     expect(result.body.series).toEqual([expect.objectContaining({ key: '2026-11-19', leadsCreated: 1 })]);
   });
+
+  test('uses only actual lead statuses for the Generic CRM status chart', async () => {
+    prisma.contact.findMany
+      .mockResolvedValueOnce([
+        { id: 1, createdAt: new Date(), status: 'Lead', lifecycleStageKey: 's1' },
+      ])
+      .mockResolvedValueOnce([
+        { status: 'Lead' },
+        { status: 'Contacted' },
+        { status: 'not-a-status' },
+      ]);
+    const app = express();
+    app.use((req, _res, next) => {
+      req.user = { userId: 3, tenantId: 7, role: 'ADMIN', vertical: 'generic' };
+      next();
+    });
+    app.use('/api/lead-reports', router);
+
+    const result = await request(app).get('/api/lead-reports/overview?range=last_7_days');
+
+    expect(result.status).toBe(200);
+    expect(result.body.byStatus).toEqual([
+      { key: 'new', label: 'New', value: 1 },
+      { key: 'contacted', label: 'Contacted', value: 1 },
+      { key: 'interested', label: 'Interested', value: 0 },
+      { key: 'unqualified', label: 'Unqualified', value: 0 },
+      { key: 'qualified', label: 'Qualified', value: 0 },
+      { key: 'lost', label: 'Lost', value: 0 },
+      { key: 'won', label: 'Won', value: 0 },
+      { key: 'churned', label: 'Churned', value: 0 },
+    ]);
+    expect(result.body.byStatus).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ key: 's1' }),
+    ]));
+    expect(prisma.contact.findMany).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      where: expect.not.objectContaining({ status: expect.anything() }),
+      select: { status: true },
+    }));
+  });
 });

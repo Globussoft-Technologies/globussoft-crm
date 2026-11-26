@@ -32,6 +32,7 @@ import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import { EmptyState, FormField } from "../../components/ui";
 import TopScrollSync from "../../components/TopScrollSync";
+import { GENERIC_LEAD_QUICK_ADD_FIELD_KEYS } from "../../utils/genericLeadQuickAddFields";
 import "./FieldConfig.css";
 
 const FIELD_TYPE_OPTIONS = [
@@ -49,15 +50,6 @@ const FIELD_TYPE_OPTIONS = [
 const FIELD_TYPES_WITH_OPTIONS = new Set(["dropdown", "radio", "multiselect"]);
 const LEAD_FIELDS_PAGE_SIZE = 10;
 const FIELD_CONFIG_SETTING_KEY = "generic.fieldConfig";
-const QUICK_ADD_SYSTEM_FIELD_IDS = new Set([
-  "name",
-  "email",
-  "company",
-  "title",
-  "phone",
-  "website",
-  "source",
-]);
 const LOCKED_QUICK_ADD_FIELD_IDS = new Set(["name", "email"]);
 const COLLAPSED_GROUPS_STORAGE_PREFIX = "generic-field-config.collapsed-groups.v1";
 const DEFAULT_FIELD_CONFIG = {
@@ -1145,7 +1137,7 @@ export default function LeadFields({
       const rowId = custom ? `custom-${field.id}` : `system-${field.id}`;
       const overrideId = custom ? `custom:${field.id}` : field.id;
       const configuredField = { ...field, ...(fieldConfig.fieldOverrides?.[overrideId] || {}) };
-      const quickAddEligible = !configuredField.readOnly && (custom || QUICK_ADD_SYSTEM_FIELD_IDS.has(field.id));
+      const quickAddEligible = !configuredField.readOnly && (custom || GENERIC_LEAD_QUICK_ADD_FIELD_KEYS.has(field.id));
       const quickAddLocked = quickAddEligible && !custom && LOCKED_QUICK_ADD_FIELD_IDS.has(field.id);
       const isExpanded = expandedConfigRow === rowId;
       const options = Array.isArray(configuredField.options) ? configuredField.options : [];

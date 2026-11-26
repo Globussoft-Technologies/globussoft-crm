@@ -200,6 +200,13 @@ describe("Workflows page", () => {
     await user.click(editWebhookButton);
 
     expect(screen.getByRole("dialog", { name: "Webhook settings" })).toBeInTheDocument();
+    const requiredMarks = screen
+      .getByRole("dialog", { name: "Webhook settings" })
+      .querySelectorAll(".required-mark");
+    expect(requiredMarks).toHaveLength(1);
+    expect(requiredMarks[0].parentElement).toHaveTextContent("Callback URL");
+    expect(screen.getByRole("textbox", { name: "Webhook callback URL" }))
+      .toHaveAccessibleName("Webhook callback URL");
     const defaultWebhookFields = [
       "name", "email", "phone", "source", "utm_source", "utm_medium", "utm_campaign", "utm_id", "utm_term", "utm_content",
     ];
@@ -366,6 +373,11 @@ describe("Workflows page", () => {
     await user.click(screen.getByRole("button", { name: /create workflow/i }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Action 1" }), "send_webhook");
     await user.click(screen.getByRole("button", { name: /edit webhook settings/i }));
+    expect(
+      screen
+        .getByRole("dialog", { name: "Webhook settings" })
+        .querySelector(".required-mark"),
+    ).not.toBeInTheDocument();
     await user.type(screen.getByRole("textbox", { name: "Webhook callback URL" }), "https://hooks.example.com/test");
     fetchApiMock.mockImplementation((path) => mockApi(path, {
       "/api/workflows/test-webhook": { success: true, result: { status: 204 } },
@@ -632,6 +644,38 @@ describe("Workflows page", () => {
     ).toBe(true));
     expect(await screen.findByText("Ada Lovelace")).toBeInTheDocument();
     expect(screen.getByText("Successful")).toBeInTheDocument();
+  });
+
+  it("scopes the opaque single-line history toolbar to Generic CRM", async () => {
+    const user = userEvent.setup();
+    fetchApiMock.mockImplementation((path) => {
+      if (String(path).startsWith("/api/workflows/history")) {
+        return Promise.resolve({ total: 0, logs: [] });
+      }
+      return mockApi(path);
+    });
+
+    const { unmount } = render(
+      <AuthContext.Provider value={{ tenant: { vertical: "generic" } }}>
+        <Workflows />
+      </AuthContext.Provider>,
+    );
+    await user.click(await screen.findByRole("button", { name: /view history/i }));
+    expect(screen.getByRole("button", { name: /close history/i }).closest(".workflow-history-overlay"))
+      .toHaveClass("workflow-history-overlay--generic");
+    expect(screen.getByRole("combobox", { name: "Filter by leads" })).toHaveDisplayValue("All leads");
+    expect(screen.queryByRole("combobox", { name: "Filter by contact" })).not.toBeInTheDocument();
+
+    unmount();
+    render(
+      <AuthContext.Provider value={{ tenant: { vertical: "wellness" } }}>
+        <Workflows />
+      </AuthContext.Provider>,
+    );
+    await user.click(await screen.findByRole("button", { name: /view history/i }));
+    expect(screen.getByRole("button", { name: /close history/i }).closest(".workflow-history-overlay"))
+      .not.toHaveClass("workflow-history-overlay--generic");
+    expect(screen.getByRole("combobox", { name: "Filter by contact" })).toHaveDisplayValue("All contacts");
   });
 
   it("previews 'apply to existing records' before firing anything", async () => {

@@ -440,7 +440,7 @@ export default function GenericChannelTriggerMappings({ channel, campaigns, edit
     }
   };
 
-  return <section id={`generic-${channel.toLowerCase()}-sequence-builder`} style={builderStyle}>
+  return <section id={`generic-${channel.toLowerCase()}-sequence-builder`} className="generic-sequence-builder" style={builderStyle}>
     <header style={toolbarStyle}>
       <div><h2 style={{ margin: 0, color: 'var(--text-primary)', fontSize: '1.15rem' }}>Build a {channelLabel} sequence</h2><p style={subtitleStyle}>Choose one starting event, then add messages, waits, or conditions.</p></div>
       <div style={toolbarActionsStyle}>
@@ -449,7 +449,7 @@ export default function GenericChannelTriggerMappings({ channel, campaigns, edit
         <button type="button" onClick={save} disabled={saving || loading} style={saveButtonStyle}><Save size={15} /> {saving ? 'Saving…' : 'Save & activate'}</button>
       </div>
     </header>
-    <div ref={canvasRef} role="region" aria-label={`${channelLabel} sequence steps`} style={canvasStyle}>
+    <div ref={canvasRef} role="region" aria-label={`${channelLabel} sequence steps`} className="generic-sequence-canvas" style={canvasStyle}>
       {!loading && templates.length === 0 && <div style={emptyMessageStyle}>Create {isSms ? 'an SMS' : 'an email'} template before adding an automation action.</div>}
       <div style={flowListStyle}>
         <article style={automationBlockStyle} aria-label={`${channelLabel} sequence trigger`}>

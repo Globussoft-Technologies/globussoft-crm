@@ -25,7 +25,7 @@ for (const travelEvent of [
   "lead.created.welcome", "lead.created.registration_invitation", "registration.submitted",
   "registration.needs_verification", "registration.approved", "account.ready", "account.created",
   "account.deleted", "payment.received", "payment.due_reminder", "payment.link_issued", "payment.failed",
-  "payment.reminder", "cancellation.requested", "cancellation.approved", "cancellation.rejected",
+  "cancellation.requested", "cancellation.approved", "cancellation.rejected",
   "refund.processed", "trip.details_changed", "trip.confirmed", "trip.cancelled", "trip.reminder",
   "trip.completed", "trip.announced", "trip.upcoming_reminder", "booking.confirmed",
   "site_visit.scheduled", "catalogue.request_submitted", "diagnostic.completed",
@@ -56,8 +56,6 @@ bus.on("cancellation.approved", ({ payload, tenantId }) => processTravelEmailEve
   .catch((error) => console.error("[TravelEmailAutomation] trip.cancelled failed:", error.message)));
 bus.on("booking.confirmed", ({ payload, tenantId }) => processTravelEmailEvent("site_visit.scheduled", payload, tenantId)
   .catch((error) => console.error("[TravelEmailAutomation] site_visit.scheduled failed:", error.message)));
-bus.on("invoice.payment_due", ({ payload, tenantId }) => processTravelEmailEvent("payment.due_reminder", payload, tenantId)
-  .catch((error) => console.error("[TravelEmailAutomation] payment.due_reminder failed:", error.message)));
 bus.on("invoice.overdue", ({ payload, tenantId }) => processTravelEmailEvent("payment.failed", payload, tenantId)
   .catch((error) => console.error("[TravelEmailAutomation] payment.failed failed:", error.message)));
 bus.on("payment.refunded", ({ payload, tenantId }) => processTravelEmailEvent("refund.processed", payload, tenantId)

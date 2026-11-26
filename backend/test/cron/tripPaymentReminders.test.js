@@ -237,6 +237,7 @@ describe('cron/tripPaymentReminders — runPaymentRemindersForTenant', () => {
       amount: true,
       paidAmount: true,
       status: true,
+      trip: { select: { tripCode: true, destination: true } },
     });
   });
 

@@ -574,6 +574,19 @@ describe('Vertical isolation — getCatalogForVertical', () => {
     expect(getCatalogForVertical('wellness').some((entry) => entry.path === '/travel/tmc/teachers')).toBe(false);
   });
 
+  it('travel catalog includes Email Automation with Travel marketing access', () => {
+    const emailAutomation = getCatalogForVertical('travel').find((p) => p.path === '/travel/email-automation');
+    expect(emailAutomation).toMatchObject({
+      path: '/travel/email-automation',
+      label: 'Email Automation',
+      category: 'Travel Marketing',
+      vertical: 'travel',
+      requiredPermissions: [{ module: 'marketing', action: 'read' }],
+    });
+    expect(getCatalogForVertical('generic').find((p) => p.path === '/travel/email-automation')).toBeUndefined();
+    expect(getCatalogForVertical('wellness').find((p) => p.path === '/travel/email-automation')).toBeUndefined();
+  });
+
   it('wellness catalog keeps /signatures (it is a wellness-only surface)', () => {
     const wellness = getCatalogForVertical('wellness');
     expect(wellness.find((p) => p.path === '/signatures')).toBeDefined();

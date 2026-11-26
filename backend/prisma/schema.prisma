@@ -2499,6 +2499,7 @@ model TravelEmailTemplate {
   body         String                    @db.LongText
   isDefault    Boolean                   @default(false)
   isActive     Boolean                   @default(true)
+  isArchived   Boolean                   @default(false)
   createdAt    DateTime                  @default(now())
   updatedAt    DateTime                  @updatedAt
   tenant       Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)

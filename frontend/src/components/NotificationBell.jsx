@@ -137,7 +137,17 @@ const NotificationBell = () => {
 
     if (!user) return;
 
-    const socket = io("/", { reconnection: false, timeout: 5000 });
+    let socketToken;
+    try {
+      socketToken = sessionStorage.getItem("token") || localStorage.getItem("token") || undefined;
+    } catch (_err) {
+      socketToken = undefined;
+    }
+    const socket = io("/", {
+      auth: { token: socketToken },
+      reconnection: false,
+      timeout: 5000,
+    });
     socket.on("connect_error", () => {
       /* nginx may not proxy socket.io — silent */
     });

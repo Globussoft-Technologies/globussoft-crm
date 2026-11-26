@@ -4,6 +4,7 @@ const { test, expect } = require('@playwright/test');
 test.describe.configure({ mode: 'serial' });
 
 const BASE_URL = process.env.BASE_URL || 'https://crm.globusdemos.com';
+const IS_LOCAL_STACK = /localhost|127\.0\.0\.1/.test(BASE_URL);
 const API = `${BASE_URL}/api/travel/email-automation`;
 const RUN_TAG = `E2E_TRAVEL_EMAIL_${Date.now()}`;
 let token;
@@ -63,15 +64,28 @@ test('bulk delivery-history deletion validates selected IDs', async ({ request }
   expect((await invalid.json()).code).toBe('INVALID_LOG_IDS');
 });
 
-test('default templates are protected from deletion', async ({ request }) => {
+test('deleting a default template archives it and moves its event to optional', async ({ request }) => {
+  test.skip(!IS_LOCAL_STACK, 'Archiving a seeded default is destructive and must only run on the disposable local stack.');
+  const catalogBefore = await request.get(`${API}/catalog`, { headers: auth() });
+  expect(catalogBefore.ok()).toBeTruthy();
+  const essentialKeys = new Set((await catalogBefore.json()).essential.map((item) => item.value));
   const list = await request.get(`${API}/templates`, { headers: auth() });
   expect(list.ok()).toBeTruthy();
-  const defaultTemplate = (await list.json()).find((item) => item.isDefault);
+  const defaultTemplate = (await list.json()).find((item) => item.isDefault && essentialKeys.has(item.eventKey));
   expect(defaultTemplate).toBeTruthy();
 
   const response = await request.delete(`${API}/templates/${defaultTemplate.id}`, { headers: auth() });
-  expect(response.status()).toBe(409);
-  expect((await response.json()).code).toBe('DEFAULT_TEMPLATE_PROTECTED');
+  expect(response.status()).toBe(204);
+
+  const catalogAfter = await request.get(`${API}/catalog`, { headers: auth() });
+  expect(catalogAfter.ok()).toBeTruthy();
+  const catalog = await catalogAfter.json();
+  expect(catalog.essential.map((item) => item.value)).not.toContain(defaultTemplate.eventKey);
+  expect(catalog.optional.map((item) => item.value)).toContain(defaultTemplate.eventKey);
+
+  const listAfter = await request.get(`${API}/templates`, { headers: auth() });
+  expect(listAfter.ok()).toBeTruthy();
+  expect((await listAfter.json()).some((item) => item.id === defaultTemplate.id)).toBe(false);
 });
 
 test('user-created template can be deleted', async ({ request }) => {

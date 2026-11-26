@@ -33,7 +33,7 @@
     padding: clamp(12px, 1.8vw, 18px) !important;
   }
 
-  .app-main > main :is(input, select, textarea) {
+  .app-main > main :is(input:not([type="file"]), select, textarea) {
     padding-block: clamp(7px, 0.9vw, 10px) !important;
   }
 

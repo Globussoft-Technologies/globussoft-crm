@@ -2110,7 +2110,7 @@ html[data-theme="dark"][data-vertical="travel"] .travel-content-frame .diagnosti
     border-radius: 9px;
   }
 
-  .app-main > main :is(input, select, textarea) {
+  .app-main > main :is(input:not([type="file"]), select, textarea) {
     padding-block: 5px !important;
   }
 

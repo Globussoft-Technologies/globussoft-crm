@@ -3,6 +3,10 @@
 const prisma = require("./prisma");
 const { sendEmail } = require("./emailSender");
 
+const REMOVED_EVENT_KEYS = new Set([
+  "site_visit.scheduled", "trip.confirmed", "booking.confirmed", "trip.reminder", "trip.upcoming_reminder", "payment.reminder",
+]);
+
 const ESSENTIAL_EVENTS = Object.freeze([
   ["lead.created.welcome", "New lead created — welcome email", "Welcome to {{tenant.name}}", "Hello {{contact.first_name}},<br><br>Thank you for your interest. Our travel team will be in touch shortly.<br><br>Regards,<br>{{sender.name}}"],
   ["site_visit.scheduled", "Site visit scheduled", "Your site visit is scheduled for {{trip.destination}}", "Hello {{recipient.name}},<br><br>Your site visit has been scheduled.<br><br>Date and time: {{site_visit.date_time}}<br>Meeting point: {{site_visit.location}}<br>Coordinator: {{sender.name}}<br>Contact: {{sender.email}}<br><br>Please contact us at {{tenant.email}} if you need to change the appointment.<br><br>Regards,<br>{{sender.name}}<br>{{tenant.name}}"],
@@ -17,25 +21,22 @@ const ESSENTIAL_EVENTS = Object.freeze([
   ["trip.cancelled", "Trip cancellation notice", "Update regarding your trip to {{trip.destination}}", "Hello {{recipient.name}},<br><br>Your trip to <strong>{{trip.destination}}</strong>, scheduled for {{trip.startDate}}, has been cancelled.<br><br>Trip reference: {{trip.code}}<br>Reason: {{trip.cancellationReason}}<br><br>Contact {{tenant.email}} with questions.<br><br>Regards,<br>{{sender.name}}<br>{{tenant.name}}"],
   ["refund.processed", "Refund processed", "Refund processed for {{trip.name}}", "Hello {{recipient.name}},<br><br>A refund of <strong>{{refund.amount}}</strong> for {{trip.name}} has been processed.<br><br>Refund reference: {{refund.reference}}<br>Processed on: {{refund.date}}<br>Refund method: {{refund.method}}<br><br>Contact {{tenant.email}} with questions.<br><br>Regards,<br>{{tenant.name}}"],
   ["account.deleted", "Account deletion confirmed", "Your {{tenant.name}} travel account has been deleted", "Hello {{recipient.name}},<br><br>This confirms that your travel account has been deleted as requested.<br><br>Deletion reason: {{account.deletionReason}}<br><br>If you did not request this, contact {{tenant.email}} immediately.<br><br>Regards,<br>{{tenant.name}}"],
-]);
+].filter(([eventKey]) => !REMOVED_EVENT_KEYS.has(eventKey)));
 
 const OPTIONAL_EVENTS = Object.freeze([
-  ["invitation.opened", "Invitation opened but registration not started"], ["registration.started", "Registration started but not completed"],
-  ["lead.follow_up_due", "Lead follow-up due"], ["lead.assigned", "Lead assigned to staff"], ["lead.converted", "Lead converted to registration"],
-  ["trip.completed", "Trip completed — review request"],
-  ["trip.announced", "New relevant trip announced"], ["payment.link_issued", "Payment link issued"], ["payment.failed", "Payment failed or overdue"],
-  ["payment.reminder", "Payment reminder"], ["cancellation.rejected", "Cancellation rejected"], ["trip.upcoming_reminder", "Upcoming trip reminder"],
-  ["document.required", "Document or consent required"], ["document.reviewed", "Document approved or rejected"], ["trip.rescheduled", "Trip postponed, cancelled, or rescheduled"],
-  ["trip.urgent_update", "Emergency or urgent trip update"], ["registration.expired", "Registration withdrawn or expired"],
-]);
+  ["registration.started", "Registration started but not completed", "Complete your registration for {{trip.name}}", "Hello {{recipient.name}},<br><br>You started registering for <strong>{{trip.name}}</strong>, but the registration is not complete yet.<br><br><a href=\"{{account.setupLink}}\">Continue your registration: {{account.setupLink}}</a><br><br>If you need help, contact {{tenant.email}}.<br><br>Regards,<br>{{sender.name}}<br>{{tenant.name}}"],
+  ["trip.completed", "Trip completed — review request", "How was your trip to {{trip.destination}}?", "Hello {{recipient.name}},<br><br>We hope you enjoyed your trip to <strong>{{trip.destination}}</strong>.<br><br>We would appreciate your feedback. <a href=\"{{review.url}}\">Share your review: {{review.url}}</a><br><br>Thank you for travelling with us.<br><br>Regards,<br>{{sender.name}}<br>{{tenant.name}}"],
+  ["payment.failed", "Payment failed or overdue", "Payment overdue for invoice {{event.invoiceNum}}", "Hello {{recipient.name}},<br><br>Your payment of <strong>{{payment.amount}}</strong> for invoice {{event.invoiceNum}} was due on {{payment.dueDate}} and is now overdue.<br><br>Please contact {{tenant.email}} to complete the payment or ask for assistance.<br><br>Regards,<br>{{sender.name}}<br>{{tenant.name}}"],
+].filter(([eventKey]) => !REMOVED_EVENT_KEYS.has(eventKey)));
 
-const EVENT_LABELS = new Map([...ESSENTIAL_EVENTS.map((x) => [x[0], x[1]]), ...OPTIONAL_EVENTS]);
+const DEFAULT_EVENTS = Object.freeze([...ESSENTIAL_EVENTS, ...OPTIONAL_EVENTS]);
+const EVENT_LABELS = new Map(DEFAULT_EVENTS.map((x) => [x[0], x[1]]));
 
 async function ensureDefaultTemplates(tenantId) {
   const existing = await prisma.travelEmailTemplate.findMany({ where: { tenantId, isDefault: true }, select: { eventKey: true, body: true } });
   const present = new Set(existing.map((row) => row.eventKey));
-  const missing = ESSENTIAL_EVENTS.filter(([eventKey]) => !present.has(eventKey));
-  const currentKeys = ESSENTIAL_EVENTS.map(([eventKey]) => eventKey);
+  const missing = DEFAULT_EVENTS.filter(([eventKey]) => !present.has(eventKey));
+  const currentKeys = DEFAULT_EVENTS.map(([eventKey]) => eventKey);
   await prisma.travelEmailTemplate.updateMany({ where: { tenantId, isDefault: true, eventKey: { notIn: currentKeys } }, data: { isDefault: false, isActive: false } });
   if (missing.length) {
     await prisma.travelEmailTemplate.createMany({
@@ -68,6 +69,22 @@ async function ensureDefaultTemplates(tenantId) {
     await prisma.travelEmailTemplate.updateMany({
       where: { tenantId, eventKey: "payment.received", isDefault: true, body: { in: previousPaymentReceivedBodies } },
       data: { body: paymentReceivedBody },
+    });
+  }
+  const registrationStartedBody = OPTIONAL_EVENTS.find(([eventKey]) => eventKey === "registration.started")?.[3];
+  const previousRegistrationStartedBody = "Hello {{recipient.name}},<br><br>You started registering for <strong>{{trip.name}}</strong>, but the registration is not complete yet.<br><br><a href=\"{{account.setupLink}}\">Continue your registration</a><br><br>If you need help, contact {{tenant.email}}.<br><br>Regards,<br>{{sender.name}}<br>{{tenant.name}}";
+  if (registrationStartedBody && existing.some((row) => row.eventKey === "registration.started" && row.body === previousRegistrationStartedBody)) {
+    await prisma.travelEmailTemplate.updateMany({
+      where: { tenantId, eventKey: "registration.started", isDefault: true, body: previousRegistrationStartedBody },
+      data: { body: registrationStartedBody },
+    });
+  }
+  const tripCompletedBody = OPTIONAL_EVENTS.find(([eventKey]) => eventKey === "trip.completed")?.[3];
+  const previousTripCompletedBody = "Hello {{recipient.name}},<br><br>We hope you enjoyed your trip to <strong>{{trip.destination}}</strong>.<br><br>We would appreciate your feedback. <a href=\"{{review.url}}\">Share your review</a><br><br>Thank you for travelling with us.<br><br>Regards,<br>{{sender.name}}<br>{{tenant.name}}";
+  if (tripCompletedBody && existing.some((row) => row.eventKey === "trip.completed" && row.body === previousTripCompletedBody)) {
+    await prisma.travelEmailTemplate.updateMany({
+      where: { tenantId, eventKey: "trip.completed", isDefault: true, body: previousTripCompletedBody },
+      data: { body: tripCompletedBody },
     });
   }
 }
@@ -190,6 +207,8 @@ async function buildContext(tenantId, payload = {}) {
   });
   return {
     tenant: tenantContext, contact: { ...(contact || {}), first_name: firstName }, recipient: { name, email: recipientEmail },
+    first_name: firstName,
+    diagnostic_link: payload.diagnostic?.reportUrl || payload.reportUrl || "",
     sender: { name: payload.senderName || tenant?.name || "Travel Team", email: payload.senderEmail || tenant?.ownerEmail || "" },
     trip: { destination: "your trip", ...trip },
     account: {
@@ -198,7 +217,13 @@ async function buildContext(tenantId, payload = {}) {
       deletionReason: payload.deletionReason || payload.reason || "",
     },
     event: payload,
-    diagnostic: payload.diagnostic || { reportUrl: payload.reportUrl || "" },
+    diagnostic: {
+      ...(payload.diagnostic || {}),
+      reportUrl: payload.diagnostic?.reportUrl || payload.reportUrl || "",
+      classificationLabel: payload.diagnostic?.classificationLabel || payload.classificationLabel || "",
+      recommendedTier: payload.diagnostic?.recommendedTier || payload.recommendedTier || "",
+      score: payload.diagnostic?.score ?? payload.score ?? "",
+    },
     student,
     review: payload.review || { url: payload.reviewUrl || "", destination: payload.destination || "" },
     site_visit: { ...siteVisit },
@@ -210,22 +235,26 @@ async function buildContext(tenantId, payload = {}) {
 }
 
 async function processTravelEmailEvent(eventKey, payload = {}, tenantId) {
+  if (REMOVED_EVENT_KEYS.has(eventKey)) return { ignored: true, reason: "event_removed" };
   const tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
   if (tenant?.vertical !== "travel") return { ignored: true, reason: "not_travel" };
+  if (!EVENT_LABELS.has(eventKey)) return { ignored: true, reason: "unsupported_event" };
   await ensureDefaultTemplates(tenantId);
   const context = await buildContext(tenantId, payload);
   const recipientEmail = context.recipient.email;
   if (!recipientEmail) return { ignored: true, reason: "missing_recipient" };
   const requestedBrand = payload.subBrand || context.contact?.subBrand || null;
   const templates = await prisma.travelEmailTemplate.findMany({
-    where: { tenantId, eventKey, isActive: true, OR: [{ subBrand: requestedBrand }, { subBrand: null }] },
+    where: { tenantId, eventKey, isActive: true, isArchived: false, OR: [{ subBrand: requestedBrand }, { subBrand: null }] },
     orderBy: [{ subBrand: "desc" }, { updatedAt: "desc" }],
     take: 1,
   });
   const template = templates[0];
   if (!template) return { ignored: true, reason: "no_template" };
   const subject = renderText(template.subject, context);
+  context.event.subject = subject;
   const html = renderText(template.body, context);
+  context.event.customerMessage = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
   const result = await sendEmail({ tenantId, to: recipientEmail, subject, html, text: html.replace(/<[^>]+>/g, " ") });
   const deliveryData = {
     tenantId, templateId: template.id, contactId: context.contact?.id || null, eventKey, recipientEmail, subject, bodyHtml: html,
@@ -303,13 +332,13 @@ async function tickTravelEmailAutomation() {
     const eventPayload = JSON.parse(enrollment.eventPayloadJson || "{}");
     const context = await buildContext(enrollment.tenantId, eventPayload);
     let template = step.template;
-    if (!template?.isActive) {
+    if (!template?.isActive || template.isArchived) {
       await prisma.travelEmailEnrollment.update({ where: { id: enrollment.id }, data: { status: "COMPLETED", nextRun: null } });
       continue;
     }
     const eventSubBrand = eventPayload.subBrand || context.contact?.subBrand || null;
     if (eventSubBrand && !template.subBrand) {
-      template = await prisma.travelEmailTemplate.findFirst({ where: { tenantId: enrollment.tenantId, eventKey: template.eventKey, subBrand: eventSubBrand, isActive: true } }) || template;
+      template = await prisma.travelEmailTemplate.findFirst({ where: { tenantId: enrollment.tenantId, eventKey: template.eventKey, subBrand: eventSubBrand, isActive: true, isArchived: false } }) || template;
     }
     const subject = renderText(template.subject, context);
     const html = renderText(template.body, context);
@@ -362,4 +391,4 @@ async function sendRecentDiagnosticEmails() {
   }
 }
 
-module.exports = { ESSENTIAL_EVENTS, OPTIONAL_EVENTS, EVENT_LABELS, ensureDefaultTemplates, renderText, processTravelEmailEvent, resendTravelEmailDelivery, tickTravelEmailAutomation, sendRecentDiagnosticEmails, buildContext };
+module.exports = { ESSENTIAL_EVENTS, OPTIONAL_EVENTS, EVENT_LABELS, REMOVED_EVENT_KEYS, ensureDefaultTemplates, renderText, processTravelEmailEvent, resendTravelEmailDelivery, tickTravelEmailAutomation, sendRecentDiagnosticEmails, buildContext };

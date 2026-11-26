@@ -1149,6 +1149,14 @@ const PAGE_CATALOG = [
     vertical: 'travel',
     requiredPermissions: [{ module: 'marketing', action: 'read' }],
   },
+  {
+    path: '/travel/email-automation',
+    label: 'Email Automation',
+    description: 'Travel email templates, event triggers, and delivery history',
+    category: 'Travel Marketing',
+    vertical: 'travel',
+    requiredPermissions: [{ module: 'marketing', action: 'read' }],
+  },
 
   //  Sales & Pipeline (missing generic CRM routes) 
   {

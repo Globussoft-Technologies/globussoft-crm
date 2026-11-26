@@ -592,6 +592,12 @@ const io = new Server(server, {
     credentials: true,
   },
 });
+// Socket.IO connections do not pass through Express' verifyToken middleware.
+// The notification client supplies a token; validate it before joining the
+// private user room. Other existing unauthenticated sockets (presence/chat)
+// must remain compatible with their current protocol.
+const jwt = require("jsonwebtoken");
+const { JWT_SECRET } = require("./config/secrets");
 const presenceColors = [
   "#ef4444",
   "#3b82f6",
@@ -626,6 +632,18 @@ try {
 
 io.on("connection", (socket) => {
   console.log(`[Socket] Client connected: ${socket.id}`);
+  const token = socket.handshake.auth?.token;
+  if (token) {
+    try {
+      const payload = jwt.verify(token, JWT_SECRET);
+      if (payload.userId && !payload.patientId) {
+        socket.join(`user:${payload.userId}`);
+      }
+    } catch (_err) {
+      // Non-notification sockets may connect without auth; invalid tokens do
+      // not receive private notification-room membership.
+    }
+  }
 
   socket.on("join_presence", (data) => {
     socket.userData = {

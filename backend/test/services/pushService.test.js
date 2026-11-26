@@ -185,6 +185,17 @@ describe('pushService — sendToUser', () => {
     expect(JSON.parse(sentBody)).toEqual({ title: 'Visit booked', body: 'tomorrow' });
   });
 
+  test('preserves a stable notification tag for duplicate-subscription replacement', async () => {
+    const prisma = makePrisma([{ id: 1, endpoint: 'a', p256dh: 'p', auth: 'a' }]);
+    await sendToUser(7, {
+      title: 'New TMC diagnostic submission',
+      body: 'Laura submitted a diagnostic and scored 21.',
+      tag: 'crm-traveldiagnostic-42',
+    }, prisma);
+    expect(JSON.parse(webpush.sendNotification.mock.calls[0][1]).tag)
+      .toBe('crm-traveldiagnostic-42');
+  });
+
   test('VAPID-missing failure still increments failed counter (no DB deactivate)', async () => {
     delete process.env.VAPID_PUBLIC_KEY;
     delete process.env.VAPID_PRIVATE_KEY;

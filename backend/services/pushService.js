@@ -68,10 +68,25 @@ async function sendToUser(userId, payload, prisma) {
     where: { userId, isActive: true },
   });
 
+  // Chrome can rotate a PushSubscription endpoint while the old row remains
+  // active. Sending to both rows produces duplicate OS notifications in the
+  // same browser. Keep one subscription per browser signature; subscriptions
+  // without a user-agent are left untouched for backwards compatibility.
+  const seenUserAgents = new Set();
+  const uniqueSubscriptions = [...subscriptions]
+    .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+    .filter((sub) => {
+    const userAgent = String(sub.userAgent || "").trim();
+    if (!userAgent) return true;
+    if (seenUserAgents.has(userAgent)) return false;
+    seenUserAgents.add(userAgent);
+    return true;
+    });
+
   let sent = 0;
   let failed = 0;
 
-  for (const sub of subscriptions) {
+  for (const sub of uniqueSubscriptions) {
     const result = await sendPush(
       { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
       payload

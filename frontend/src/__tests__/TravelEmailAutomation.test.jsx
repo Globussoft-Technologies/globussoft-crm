@@ -6,7 +6,8 @@ vi.mock('../utils/api', () => ({
   fetchApi: (...args) => fetchApiMock(...args),
 }));
 
-const notifyObj = { error: vi.fn(), success: vi.fn() };
+const notifyConfirm = vi.fn(async () => true);
+const notifyObj = { error: vi.fn(), success: vi.fn(), confirm: notifyConfirm };
 vi.mock('../utils/notify', () => ({ useNotify: () => notifyObj }));
 
 import TravelEmailAutomation from '../pages/travel/EmailAutomation';
@@ -60,7 +61,11 @@ beforeEach(() => {
     if (url.endsWith('/catalog')) {
       return Promise.resolve({
         essential: [{ value: 'registration.approved', label: 'Registration approved' }],
-        optional: [],
+        optional: [
+          { value: 'registration.started', label: 'Registration started but not completed', subject: 'Complete your registration', body: 'Hello {{recipient.name}}, please complete your registration.' },
+          { value: 'trip.completed', label: 'Trip completed — review request', subject: 'How was your trip?', body: 'Hello {{recipient.name}}, please share your review.' },
+          { value: 'payment.failed', label: 'Payment failed or overdue', subject: 'Payment overdue', body: 'Hello {{recipient.name}}, your payment is overdue.' },
+        ],
         subBrands: ['tmc', 'rfu', 'travelstall', 'visasure'],
       });
     }
@@ -79,7 +84,11 @@ describe('TravelEmailAutomation template triggers', () => {
 
     expect(await screen.findByRole('heading', { name: 'Registration approved' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /create new template/i }));
-    expect(screen.getByText('46 fields')).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Registration started but not completed' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Trip completed — review request' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Payment failed or overdue' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Lead assigned to staff' })).not.toBeInTheDocument();
+    expect(screen.getByText('48 fields')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Recipient Name' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Parent Phone' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Student Name' })).toBeInTheDocument();
@@ -109,23 +118,26 @@ describe('TravelEmailAutomation template triggers', () => {
     expect(notifyObj.success).toHaveBeenCalledWith('AI draft added to the email message.');
   });
 
-  it('deletes user-created templates but does not offer delete for defaults', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+  it('offers delete for default templates', async () => {
     render(<TravelEmailAutomation />);
 
     expect(await screen.findByRole('heading', { name: 'TMC registration approved' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Delete Registration approved' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Delete RFU registration approved' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete Registration approved' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete RFU registration approved' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Delete TMC registration approved' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Registration approved' }));
     expect(screen.getByRole('alertdialog', { name: /delete template/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Delete template' }));
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
-      '/api/travel/email-automation/templates/2',
+      '/api/travel/email-automation/templates/1',
       { method: 'DELETE' },
     ));
-    expect(window.confirm).toHaveBeenCalledWith('Delete template "TMC registration approved"?');
+    expect(notifyConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Delete email template',
+      message: 'Delete template "Registration approved"?',
+      destructive: true,
+    }));
     expect(notifyObj.success).toHaveBeenCalledWith('Template deleted.');
   });
 
@@ -176,19 +188,65 @@ describe('TravelEmailAutomation template triggers', () => {
   });
 
   it('bulk deletes selected delivery records', async () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     render(<TravelEmailAutomation />);
 
     await screen.findByRole('heading', { name: 'Registration approved' });
     fireEvent.click(screen.getByRole('button', { name: 'Delivery history' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Select delivery to parent@example.com' }));
+    fireEvent.click(screen.getByRole('button', { name: /Bulk actions \(1\)/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete selected (1)' }));
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
       '/api/travel/email-automation/delivery-logs/bulk-delete',
       { method: 'POST', body: JSON.stringify({ ids: [11] }) },
     ));
-    expect(window.confirm).toHaveBeenCalled();
+    expect(notifyConfirm).toHaveBeenCalledWith(expect.objectContaining({
+      title: 'Delete delivery records',
+      message: 'Delete 1 selected delivery record?',
+      destructive: true,
+    }));
+  });
+
+  it('places delivery selection and deletion inside the Bulk actions menu', async () => {
+    render(<TravelEmailAutomation />);
+
+    await screen.findByRole('heading', { name: 'Registration approved' });
+    fireEvent.click(screen.getByRole('button', { name: 'Delivery history' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Bulk actions$/i }));
+
+    expect(screen.getByRole('menu', { name: 'Bulk actions' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Select current page' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Delete selected/ })).toBeDisabled();
+  });
+
+  it('selects all present delivery records for bulk deletion', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<TravelEmailAutomation />);
+
+    await screen.findByRole('heading', { name: 'Registration approved' });
+    fireEvent.click(screen.getByRole('button', { name: 'Delivery history' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Bulk actions$/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select all present' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Bulk actions \(1\)/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /Bulk actions \(1\)/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete selected (1)' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/travel/email-automation/delivery-logs/bulk-delete',
+      { method: 'POST', body: JSON.stringify({ ids: [11] }) },
+    ));
+  });
+
+  it('fills the default name, subject, and message when an optional trigger is selected', async () => {
+    render(<TravelEmailAutomation />);
+
+    expect(await screen.findByRole('heading', { name: 'Registration approved' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /create new template/i }));
+    fireEvent.change(screen.getByDisplayValue('Registration approved'), { target: { value: 'registration.started' } });
+
+    expect(screen.getByPlaceholderText('Template name')).toHaveValue('Registration started but not completed');
+    expect(screen.getByPlaceholderText('Subject')).toHaveValue('Complete your registration');
+    expect(screen.getByRole('textbox', { name: 'Email message' })).toHaveTextContent('Hello {{recipient.name}}, please complete your registration.');
   });
 
 

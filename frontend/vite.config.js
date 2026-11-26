@@ -55,6 +55,13 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (p) => p,
       },
+      // Socket.IO needs the websocket upgrade forwarded to the backend;
+      // without this, the bell only refreshes after an HTTP page reload.
+      "/socket.io": {
+        target: process.env.VITE_API_PROXY_TARGET || "http://localhost:5000",
+        changeOrigin: true,
+        ws: true,
+      },
       // Raw WebSocket endpoints served by Express (Callified agent bridge at
       // /ws/callified-agent). `ws: true` is what makes Vite forward the
       // upgrade handshake instead of answering with the SPA shell. socket.io

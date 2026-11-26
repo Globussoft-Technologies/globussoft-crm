@@ -217,17 +217,16 @@ function TripCombobox({
             overflowY: "auto",
           }}
         >
-          <div style={{ position: "relative", marginBottom: 6 }}>
-            <Search size={15} aria-hidden style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "var(--text-secondary)" }} />
+          <div className="search-with-leading-icon" style={{ marginBottom: 6 }}>
+            <Search size={15} aria-hidden />
             <input
               ref={searchRef}
               type="text"
-              className="trip-search-input"
               value={search}
               onChange={(event) => onSearchChange(event.target.value)}
               placeholder="Search trip code or destination…"
               aria-label="Search trips"
-              style={{ ...inputStyle, width: "100%", boxSizing: "border-box", paddingLeft: 32 }}
+              style={{ ...inputStyle, boxSizing: "border-box" }}
             />
           </div>
           <button
@@ -1337,14 +1336,17 @@ export default function InvoicesAdmin() {
               </div>
             </div>
             <div className="invoices-admin-page__reconciliation-actions" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <input
-                ref={reconInputRef}
-                type="file"
-                accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                onChange={(e) => setReconFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)}
-                style={{ maxWidth: 260 }}
-                aria-label="Excel Software reconciliation file"
-              />
+              <label className="invoices-admin-page__reconciliation-file">
+                <input
+                  ref={reconInputRef}
+                  type="file"
+                  accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  onChange={(e) => setReconFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)}
+                  aria-label="Excel Software reconciliation file"
+                />
+                <span className="invoices-admin-page__reconciliation-file-button">Choose File</span>
+                <span className="invoices-admin-page__reconciliation-file-name">{reconFile?.name || "No file chosen"}</span>
+              </label>
               <button
                 type="button"
                 onClick={runReconciliation}
@@ -1681,7 +1683,7 @@ export default function InvoicesAdmin() {
                         }
                         return (
                           <Link
-                            to={`/contacts/${inv.contactId}`}
+                            to={`/travel/leads/${inv.contactId}`}
                             title={tooltip}
                             style={{
                               display: "block",

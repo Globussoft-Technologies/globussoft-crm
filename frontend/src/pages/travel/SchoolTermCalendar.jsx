@@ -423,7 +423,6 @@ export default function SchoolTermCalendar() {
           whiteSpace: "nowrap",
         }}
       >
-        <Search size={16} aria-hidden style={{ color: "var(--text-secondary)" }} />
         <input
           type="date"
           value={checkDate}

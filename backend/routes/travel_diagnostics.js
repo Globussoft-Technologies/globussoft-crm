@@ -3231,7 +3231,12 @@ router.post("/diagnostics/public/submit", async (req, res) => {
         recipientName: String(name).trim() || "there",
         student: { name: String(name).trim() || "there" },
         reportUrl: reportPdfUrl || "",
-        diagnostic: { reportUrl: reportPdfUrl || "" },
+        diagnostic: {
+          reportUrl: reportPdfUrl || "",
+          score: result.score,
+          classificationLabel: result.classificationLabel,
+          recommendedTier: result.recommendedTier,
+        },
       }, tenant.id);
     } catch (emailErr) {
       console.warn("[travel-diag-public] completion email trigger failed (non-fatal):", emailErr.message);
@@ -3802,7 +3807,11 @@ router.post("/diagnostics/public/submit-tmc", async (req, res) => {
         recipientName: String(contact.contact_name || "there").trim(),
         student: { name: String(contact.school_name || contact.contact_name || "there").trim() },
         reportUrl,
-        diagnostic: { reportUrl },
+        diagnostic: {
+          reportUrl,
+          classificationLabel: engineOutput.icpTier || engineOutput.state || "",
+          recommendedTier: leadQualityResult.leadQuality || "",
+        },
         reportSlug,
       }, tenant.id);
     } catch (emailErr) {

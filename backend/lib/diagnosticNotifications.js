@@ -88,11 +88,11 @@ async function notifyDiagnosticSubmitted({
         title,
         message,
         type: "info",
+        category: "tmc_catalogue",
         link: resolvedLink,
         entityType: "TravelDiagnostic",
         entityId: diagnosticId,
         channels: ["db", "socket"],
-        ignorePreferences: true,
       });
       return;
     }
@@ -115,11 +115,11 @@ async function notifyDiagnosticSubmitted({
             title,
             message,
             type: "info",
+            category: "tmc_catalogue",
             link: resolvedLink,
             entityType: "TravelDiagnostic",
             entityId: diagnosticId,
             channels: ["db", "socket"],
-            ignorePreferences: true,
           });
         } catch (e) {
           console.warn(`[diagnosticNotifications] db notify failed for user ${r.userId} (non-fatal):`, e.message);

@@ -614,7 +614,7 @@ describe('<InvoicesAdmin /> — row rendering', () => {
     expect(screen.getByText('TINV-2026-0042')).toBeInTheDocument();
   });
 
-  it('#1051 — CONTACT column renders the contact name (with link to /contacts/:id) once the lookup resolves', async () => {
+  it('#1051 — CONTACT column renders the contact name with a link to the travel lead detail page once the lookup resolves', async () => {
     installFetchMock({
       list: {
         invoices: [
@@ -643,9 +643,9 @@ describe('<InvoicesAdmin /> — row rendering', () => {
     // The raw "#37207" / "#24566" placeholders are gone.
     expect(screen.queryByText('#37207')).toBeNull();
     expect(screen.queryByText('#24566')).toBeNull();
-    // Each name is a link to the contact detail page (tooltip via title).
+    // Each name opens the travel-specific lead detail page (tooltip via title).
     const aaravLink = screen.getByRole('link', { name: 'Aarav Sharma' });
-    expect(aaravLink.getAttribute('href')).toBe('/contacts/37207');
+    expect(aaravLink.getAttribute('href')).toBe('/travel/leads/37207');
     expect(aaravLink.getAttribute('title')).toMatch(/#37207/);
     expect(aaravLink.getAttribute('title')).toMatch(/aarav@example\.com/);
   });

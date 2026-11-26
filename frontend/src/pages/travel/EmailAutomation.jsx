@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlignCenter, AlignLeft, AlignRight, Bold, Eye, Italic, Mail, Pause, Play, Plus, RefreshCw, Save, Send, Sparkles, Trash2, Underline, X } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, Bold, ChevronDown, ChevronUp, Eye, Italic, Mail, Pause, Pencil, Play, Plus, RefreshCw, Save, Send, SlidersHorizontal, Sparkles, Trash2, Underline, X } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
 import Pagination from "../../components/ui/Pagination";
@@ -38,6 +38,8 @@ const fields = [
   { label: "Sender Email", key: "sender.email" },
   { label: "Student Name (Contact)", key: "student.name" },
   { label: "Diagnostic Report Link", key: "diagnostic.reportUrl" },
+  { label: "Diagnostic Link", key: "diagnostic_link" },
+  { label: "First Name", key: "first_name" },
   { label: "Site Visit Date & Time", key: "site_visit.date_time" },
   { label: "Site Visit Location", key: "site_visit.location" },
   { label: "Catalogue Name", key: "catalogue.name" },
@@ -77,37 +79,89 @@ if (typeof document !== "undefined" && !window.__travelEditorCaretBound) {
     });
   }, true);
 }
-if (typeof document !== "undefined" && !window.__travelTemplateDeleteConfirmBound) {
-  window.__travelTemplateDeleteConfirmBound = true;
-  let approvedDelete = false;
+if (typeof document !== "undefined" && !window.__travelPersonalizationInsertBound) {
+  window.__travelPersonalizationInsertBound = true;
+  let activeInput = null;
+  let inputSelection = { start: 0, end: 0 };
+  let activeEditor = null;
+  let editorRange = null;
+
+  const isSubjectInput = element => element?.tagName === "INPUT" && element.closest("label")?.textContent?.startsWith("Subject");
+  const rememberSelection = () => {
+    if (isSubjectInput(document.activeElement)) {
+      activeInput = document.activeElement;
+      inputSelection = { start: activeInput.selectionStart ?? activeInput.value.length, end: activeInput.selectionEnd ?? activeInput.value.length };
+      activeEditor = null;
+      return;
+    }
+    const selection = window.getSelection();
+    const editor = selection?.anchorNode?.parentElement?.closest?.(".travel-rich-editor");
+    if (editor && selection.rangeCount) {
+      activeEditor = editor;
+      editorRange = selection.getRangeAt(0).cloneRange();
+      activeInput = null;
+    }
+  };
+
+  document.addEventListener("focusin", rememberSelection, true);
+  document.addEventListener("keyup", rememberSelection, true);
+  document.addEventListener("mouseup", rememberSelection, true);
+  document.addEventListener("selectionchange", rememberSelection, true);
+  document.addEventListener("mousedown", event => {
+    if (event.target.closest?.(".travel-personalization-fields button")) event.preventDefault();
+  }, true);
+  // Keep insertion visible in contenteditable controls even when React's
+  // delegated click handler runs before the document-level selection helper.
   document.addEventListener("click", event => {
-    const button = event.target.closest?.(".travel-template-actions button.danger");
-    if (!button || approvedDelete) return;
+    const button = event.target.closest?.(".travel-personalization-fields button");
+    const editor = document.querySelector(".travel-rich-editor");
+    if (!button || !editor || editor.textContent.includes(`{{${button.textContent}}}`)) return;
+    const field = fields.find(item => item.label === button.textContent);
+    if (!field) return;
+    editor.appendChild(document.createTextNode(`${editor.textContent ? " " : ""}{{${field.key}}}`));
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  }, true);
+  document.addEventListener("click", event => {
+    const button = event.target.closest?.(".travel-personalization-fields button");
+    if (!button) return;
+    const field = fields.find(item => item.label === button.textContent);
+    if (!field) return;
     event.preventDefault();
-    event.stopPropagation();
-    const overlay = document.createElement("div");
-    overlay.className = "travel-confirm-overlay";
-    const dialog = document.createElement("section");
-    dialog.className = "travel-leave-dialog card";
-    dialog.setAttribute("role", "alertdialog");
-    dialog.setAttribute("aria-modal", "true");
-    dialog.setAttribute("aria-label", "Delete template");
-    const name = button.getAttribute("aria-label")?.replace(/^Delete\s+/, "") || "this template";
-    const safeName = name.replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character]));
-    dialog.innerHTML = `<h3>Delete template?</h3><p>Delete template "${safeName}"?</p><div class="travel-leave-actions"><button type="button" class="btn-secondary">Cancel</button><button type="button" class="btn-primary">Delete template</button></div>`;
-    overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
-    const close = () => overlay.remove();
-    dialog.querySelector(".btn-secondary").addEventListener("click", close);
-    dialog.querySelector(".btn-primary").addEventListener("click", () => {
-      close();
-      approvedDelete = true;
-      const nativeConfirm = window.confirm;
-      window.confirm = () => true;
-      button.click();
-      window.confirm = nativeConfirm;
-      requestAnimationFrame(() => { approvedDelete = false; });
-    });
+    event.stopImmediatePropagation();
+    const token = `{{${field.key}}}`;
+
+    if (activeInput && document.contains(activeInput)) {
+      const start = inputSelection.start;
+      const end = inputSelection.end;
+      const nextValue = `${activeInput.value.slice(0, start)}${token}${activeInput.value.slice(end)}`;
+      const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+      if (valueSetter) valueSetter.call(activeInput, nextValue);
+      else activeInput.value = nextValue;
+      activeInput.focus();
+      activeInput.setSelectionRange(start + token.length, start + token.length);
+      inputSelection = { start: start + token.length, end: start + token.length };
+      activeInput.dispatchEvent(new Event("input", { bubbles: true }));
+      return;
+    }
+
+    if (activeEditor && document.contains(activeEditor)) {
+      const selection = window.getSelection();
+      const range = editorRange?.cloneRange() || document.createRange();
+      if (!editorRange) {
+        range.selectNodeContents(activeEditor);
+        range.collapse(false);
+      }
+      range.deleteContents();
+      const textNode = document.createTextNode(token);
+      range.insertNode(textNode);
+      range.setStartAfter(textNode);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      editorRange = range.cloneRange();
+      activeEditor.focus();
+      activeEditor.dispatchEvent(new Event("input", { bubbles: true }));
+    }
   }, true);
 }
 
@@ -122,7 +176,7 @@ function aiDraftToHtml(value) {
     .replace(/\r?\n/g, "<br />");
 }
 
-function TravelTemplateEditor({ draft, setDraft, catalog, onSave, onClose }) { const notify = useNotify(); const editorRef = useRef(null); const [generating, setGenerating] = useState(false); const [fieldQuery, setFieldQuery] = useState(""); const visibleFields = fields.filter(item => item.label.toLowerCase().includes(fieldQuery.trim().toLowerCase()) || item.key.toLowerCase().includes(fieldQuery.trim().toLowerCase())); const insert = value => setDraft(current => ({ ...current, body: `${current.body || ""} {{${value}}}` })); const command = name => { if (editorRef.current) { editorRef.current.focus(); document.execCommand(name); setDraft(current => ({ ...current, body: editorRef.current.innerHTML })); } }; const writeWithAi = async () => { const subject = String(draft.subject || "").trim(); if (!subject) { notify.error("Add a subject before writing with AI."); return; } const event = catalog.essential.concat(catalog.optional).find(item => item.value === draft.eventKey); setGenerating(true); try { const result = await fetchApi("/api/ai/draft", { method: "POST", body: JSON.stringify({ subject, context: `Travel email template "${draft.name || "Untitled"}" for the ${event?.label || draft.eventKey || "selected"} event and ${brandLabel(draft.subBrand || "all")}. Use relevant Travel CRM merge fields such as {{recipient.name}} or {{trip.destination}} where appropriate.`, tone: "professional and warm" }) }); const body = aiDraftToHtml(result?.draft); if (!body) throw new Error("AI returned an empty draft."); setDraft(current => ({ ...current, body })); if (editorRef.current) editorRef.current.innerHTML = body; notify.success("AI draft added to the email message."); } catch (error) { notify.error(error?.message || "AI could not write this template."); } finally { setGenerating(false); } }; return <div className="travel-modal" role="dialog" aria-modal="true"><form className="travel-template-editor card" onSubmit={onSave}><header className="travel-template-editor-header"><h2>{draft.id ? "Edit Template" : "New Template"}</h2><div><button type="button" className="btn-secondary" onClick={() => setDraft({ ...EMPTY, eventKey: catalog.essential[0]?.value || "" })}>Clear draft</button><button type="button" className="travel-icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div></header><div className="travel-template-editor-layout"><section className="travel-template-editor-main"><div className="travel-template-fields"><Field label="Template Name *"><input className="input-field" required placeholder="Template name" value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} /></Field><Field label="Category"><input className="input-field" value="General" readOnly /></Field></div><Field label="Template Type *"><select className="input-field" value="EMAIL" disabled><option>Email</option></select></Field><div className="travel-template-fields"><Field label="Event trigger *"><select className="input-field" required value={draft.eventKey} onChange={e => setDraft({ ...draft, eventKey: e.target.value })}>{catalog.essential.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}<optgroup label="Optional - no default template">{catalog.optional.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</optgroup></select></Field><Field label="Subbrand"><select className="input-field" value={draft.subBrand} onChange={e => setDraft({ ...draft, subBrand: e.target.value })}><option value="all">All subbrands</option>{catalog.subBrands.map(item => <option key={item} value={item}>{brandLabel(item)}</option>)}</select></Field></div><Field label="Subject *"><input className="input-field" required placeholder="Subject" value={draft.subject} onChange={e => setDraft({ ...draft, subject: e.target.value })} /></Field><div className="travel-message-label">Message *</div><div className="travel-editor-toolbar"><button type="button" className="btn-secondary travel-ai-write" onClick={writeWithAi} disabled={generating}><Sparkles size={14} /> {generating ? "Writing..." : "Write with AI"}</button><button type="button" className="btn-secondary" onClick={() => command("bold")}><Bold size={14} /></button><button type="button" className="btn-secondary" onClick={() => command("italic")}><Italic size={14} /></button><button type="button" className="btn-secondary" onClick={() => command("underline")}><Underline size={14} /></button><button type="button" className="btn-secondary" onClick={() => command("justifyLeft")}><AlignLeft size={14} /></button><button type="button" className="btn-secondary" onClick={() => command("justifyCenter")}><AlignCenter size={14} /></button><button type="button" className="btn-secondary" onClick={() => command("justifyRight")}><AlignRight size={14} /></button><button type="button" className="btn-secondary" onClick={() => insert("recipient.name")}>Insert Personalization</button></div><div ref={editorRef} className="travel-rich-editor" contentEditable suppressContentEditableWarning role="textbox" aria-label="Email message" onInput={e => setDraft({ ...draft, body: e.currentTarget.innerHTML })} dangerouslySetInnerHTML={{ __html: draft.body || "" }} /><p className="travel-editor-note">Recipients are resolved automatically from the event. Passwords are never sent.</p></section><aside className="travel-personalization"><div className="travel-personalization-heading"><strong>Personalization</strong><small>{fieldQuery.trim() ? `${visibleFields.length} of ${fields.length}` : fields.length} fields</small></div><p>Travel CRM fields can be inserted into the subject or message.</p><input className="input-field" placeholder="Filter merge fields..." value={fieldQuery} onChange={event => setFieldQuery(event.target.value)} /><div className="travel-personalization-fields">{visibleFields.map(item => <button type="button" key={item.key} onClick={() => insert(item.key)}>{item.label}</button>)}</div></aside></div><footer className="travel-template-editor-footer"><button type="button" className="btn-secondary" onClick={onClose}>Cancel</button><button className="btn-primary"><Save size={14} /> Save</button></footer></form></div>; }
+function TravelTemplateEditor({ draft, setDraft, catalog, onSave, onClose }) { const notify = useNotify(); const editorRef = useRef(null); const [generating, setGenerating] = useState(false); const [fieldQuery, setFieldQuery] = useState(""); const visibleFields = fields.filter(item => item.label.toLowerCase().includes(fieldQuery.trim().toLowerCase()) || item.key.toLowerCase().includes(fieldQuery.trim().toLowerCase())); const insert = value => setDraft(current => ({ ...current, body: `${current.body || ""} {{${value}}}` })); const command = name => { if (editorRef.current) { editorRef.current.focus(); document.execCommand(name); setDraft(current => ({ ...current, body: editorRef.current.innerHTML })); } }; const writeWithAi = async () => { const subject = String(draft.subject || "").trim(); if (!subject) { notify.error("Add a subject before writing with AI."); return; } const event = catalog.essential.concat(catalog.optional).find(item => item.value === draft.eventKey); setGenerating(true); try { const result = await fetchApi("/api/ai/draft", { method: "POST", body: JSON.stringify({ subject, context: `Travel email template "${draft.name || "Untitled"}" for the ${event?.label || draft.eventKey || "selected"} event and ${brandLabel(draft.subBrand || "all")}. Use relevant Travel CRM merge fields such as {{recipient.name}} or {{trip.destination}} where appropriate.`, tone: "professional and warm" }) }); const body = aiDraftToHtml(result?.draft); if (!body) throw new Error("AI returned an empty draft."); setDraft(current => ({ ...current, body })); if (editorRef.current) editorRef.current.innerHTML = body; notify.success("AI draft added to the email message."); } catch (error) { notify.error(error?.message || "AI could not write this template."); } finally { setGenerating(false); } }; return <div className="travel-modal" role="dialog" aria-modal="true"><form className="travel-template-editor card" onSubmit={onSave}><header className="travel-template-editor-header"><h2>{draft.id ? "Edit Template" : "New Template"}</h2><div><button type="button" className="btn-secondary" onClick={() => setDraft({ ...EMPTY, eventKey: catalog.essential[0]?.value || "" })}>Clear draft</button><button type="button" className="travel-icon-button" onClick={onClose} aria-label="Close"><X size={18} /></button></div></header><div className="travel-template-editor-layout"><section className="travel-template-editor-main"><div className="travel-template-fields"><Field label="Template Name *"><input className="input-field" required placeholder="Template name" value={draft.name} onChange={e => setDraft({ ...draft, name: e.target.value })} /></Field><Field label="Category"><input className="input-field" value="General" readOnly /></Field></div><div className="travel-template-fields"><Field label="Event trigger *"><select className="input-field" required value={draft.eventKey} onChange={e => setDraft({ ...draft, eventKey: e.target.value })}>{catalog.essential.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}<optgroup label="Optional">{catalog.optional.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</optgroup></select></Field><Field label="Subbrand"><select className="input-field" value={draft.subBrand} onChange={e => setDraft({ ...draft, subBrand: e.target.value })}><option value="all">All subbrands</option>{catalog.subBrands.map(item => <option key={item} value={item}>{brandLabel(item)}</option>)}</select></Field></div><Field label="Subject *"><input className="input-field" required placeholder="Subject" value={draft.subject} onChange={e => setDraft({ ...draft, subject: e.target.value })} /></Field><div className="travel-message-label">Message *</div><div className="travel-editor-toolbar"><button type="button" className="btn-secondary travel-ai-write" onClick={writeWithAi} disabled={generating}><Sparkles size={14} /> {generating ? "Writing..." : "Write with AI"}</button><button type="button" className="btn-secondary" onClick={() => command("bold")}><Bold size={14} /></button><button type="button" className="btn-secondary" onClick={() => command("italic")}><Italic size={14} /></button><button type="button" className="btn-secondary" onClick={() => command("underline")}><Underline size={14} /></button><button type="button" className="btn-secondary" onClick={() => command("justifyLeft")}><AlignLeft size={14} /></button><button type="button" className="btn-secondary" onClick={() => command("justifyCenter")}><AlignCenter size={14} /></button><button type="button" className="btn-secondary" onClick={() => command("justifyRight")}><AlignRight size={14} /></button></div><div ref={editorRef} className="travel-rich-editor" contentEditable suppressContentEditableWarning role="textbox" aria-label="Email message" onInput={e => setDraft({ ...draft, body: e.currentTarget.innerHTML })} dangerouslySetInnerHTML={{ __html: draft.body || "" }} /><p className="travel-editor-note">Recipients are resolved automatically from the event. Passwords are never sent.</p></section><aside className="travel-personalization"><div className="travel-personalization-heading"><strong>Personalization</strong><small>{fieldQuery.trim() ? `${visibleFields.length} of ${fields.length}` : fields.length} fields</small></div><p>Travel CRM fields can be inserted into the subject or message.</p><input className="input-field" placeholder="Filter merge fields..." value={fieldQuery} onChange={event => setFieldQuery(event.target.value)} /><div className="travel-personalization-fields">{visibleFields.map(item => <button type="button" key={item.key} onClick={() => insert(item.key)}>{item.label}</button>)}</div></aside></div><footer className="travel-template-editor-footer"><button type="button" className="btn-secondary" onClick={onClose}>Cancel</button><button className="btn-primary"><Save size={14} /> Save</button></footer></form></div>; }
 
 function LegacyDeliveryHistory({ logs, pagination, selectedIds, busy, onTogglePage, onToggleOne, onDelete, onOpen, onPageChange }) {
   const allSelected = logs.length > 0 && logs.every(item => selectedIds.includes(item.id));
@@ -133,8 +187,10 @@ function LegacyDeliveryHistory({ logs, pagination, selectedIds, busy, onTogglePa
   </section>;
 }
 
-function DeliveryHistory({ logs, pagination, selectedIds, busy, resendBusyId, onTogglePage, onToggleOne, onDelete, onOpen, onResend, onPageChange }) {
+function DeliveryHistory({ logs, pagination, selectedIds, busy, resendBusyId, onTogglePage, onToggleOne, onSelectIds, onDelete, onOpen, onResend, onPageChange }) {
   const notify = useNotify();
+  const [bulkActionsOpen, setBulkActionsOpen] = useState(false);
+  const [selectingAll, setSelectingAll] = useState(false);
   const allSelected = logs.length > 0 && logs.every(item => selectedIds.includes(item.id));
   const resendFallback = async item => {
     try {
@@ -146,9 +202,44 @@ function DeliveryHistory({ logs, pagination, selectedIds, busy, resendBusyId, on
       notify.error(error?.message || "Email could not be sent. Check your email provider settings.");
     }
   };
+  const toggleCurrentPage = () => {
+    onTogglePage();
+    setBulkActionsOpen(false);
+  };
+  const selectAllPresent = async () => {
+    setSelectingAll(true);
+    try {
+      const firstResponse = await fetchApi(`/api/travel/email-automation/delivery-logs?page=1&limit=100`);
+      const firstLogs = Array.isArray(firstResponse) ? firstResponse : (firstResponse?.logs || []);
+      const totalPages = Math.max(1, Number(firstResponse?.pagination?.totalPages) || 1);
+      const remainingResponses = await Promise.all(
+        Array.from({ length: totalPages - 1 }, (_, index) =>
+          fetchApi(`/api/travel/email-automation/delivery-logs?page=${index + 2}&limit=100`),
+        ),
+      );
+      const allLogs = [
+        ...firstLogs,
+        ...remainingResponses.flatMap(response => Array.isArray(response) ? response : (response?.logs || [])),
+      ];
+      onSelectIds([...new Set([...selectedIds, ...allLogs.map(item => item.id)])]);
+      setBulkActionsOpen(false);
+    } catch (error) {
+      notify.error(error?.message || "Delivery records could not be selected.");
+    } finally {
+      setSelectingAll(false);
+    }
+  };
+  const clearSelection = () => {
+    selectedIds.forEach(id => onToggleOne(id));
+    setBulkActionsOpen(false);
+  };
+  const deleteSelected = () => {
+    setBulkActionsOpen(false);
+    onDelete();
+  };
   return <section className="card travel-delivery-history">
-    <div className="travel-history-heading"><div><h2>Delivery history</h2><p>Click a record to view the subject and exact message.</p></div><div className="travel-history-actions"><label><input type="checkbox" checked={allSelected} onChange={onTogglePage} /> Select page</label><button type="button" className="btn-secondary danger" disabled={!selectedIds.length || busy} onClick={onDelete}><Trash2 size={14} /> Delete selected{selectedIds.length ? ` (${selectedIds.length})` : ""}</button></div></div>
-    {busy && !logs.length ? <p>Loading delivery history...</p> : logs.length ? <div className="travel-history-list">{logs.map(item => <article className="travel-delivery-row" key={item.id} role="button" tabIndex={0} onClick={() => onOpen(item)} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") onOpen(item); }}><input type="checkbox" aria-label={`Select delivery to ${item.recipientEmail}`} checked={selectedIds.includes(item.id)} onClick={event => event.stopPropagation()} onChange={() => onToggleOne(item.id)} /><span><time>{new Date(item.createdAt).toLocaleString()}</time><b>{item.eventKey}</b><small>{item.recipientEmail}</small><em>{item.subject}</em></span><strong className={String(item.status).toLowerCase()}>{item.status}</strong>{item.errorMessage && <small className="travel-delivery-error">{item.errorMessage}</small>}{String(item.status).toUpperCase() === "FAILED" && <button type="button" className="btn-secondary travel-delivery-resend" aria-label={`Resend email to ${item.recipientEmail}`} disabled={resendBusyId === item.id} onClick={event => { event.stopPropagation(); if (onResend) onResend(item); else resendFallback(item); }}>{resendBusyId === item.id ? "Resending…" : <><Send size={13} /> Resend</>}</button>}</article>)}</div> : <p className="travel-history-empty">No delivery history yet.</p>}
+    <div className="travel-history-heading"><div><h2>Delivery history</h2><p>Click a record to view the subject and exact message.</p></div><div className="travel-history-actions"><div className="travel-history-bulk-actions"><button type="button" className="btn-secondary travel-history-bulk-button" onClick={() => setBulkActionsOpen(open => !open)} aria-haspopup="menu" aria-expanded={bulkActionsOpen}><SlidersHorizontal size={14} /> Bulk actions{selectedIds.length ? ` (${selectedIds.length})` : ""}{bulkActionsOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>{bulkActionsOpen && <div className="travel-history-bulk-menu" role="menu" aria-label="Bulk actions"><strong>Bulk actions</strong><span>{selectedIds.length} selected</span><button type="button" className="btn-secondary" onClick={toggleCurrentPage}>{allSelected ? "Clear current page" : "Select current page"}</button><button type="button" className="btn-secondary" onClick={selectAllPresent} disabled={selectingAll}>{selectingAll ? "Selecting..." : "Select all present"}</button>{selectedIds.length > 0 && <button type="button" className="btn-secondary" onClick={clearSelection}>Clear selection</button>}<button type="button" className="btn-secondary danger" disabled={!selectedIds.length || busy} onClick={deleteSelected}><Trash2 size={14} /> Delete selected{selectedIds.length ? ` (${selectedIds.length})` : ""}</button></div>}</div></div></div>
+    {busy && !logs.length ? <p>Loading delivery history...</p> : logs.length ? <div className="travel-history-list">{logs.map(item => <article className="travel-delivery-row" key={item.id} role="button" tabIndex={0} onClick={() => onOpen(item)} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") onOpen(item); }}><input type="checkbox" aria-label={`Select delivery to ${item.recipientEmail}`} checked={selectedIds.includes(item.id)} onClick={event => event.stopPropagation()} onChange={() => onToggleOne(item.id)} /><span><time>{new Date(item.createdAt).toLocaleString()}</time><b>{item.eventKey}</b><small>{item.recipientEmail}</small><em>{item.subject}</em></span><div className="travel-delivery-result"><strong className={String(item.status).toLowerCase()}>{item.status}</strong>{item.errorMessage && <small className="travel-delivery-error">{item.errorMessage}</small>}{String(item.status).toUpperCase() === "FAILED" && <button type="button" className="btn-secondary travel-delivery-resend" aria-label={`Resend email to ${item.recipientEmail}`} disabled={resendBusyId === item.id} onClick={event => { event.stopPropagation(); if (onResend) onResend(item); else resendFallback(item); }}>{resendBusyId === item.id ? "Resending…" : <><Send size={13} /> Resend</>}</button>}</div></article>)}</div> : <p className="travel-history-empty">No delivery history yet.</p>}
     <Pagination page={pagination.page || 1} pageSize={pagination.limit || HISTORY_PAGE_SIZE} total={pagination.total || 0} onChange={onPageChange} className="travel-history-pagination" />
   </section>;
 }
@@ -164,6 +255,7 @@ export default function TravelEmailAutomation() {
   const [logDetail, setLogDetail] = useState(null);
   const [historyBusy, setHistoryBusy] = useState(false);
   const [templateDraft, setTemplateDraft] = useState(null);
+  const [deleteTemplate, setDeleteTemplate] = useState(null);
   const [previewData, setPreviewData] = useState(null);
   const [tab, setTab] = useState("templates");
   const [templateSearch, setTemplateSearch] = useState("");
@@ -186,7 +278,6 @@ export default function TravelEmailAutomation() {
     try {
       const response = await fetchApi(`/api/travel/email-automation/delivery-logs?page=${page}&limit=${HISTORY_PAGE_SIZE}`);
       applyLogResponse(response, page);
-      setSelectedLogIds([]);
     } catch (e) {
       notify.error(e?.message || "Delivery history could not be loaded.");
     } finally {
@@ -216,7 +307,6 @@ export default function TravelEmailAutomation() {
 
   useEffect(() => { load(); }, []);
 
-  const eventLabel = key => catalog.essential.concat(catalog.optional).find(item => item.value === key)?.label || key;
   const visibleTemplates = useMemo(() => {
     const query = templateSearch.trim().toLowerCase();
     return templates.filter(item =>
@@ -229,6 +319,21 @@ export default function TravelEmailAutomation() {
     (map[item.eventKey] ||= []).push(item);
     return map;
   }, {}), [visibleTemplates]);
+
+  const updateTemplateDraft = nextDraft => {
+    setTemplateDraft(current => {
+      const next = typeof nextDraft === "function" ? nextDraft(current) : nextDraft;
+      if (!current || !next || next.id || next.eventKey === current.eventKey) return next;
+      const selected = catalog.essential.concat(catalog.optional).find(item => item.value === next.eventKey);
+      if (!selected) return next;
+      return {
+        ...next,
+        name: selected.label || next.name,
+        subject: selected.subject || "",
+        body: selected.body || "",
+      };
+    });
+  };
 
   const saveTemplate = async event => {
     event.preventDefault();
@@ -245,8 +350,23 @@ export default function TravelEmailAutomation() {
   };
 
   const removeTemplate = async item => {
-    if (!window.confirm(`Delete template "${item.name}"?`)) return;
+    setDeleteTemplate(item);
+  };
+
+  const confirmRemoveTemplate = async () => {
+    const item = deleteTemplate;
+    if (!item) return;
+    setDeleteTemplate(null);
     try {
+      await notify.confirm({
+        title: "Delete email template",
+        message: `Delete template "${item.name}"?`,
+        warning: "This action cannot be undone.",
+        icon: <Trash2 size={20} aria-hidden="true" />,
+        confirmText: "Delete template",
+        destructive: true,
+        skipRender: true,
+      });
       await fetchApi(`/api/travel/email-automation/templates/${item.id}`, { method: "DELETE" });
       notify.success("Template deleted.");
       await load();
@@ -282,12 +402,26 @@ export default function TravelEmailAutomation() {
   };
 
   const deleteSelectedLogs = async () => {
-    if (!selectedLogIds.length || !window.confirm(`Delete ${selectedLogIds.length} selected delivery record${selectedLogIds.length === 1 ? "" : "s"}?`)) return;
+    const ids = [...selectedLogIds];
+    if (!ids.length) return;
+    const confirmed = await notify.confirm({
+      title: "Delete delivery records",
+      message: `Delete ${ids.length} selected delivery record${ids.length === 1 ? "" : "s"}?`,
+      warning: "This action cannot be undone.",
+      icon: <Trash2 size={20} aria-hidden="true" />,
+      confirmText: `Delete ${ids.length} record${ids.length === 1 ? "" : "s"}`,
+      destructive: true,
+    });
+    if (!confirmed) return;
     setHistoryBusy(true);
     try {
-      const result = await fetchApi("/api/travel/email-automation/delivery-logs/bulk-delete", { method: "POST", body: JSON.stringify({ ids: selectedLogIds }) });
-      notify.success(`${result?.deleted || selectedLogIds.length} delivery record${(result?.deleted || selectedLogIds.length) === 1 ? "" : "s"} deleted.`);
-      const nextPage = logs.length === selectedLogIds.length && historyPage > 1 ? historyPage - 1 : historyPage;
+      let deleted = 0;
+      for (let index = 0; index < ids.length; index += 200) {
+        const result = await fetchApi("/api/travel/email-automation/delivery-logs/bulk-delete", { method: "POST", body: JSON.stringify({ ids: ids.slice(index, index + 200) }) });
+        deleted += result?.deleted || ids.slice(index, index + 200).length;
+      }
+      notify.success(`${deleted} delivery record${deleted === 1 ? "" : "s"} deleted.`);
+      const nextPage = logs.length === ids.length && historyPage > 1 ? historyPage - 1 : historyPage;
       setHistoryPage(nextPage);
       await loadHistory(nextPage);
     } catch (e) {
@@ -311,8 +445,9 @@ export default function TravelEmailAutomation() {
     <header className="travel-email-header"><Mail size={26} /><div><h1>Email automation</h1><p>Create Travel email templates and event triggers.</p></div><span /><button className="btn-secondary" onClick={load}><RefreshCw size={15} /> Refresh</button>{tab === "templates" && <button className="btn-primary" onClick={() => setTemplateDraft({ ...EMPTY, eventKey: catalog.essential[0]?.value || "" })}><Plus size={15} /> Create new template</button>}</header>
     <nav className="travel-email-tabs">{[["templates", "Email templates"], ["logs", "Delivery history"]].map(([key, label]) => <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>{label}</button>)}</nav>
     <div className="travel-email-info"><strong>Travel CRM only.</strong> Templates, recipients, and delivery history are separate from Generic and Wellness. Recipients are resolved automatically; passwords are never sent.</div>
-    {loading ? <p>Loading...</p> : error ? <p>{error}</p> : tab === "templates" ? <section><div className="travel-section-heading"><div><h2>Email templates</h2><p>Each active template sends when its event trigger occurs.</p></div><span>{visibleTemplates.length}{visibleTemplates.length !== templates.length ? ` of ${templates.length}` : ""} templates</span></div><div className="travel-template-filter"><select className="input-field" aria-label="Filter templates by subbrand" value={templateSubBrand} onChange={e => setTemplateSubBrand(e.target.value)}><option value="all">All subbrands</option>{catalog.subBrands.map(item => <option key={item} value={item}>{brandLabel(item)}</option>)}</select><input className="input-field" aria-label="Search Travel email templates" placeholder="Search templates..." value={templateSearch} onChange={e => setTemplateSearch(e.target.value)} /></div><div className="travel-template-grid">{Object.keys(grouped).flatMap(key => grouped[key].map(item => <article className="card" key={item.id}><div className="travel-card-heading"><div><h3>{item.name}</h3><small>{brandLabel(item.subBrand)}</small></div><button className="btn-secondary" onClick={() => preview(item)} aria-label={`Preview ${item.name}`}><Eye size={14} /></button></div><div><strong>Event:</strong> {eventLabel(key)}</div><div><strong>Subject:</strong> {item.subject}</div><p>{String(item.body || "").replace(/<[^>]+>/g, "").slice(0, 150)}</p><div className="travel-template-actions"><span className={`travel-template-status-badge ${item.isActive ? "running" : "paused"}`}>{item.isActive ? "Running" : "Paused"}</span><button className={`btn-secondary travel-template-action ${item.isActive ? "pause" : "run"}`} onClick={() => toggleTemplate(item)}>{item.isActive ? <Pause size={14} /> : <Play size={14} />} {item.isActive ? "Pause" : "Run"}</button><button className="btn-secondary travel-template-action edit" onClick={() => setTemplateDraft({ ...item, subBrand: item.subBrand || "all" })}>Edit</button>{!item.isDefault && <button className="btn-secondary travel-template-action danger" aria-label={`Delete ${item.name}`} onClick={() => removeTemplate(item)}><Trash2 size={14} /> Delete</button>}</div></article>))}</div></section> : <DeliveryHistory logs={logs} pagination={logPagination} selectedIds={selectedLogIds} busy={historyBusy} onTogglePage={toggleCurrentPage} onToggleOne={toggleLogSelection} onDelete={deleteSelectedLogs} onOpen={openLogDetail} onPageChange={changeHistoryPage} />}
-    {templateDraft && <TravelTemplateEditor draft={templateDraft} setDraft={setTemplateDraft} catalog={catalog} onSave={saveTemplate} onClose={() => setTemplateDraft(null)} />}
+    {loading ? <p>Loading...</p> : error ? <p>{error}</p> : tab === "templates" ? <section><div className="travel-section-heading"><div><h2>Email templates</h2><p>Each active template sends when its event trigger occurs.</p></div><span>{visibleTemplates.length}{visibleTemplates.length !== templates.length ? ` of ${templates.length}` : ""} templates</span></div><div className="travel-template-filter"><select className="input-field" aria-label="Filter templates by subbrand" value={templateSubBrand} onChange={e => setTemplateSubBrand(e.target.value)}><option value="all">All subbrands</option>{catalog.subBrands.map(item => <option key={item} value={item}>{brandLabel(item)}</option>)}</select><input className="input-field" aria-label="Search Travel email templates" placeholder="Search templates..." value={templateSearch} onChange={e => setTemplateSearch(e.target.value)} /></div><div className="travel-template-grid">{Object.values(grouped).flatMap(items => items.map(item => <article className="card" key={item.id}><div className="travel-card-heading"><div><h3>{item.name}</h3><small>{brandLabel(item.subBrand)}</small></div><button className="btn-secondary" onClick={() => preview(item)} aria-label={`Preview ${item.name}`}><Eye size={14} /></button></div><div className="travel-template-badges"><span className={`travel-template-status-badge ${item.isActive ? "running" : "paused"}`}>{item.isActive ? "Running" : "Paused"}</span></div><div className="travel-template-card-divider" /><div className="travel-template-subject"><small>Subject</small><strong>{item.subject}</strong></div><p>{String(item.body || "").replace(/<[^>]+>/g, "").slice(0, 150)}</p><div className="travel-template-actions"><div className="travel-template-controls"><button className={`btn-secondary travel-template-action travel-template-primary-action ${item.isActive ? "pause" : "run"}`} onClick={() => toggleTemplate(item)}>{item.isActive ? <Pause size={14} /> : <Play size={14} />} {item.isActive ? "Pause" : "Run"}</button><div className="travel-template-secondary-actions"><button className="btn-secondary travel-template-action edit" onClick={() => setTemplateDraft({ ...item, subBrand: item.subBrand || "all" })}><Pencil size={14} /> Edit</button><button className="btn-secondary travel-template-action danger travel-template-delete" title={`Delete ${item.name}`} aria-label={`Delete ${item.name}`} onClick={() => removeTemplate(item)}><Trash2 size={14} /></button></div></div></div></article>))}</div></section> : <DeliveryHistory logs={logs} pagination={logPagination} selectedIds={selectedLogIds} busy={historyBusy} onTogglePage={toggleCurrentPage} onToggleOne={toggleLogSelection} onSelectIds={ids => setSelectedLogIds(ids)} onDelete={deleteSelectedLogs} onOpen={openLogDetail} onPageChange={changeHistoryPage} />}
+    {templateDraft && <TravelTemplateEditor draft={templateDraft} setDraft={updateTemplateDraft} catalog={catalog} onSave={saveTemplate} onClose={() => setTemplateDraft(null)} />}
+    {deleteTemplate && <div className="travel-modal" role="alertdialog" aria-modal="true" aria-label="Delete template"><div className="card travel-modal-card"><h2>Delete email template</h2><p>Delete template "{deleteTemplate.name}"?</p><footer><button type="button" className="btn-secondary" onClick={() => setDeleteTemplate(null)}>Cancel</button><button type="button" className="btn-primary danger" onClick={confirmRemoveTemplate}>Delete template</button></footer></div></div>}
     {previewData && <div className="travel-modal"><div className="card travel-modal-card"><h2>{previewData.subject}</h2><div dangerouslySetInnerHTML={{ __html: previewData.body }} /><button className="btn-secondary" onClick={() => setPreviewData(null)}>Close</button></div></div>}
     {logDetail && <div className="travel-modal" role="dialog" aria-modal="true" aria-label="Sent email details"><div className="card travel-modal-card travel-history-detail"><header><div><small>{logDetail.eventKey}</small><h2>{logDetail.subject}</h2></div><button type="button" className="travel-icon-button" aria-label="Close sent email details" onClick={() => setLogDetail(null)}><X size={18} /></button></header><dl><div><dt>To</dt><dd>{logDetail.recipientEmail}</dd></div><div><dt>Status</dt><dd>{logDetail.status}</dd></div><div><dt>Sent</dt><dd>{new Date(logDetail.sentAt || logDetail.createdAt).toLocaleString()}</dd></div></dl><section><h3>Message</h3>{logDetail.bodyHtml ? <div className="travel-history-message" dangerouslySetInnerHTML={{ __html: logDetail.bodyHtml }} /> : <p className="travel-history-unavailable">The message body was not recorded for this older delivery.</p>}</section><footer><button type="button" className="btn-secondary" onClick={() => setLogDetail(null)}>Close</button></footer></div></div>}
   </main>;

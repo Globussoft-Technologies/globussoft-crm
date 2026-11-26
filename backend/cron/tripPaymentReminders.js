@@ -26,6 +26,7 @@ const cronRegistry = require("../lib/cronRegistry");
 const prisma = require("../lib/prisma");
 const { resolveForSubBrand } = require("../lib/subBrandConfig");
 const { sendEmail } = require("../lib/emailSender");
+const { processTravelEmailEvent } = require("../lib/travelEmailAutomation");
 const watiClient = require("../services/whatsappWebClient");
 
 const DEFAULT_REMINDER_DAYS = 7;
@@ -57,6 +58,7 @@ async function runPaymentRemindersForTenant(tenantId) {
       amount: true,
       paidAmount: true,
       status: true,
+      trip: { select: { tripCode: true, destination: true } },
     },
     take: 500,
   });
@@ -174,13 +176,38 @@ async function runPaymentRemindersForTenant(tenantId) {
           "",
           `Pay now: ${portalLink}`,
         ].join("\n");
-        await sendEmail({
-          tenantId,
-          to: participant.parentEmail,
-          subject,
-          text: reminderText,
-          html: reminderText.replace(/\n/g, "<br>"),
-        });
+        let templateSent = false;
+        if (!isOverdue) {
+          try {
+            const templated = await processTravelEmailEvent("payment.due_reminder", {
+              recipientEmail: participant.parentEmail,
+              recipientName: participant.parentName || participant.fullName || "there",
+              tripId: inst.tripId,
+              trip: {
+                name: inst.trip?.destination || inst.trip?.tripCode || `Trip ${inst.tripId}`,
+                code: inst.trip?.tripCode || String(inst.tripId),
+                destination: inst.trip?.destination || "your trip",
+              },
+              payment: {
+                amount: amountStr,
+                dueDate: dueIso,
+                link: portalLink,
+              },
+            }, tenantId);
+            templateSent = templated.sent === true;
+          } catch (error) {
+            console.error(`[TripPaymentReminders] template email failed for instalment=${inst.id}:`, error.message);
+          }
+        }
+        if (!templateSent) {
+          await sendEmail({
+            tenantId,
+            to: participant.parentEmail,
+            subject,
+            text: reminderText,
+            html: reminderText.replace(/\n/g, "<br>"),
+          });
+        }
       }
 
       if (participant && participant.parentPhone) {

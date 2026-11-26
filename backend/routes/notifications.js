@@ -283,6 +283,7 @@ const DEFAULT_PREFERENCES = {
     approval: true,
     leave: true,
     expense: true,
+    tmc_catalogue: true,
   },
   channels: {
     db: true,

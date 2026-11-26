@@ -67,6 +67,21 @@ function relevantMilestones(startDate) {
   return out;
 }
 
+// Keep journey reminders scoped to staff who can work the RFU queue. A
+// Notification is user-scoped, so a single tenant-wide row is not valid.
+function userCanAccessSubBrand(user, subBrand) {
+  if (user.role === "ADMIN") return true;
+  if (!user.subBrandAccess) return true;
+  try {
+    const access = JSON.parse(user.subBrandAccess);
+    if (!Array.isArray(access)) return true;
+    if (access.length === 0) return false;
+    return access.includes(subBrand);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * @param {number} tenantId
  * @returns {Promise<{ fired: number, skipped: number }>}
@@ -100,6 +115,14 @@ async function runJourneyRemindersForTenant(tenantId) {
     select: { subBrandConfigJson: true },
   });
   const rfuCfg = resolveForSubBrand(tenant, "rfu");
+
+  // Notification rows are user-scoped. Target every staff member who can
+  // access the RFU sub-brand, matching the payment-deadline advisor alerts.
+  const tenantUsers = await prisma.user.findMany({
+    where: { tenantId },
+    select: { id: true, role: true, subBrandAccess: true },
+  });
+  const reminderRecipients = tenantUsers.filter((user) => userCanAccessSubBrand(user, "rfu"));
 
   // Batch-fetch contact phones for the WhatsApp dispatch leg (Q9).
   // Best-effort: a lookup failure only skips the WA leg — the milestone
@@ -144,17 +167,20 @@ async function runJourneyRemindersForTenant(tenantId) {
         continue;
       }
       try {
-        await prisma.notification.create({
-          data: {
-            tenantId,
-            title: titleWithTag,
-            message: `${m.body} (Itinerary ${itin.id} · ${itin.destination}). Advisor link: ${PORTAL_BASE}/travel/itineraries`,
-            type: "info",
-            priority: "normal",
-            entityType: "Itinerary",
-            entityId: itin.id,
-          },
-        });
+        for (const recipient of reminderRecipients) {
+          await prisma.notification.create({
+            data: {
+              tenantId,
+              userId: recipient.id,
+              title: titleWithTag,
+              message: `${m.body} (Itinerary ${itin.id} · ${itin.destination}). Advisor link: ${PORTAL_BASE}/travel/itineraries`,
+              type: "info",
+              priority: "normal",
+              entityType: "Itinerary",
+              entityId: itin.id,
+            },
+          });
+        }
         console.log(
           `[TravelJourneyReminders] tenant ${tenantId} itin ${itin.id} milestone ${m.tag} fired ` +
             `(WhatsApp dispatch via watiClient — subBrand=rfu ` +

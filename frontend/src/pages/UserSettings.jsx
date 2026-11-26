@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { Bell } from 'lucide-react';
+import React, { useState, useEffect, useContext } from 'react';
+import { Bell, Zap, Monitor, Mail } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import ProductTourSettings from '../components/ProductTourSettings';
+import { AuthContext } from '../App';
 
 // Notification categories ⇄ sidebar paths. A category renders only when at
 // least one of its mapped paths is in /api/pages/me, so the preferences
@@ -25,6 +26,7 @@ const categoryOptions = [
   { key: 'approval', label: 'Approvals', paths: ['/approvals'] },
   { key: 'leave', label: 'Leave Requests', paths: ['/wellness/leave', '/leaves'] },
   { key: 'expense', label: 'Expense Reports', paths: ['/expenses'] },
+  { key: 'tmc_catalogue', label: 'TMC Catalogue Requests', paths: ['/travel/diagnostics', '/travel/tmc/catalogue'] },
   // Wellness vertical surfaces
   { key: 'appointment', label: 'Appointments & Bookings', paths: ['/wellness/appointments', '/wellness/my-appointments', '/wellness/my-bookings', '/wellness/book-appointment', '/wellness/calendar', '/booking-pages'] },
   { key: 'prescription', label: 'Prescriptions', paths: ['/wellness/prescriptions', '/wellness/my-prescriptions', '/wellness/prescription-requests', '/wellness/my-prescription-requests'] },
@@ -37,25 +39,47 @@ const categoryOptions = [
 
 export default function UserSettings() {
   const notify = useNotify();
+  const { tenant } = useContext(AuthContext);
+  const isTravel = tenant?.vertical === 'travel';
   const [prefs, setPrefs] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [accessiblePaths, setAccessiblePaths] = useState(null);
 
   const visibleCategories = (() => {
-    if (!Array.isArray(accessiblePaths)) return categoryOptions;
+    const travelOnly = (cat) =>
+      (cat.key !== 'tmc_catalogue' || isTravel) &&
+      !(isTravel && cat.key === 'deal');
+    if (!Array.isArray(accessiblePaths)) return categoryOptions.filter(travelOnly);
     const pathSet = new Set(accessiblePaths);
     return categoryOptions.filter((cat) =>
-      (cat.paths || []).some((p) => pathSet.has(p))
+      travelOnly(cat) && (cat.paths || []).some((p) => pathSet.has(p))
     );
   })();
+  const categoryLabel = (category) =>
+    category.key === 'tmc_catalogue' && isTravel
+      ? 'Diagnostic & Catalogue Requests'
+      : category.label;
 
   const channelOptions = [
-    { key: 'db', label: 'In-App Bell' },
-    { key: 'socket', label: 'Real-Time Updates' },
-    { key: 'push', label: 'Browser Push' },
-    { key: 'email', label: 'Email' },
+    { key: 'db', label: 'In-App Bell', shortLabel: 'Bell', description: 'CRM notification center', icon: Bell },
+    { key: 'socket', label: 'Real-Time Updates', shortLabel: 'Live', description: 'Instant CRM updates', icon: Zap },
+    { key: 'push', label: 'Browser Push', shortLabel: 'Push', description: 'Desktop notifications', icon: Monitor },
+    { key: 'email', label: 'Email', shortLabel: 'Mail', description: 'Email notifications', icon: Mail },
   ];
+
+  const withCategoryChannels = (data) => {
+    const legacyChannels = data?.channels || {};
+    const { byCategory: savedByCategory, ...globalChannels } = legacyChannels;
+    const byCategory = Object.fromEntries(categoryOptions.map((category) => [
+      category.key,
+      {
+        ...Object.fromEntries(channelOptions.map((channel) => [channel.key, globalChannels[channel.key] !== false])),
+        ...(savedByCategory?.[category.key] || {}),
+      },
+    ]));
+    return { ...data, channels: { ...legacyChannels, byCategory } };
+  };
 
   // Timezone list
   const timezones = [
@@ -67,7 +91,7 @@ export default function UserSettings() {
   const load = async () => {
     try {
       const data = await fetchApi('/api/notifications/preferences');
-      setPrefs(data);
+      setPrefs(withCategoryChannels(data));
     } catch (err) {
       console.error('Failed to load preferences:', err);
       notify.error('Failed to load notification preferences');
@@ -110,9 +134,22 @@ export default function UserSettings() {
   const handleChannelToggle = (channel) => {
     setPrefs({
       ...prefs,
+      channels: { ...prefs.channels, [channel]: !prefs.channels[channel] },
+    });
+  };
+
+  const handleCategoryChannelToggle = (category, channel) => {
+    setPrefs({
+      ...prefs,
       channels: {
         ...prefs.channels,
-        [channel]: !prefs.channels[channel],
+        byCategory: {
+          ...prefs.channels.byCategory,
+          [category]: {
+            ...prefs.channels.byCategory[category],
+            [channel]: !prefs.channels.byCategory[category][channel],
+          },
+        },
       },
     });
   };
@@ -165,41 +202,24 @@ export default function UserSettings() {
             <Bell size={20} color="var(--accent-color)" /> Notification Preferences
           </h3>
 
-          {visibleCategories.length > 0 && (
           <div style={{ marginBottom: '2rem' }}>
-            <h4 style={{ fontSize: '0.95rem', fontWeight: '600', marginBottom: '1rem', color: 'var(--text-primary)' }}>Notification Categories</h4>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1rem' }}>Choose which types of notifications you want to receive.</p>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '0.75rem' }}>
-              {visibleCategories.map(cat => (
-                <label key={cat.key} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.5rem', borderRadius: 6, background: 'var(--surface-color)', border: '1px solid var(--border-color)' }}>
-                  <input
-                    type="checkbox"
-                    checked={prefs.categoryToggles[cat.key] !== false}
-                    onChange={() => handleCategoryToggle(cat.key)}
-                    style={{ cursor: 'pointer' }}
-                  />
-                  <span style={{ fontSize: '0.9rem' }}>{cat.label}</span>
-                </label>
-              ))}
+            <h4 style={{ fontSize: '0.95rem', fontWeight: '600', marginBottom: '0.4rem', color: 'var(--text-primary)' }}>Delivery Channels</h4>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginBottom: '0.8rem' }}>Enable or disable how notifications arrive.</p>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 245px), 1fr))', gap: '0.65rem', marginBottom: '1.25rem' }}>
+              {channelOptions.map(channel => {
+                const Icon = channel.icon;
+                const enabled = prefs.channels[channel.key] !== false;
+                return <label key={channel.key} style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', minWidth: 0, padding: '0.7rem 0.8rem', border: '1px solid var(--border-color)', borderRadius: 8, background: 'var(--surface-color)', cursor: 'pointer' }}><Icon size={18} strokeWidth={1.8} color="var(--text-secondary)" aria-hidden="true" /><span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}><span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{channel.label}</span><span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{channel.description}</span></span><span style={{ position: 'relative', width: 34, height: 20, flexShrink: 0 }}><input aria-label={channel.label} type="checkbox" checked={enabled} onChange={() => handleChannelToggle(channel.key)} style={{ opacity: 0, position: 'absolute', inset: 0, margin: 0, cursor: 'pointer', zIndex: 1 }} /><span aria-hidden="true" style={{ display: 'block', width: 34, height: 20, borderRadius: 999, background: enabled ? 'var(--accent-color)' : 'var(--border-color)', transition: 'background 0.15s ease' }}><span style={{ display: 'block', width: 14, height: 14, borderRadius: '50%', background: '#fff', transform: enabled ? 'translate(17px, 3px)' : 'translate(3px, 3px)', transition: 'transform 0.15s ease', boxShadow: '0 1px 2px rgba(0,0,0,0.18)' }} /></span></span></label>;
+              })}
             </div>
-          </div>
-          )}
-
-          <div style={{ marginBottom: '2rem' }}>
-            <h4 style={{ fontSize: '0.95rem', fontWeight: '600', marginBottom: '1rem', color: 'var(--text-primary)' }}>Delivery Channels</h4>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1rem' }}>Select how you want to receive notifications.</p>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '0.75rem' }}>
-              {channelOptions.map(ch => (
-                <label key={ch.key} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', padding: '0.5rem', borderRadius: 6, background: 'var(--surface-color)', border: '1px solid var(--border-color)' }}>
-                  <input
-                    type="checkbox"
-                    checked={prefs.channels[ch.key] !== false}
-                    onChange={() => handleChannelToggle(ch.key)}
-                    style={{ cursor: 'pointer' }}
-                  />
-                  <span style={{ fontSize: '0.9rem' }}>{ch.label}</span>
-                </label>
-              ))}
+            <div style={{ marginTop: '0.5rem' }}>
+              <h4 style={{ fontSize: '0.95rem', fontWeight: 600, margin: '0 0 0.2rem', color: 'var(--text-primary)' }}>Channel Preferences</h4>
+              <p style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', margin: '0 0 0.7rem' }}>Customize notification methods for each type.</p>
+              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 1.8fr) repeat(4, minmax(58px, 1fr))', border: '1px solid var(--border-color)', borderRadius: 8, overflow: 'hidden' }}>
+                <div style={{ padding: '0.55rem 0.7rem', fontSize: '0.68rem', fontWeight: 600, color: 'var(--text-secondary)', background: 'var(--surface-color)' }}>Notification type</div>
+                {channelOptions.map(channel => { const Icon = channel.icon; return <div key={channel.key} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2, padding: '0.35rem 0.15rem', fontSize: '0.64rem', color: 'var(--text-secondary)', background: 'var(--surface-color)' }}><Icon size={14} aria-hidden="true" /><span>{channel.shortLabel}</span></div>; })}
+                {visibleCategories.map(category => { const label = categoryLabel(category); return <React.Fragment key={category.key}><label style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', minWidth: 0, padding: '0.48rem 0.7rem', borderTop: '1px solid var(--border-color)', fontSize: '0.78rem', color: 'var(--text-primary)', cursor: 'pointer' }}><input aria-label={`${label} enabled`} type="checkbox" checked={prefs.categoryToggles[category.key] !== false} onChange={() => handleCategoryToggle(category.key)} /><span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span></label>{channelOptions.map(channel => { const globallyEnabled = prefs.channels[channel.key] !== false; const categoryEnabled = prefs.categoryToggles[category.key] !== false; return <label key={`${category.key}-${channel.key}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', borderTop: '1px solid var(--border-color)', background: globallyEnabled && categoryEnabled ? 'transparent' : 'var(--surface-color)' }}><input aria-label={`${label} ${channel.label}`} type="checkbox" disabled={!globallyEnabled || !categoryEnabled} checked={prefs.channels.byCategory?.[category.key]?.[channel.key] !== false} onChange={() => handleCategoryChannelToggle(category.key, channel.key)} /></label>; })}</React.Fragment>; })}
+              </div>
             </div>
           </div>
 

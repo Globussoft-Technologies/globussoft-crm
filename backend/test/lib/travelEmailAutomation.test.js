@@ -8,7 +8,11 @@ import { describe, expect, test, vi } from "vitest";
 import { createRequire } from "node:module";
 const requireCJS = createRequire(import.meta.url);
 
-vi.mock("../../lib/emailSender", () => ({ sendEmail: vi.fn().mockResolvedValue({ sent: true }) }));
+const mockedSendEmail = vi.hoisted(() => vi.fn().mockResolvedValue({ sent: true }));
+vi.mock("../../lib/emailSender", () => ({
+  sendEmail: mockedSendEmail,
+  default: { sendEmail: mockedSendEmail },
+}));
 
 vi.mock("../../lib/prisma", () => ({
   tenant: { findUnique: vi.fn() },
@@ -34,21 +38,48 @@ beforeEach(() => {
   prisma.travelEmailEnrollment.create = vi.fn();
   prisma.travelEmailEnrollment.findMany = vi.fn().mockResolvedValue([]);
   prisma.travelEmailDeliveryLog.create = vi.fn();
+  mockedSendEmail.mockReset().mockResolvedValue({ sent: true });
 });
 
 describe("Travel email automation", () => {
   test("catalogues exactly the requested default and optional events", () => {
-    expect(automation.ESSENTIAL_EVENTS).toHaveLength(13);
-    expect(automation.OPTIONAL_EVENTS).toHaveLength(17);
-    expect(automation.OPTIONAL_EVENTS.map(([key]) => key)).toContain("trip.completed");
+    expect(automation.ESSENTIAL_EVENTS).toHaveLength(9);
+    expect(automation.OPTIONAL_EVENTS.map(([key]) => key)).toEqual([
+      "registration.started",
+      "trip.completed",
+      "payment.failed",
+    ]);
+    for (const [, , subject, body] of automation.OPTIONAL_EVENTS) {
+      expect(subject).toBeTruthy();
+      expect(body).toContain("{{recipient.name}}");
+    }
+    expect(automation.OPTIONAL_EVENTS.find(([key]) => key === "registration.started")[3]).toContain(">Continue your registration: {{account.setupLink}}</a>");
+    expect(automation.OPTIONAL_EVENTS.find(([key]) => key === "trip.completed")[3]).toContain(">Share your review: {{review.url}}</a>");
     expect(automation.ESSENTIAL_EVENTS.map(([key]) => key)).toContain("account.created");
     expect(automation.ESSENTIAL_EVENTS.map(([key]) => key)).toContain("lead.created.welcome");
-    expect(automation.OPTIONAL_EVENTS.map(([key]) => key)).toContain("payment.reminder");
-    expect(automation.ESSENTIAL_EVENTS.map(([key]) => key)).toContain("booking.confirmed");
+    expect(automation.ESSENTIAL_EVENTS.map(([key]) => key)).toContain("payment.due_reminder");
+    expect(automation.OPTIONAL_EVENTS.map(([key]) => key)).not.toContain("payment.reminder");
+    expect(automation.ESSENTIAL_EVENTS.map(([key]) => key)).not.toEqual(expect.arrayContaining([
+      "site_visit.scheduled", "trip.confirmed", "booking.confirmed", "trip.reminder",
+    ]));
     const paymentReceived = automation.ESSENTIAL_EVENTS.find(([key]) => key === "payment.received");
     expect(paymentReceived[3]).toContain("{{payment.installment}}");
     expect(paymentReceived[3]).toContain("{{payment.method}}");
     expect(paymentReceived[3]).toContain("{{payment.reference}}");
+  });
+
+  test("provisions supported optional messages as inactive defaults", async () => {
+    prisma.travelEmailTemplate.findMany.mockResolvedValueOnce([]);
+    prisma.travelEmailTemplate.updateMany.mockResolvedValue({ count: 0 });
+    prisma.travelEmailTemplate.createMany.mockResolvedValueOnce({ count: 12 });
+
+    await automation.ensureDefaultTemplates(7);
+
+    const rows = prisma.travelEmailTemplate.createMany.mock.calls[0][0].data;
+    const optionalRows = rows.filter((row) => ["registration.started", "trip.completed", "payment.failed"].includes(row.eventKey));
+    expect(optionalRows).toHaveLength(3);
+    expect(optionalRows.every((row) => row.isDefault === true && row.isActive === false)).toBe(true);
+    expect(optionalRows.every((row) => row.subject && row.body)).toBe(true);
   });
 
   test("renders secure link placeholders without exposing password fields", () => {
@@ -105,6 +136,24 @@ describe("Travel email automation", () => {
     expect(prisma.travelEmailTemplate.findMany).not.toHaveBeenCalled();
   });
 
+  test("does not dispatch removed template events", async () => {
+    await expect(automation.processTravelEmailEvent("booking.confirmed", { recipientEmail: "a@example.com" }, 7)).resolves.toEqual({
+      ignored: true,
+      reason: "event_removed",
+    });
+    expect(prisma.tenant.findUnique).not.toHaveBeenCalled();
+  });
+
+  test("does not dispatch unsupported optional events from legacy templates", async () => {
+    prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: "travel" });
+
+    await expect(automation.processTravelEmailEvent("lead.assigned", { recipientEmail: "a@example.com" }, 7)).resolves.toEqual({
+      ignored: true,
+      reason: "unsupported_event",
+    });
+    expect(prisma.travelEmailTemplate.findMany).not.toHaveBeenCalled();
+  });
+
   test("sends the active event template directly without sequence enrollment", async () => {
     prisma.tenant.findUnique.mockResolvedValueOnce({ vertical: "travel" }).mockResolvedValueOnce({ name: "Travel Co", slug: "travel", ownerEmail: "hello@travel.co" });
     prisma.travelEmailTemplate.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([{ id: 10, eventKey: "payment.received", subject: "Payment received", body: "Hello {{recipient.name}}", subBrand: null }]);
@@ -119,6 +168,7 @@ describe("Travel email automation", () => {
       select: { name: true, slug: true, ownerEmail: true },
     });
   });
+
 
   test("sends the first landing-page payment receipt to the payer from payment metadata", async () => {
     prisma.tenant.findUnique

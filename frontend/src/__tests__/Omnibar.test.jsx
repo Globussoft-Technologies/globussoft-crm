@@ -957,6 +957,31 @@ describe('Omnibar (inline top-bar)', () => {
     expect(navigateMock).toHaveBeenCalledWith('/contacts/7');
   });
 
+  it('clicking a Travel contact result row navigates to the travel lead detail page', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') return Promise.resolve({ pages: [] });
+      return Promise.resolve({
+        contacts: [
+          { id: 66, name: 'Mr. Teacher', email: 'teacher@getairmail.com' },
+        ],
+        deals: [],
+        invoices: [],
+      });
+    });
+    await renderOmnibarWithAuth({
+      user: { userId: 1 },
+      token: 'tk',
+      tenant: { vertical: 'travel' },
+      loading: false,
+    });
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    input.focus();
+    fireEvent.change(input, { target: { value: 'teacher' } });
+    const row = await screen.findByRole('option', { name: /Mr\. Teacher/i }, { timeout: 2000 });
+    fireEvent.click(row);
+    expect(navigateMock).toHaveBeenCalledWith('/travel/leads/66');
+  });
+
   it('clears the dropdown when the query drops below 2 characters', async () => {
     fetchApi.mockImplementationOnce((url) => {
       if (url === '/api/pages/me') return Promise.resolve({ pages: [] });

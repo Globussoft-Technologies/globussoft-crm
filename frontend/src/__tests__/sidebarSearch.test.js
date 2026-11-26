@@ -353,6 +353,7 @@ describe('filterSidebarPages', () => {
       '/travel/brochures',
       '/travel/forms',
       '/travel/meeting-forms',
+      '/travel/email-automation',
       '/landing-pages',
       '/inbox',
       '/tasks',

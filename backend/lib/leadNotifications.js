@@ -14,7 +14,10 @@ async function notifyAdminsOfNewLead({ tenantId, contact, io }) {
     const admins = await prisma.user.findMany({
       where: {
         tenantId,
-        role: "ADMIN",
+        OR: [
+          { role: "ADMIN" },
+          { userType: "OWNER" },
+        ],
         deactivatedAt: null,
       },
       select: { id: true },

@@ -204,10 +204,10 @@ const ENTITY_SECTIONS = [
     color: "#3b82f6",
     bg: "rgba(59, 130, 246, 0.12)",
     border: "rgba(59, 130, 246, 0.25)",
-    render: (c) => ({
+    render: (c, vertical) => ({
       primary: c.company ? `${c.name} • ${c.company}` : c.name,
       secondary: c.email,
-      to: `/contacts/${c.id}`,
+      to: vertical === "travel" ? `/travel/leads/${c.id}` : `/contacts/${c.id}`,
     }),
   },
   {
@@ -1072,12 +1072,12 @@ export default function Omnibar() {
           row,
           idx,
           key: resultKey(section.key, row, idx),
-          rendered: section.render(row),
+          rendered: section.render(row, tenant?.vertical),
         });
       });
     });
     return rows;
-  }, [orderedEntitySections, resultSet]);
+  }, [orderedEntitySections, resultSet, tenant?.vertical]);
 
   const handleRowClick = useCallback(
     ({ to, actionTarget } = {}) => {
@@ -1333,7 +1333,7 @@ export default function Omnibar() {
                       const optionKey = resultKey(section.key, row, idx);
                       const optionIndex = flatResults.findIndex((item) => item.key === optionKey);
                       const isActive = optionIndex === activeIndex;
-                      const r = flatResults[optionIndex]?.rendered || section.render(row);
+                      const r = flatResults[optionIndex]?.rendered || section.render(row, tenant?.vertical);
                       const RowIcon = r.icon || Icon;
                       return (
                         <button

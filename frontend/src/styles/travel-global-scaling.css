@@ -310,10 +310,10 @@
 
 body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
   button:not(.calendar-summary-card):not(.diagnostic-cancellation-toggle):not(.diagnostic-required-toggle):not(.cost-master-active-toggle):not(.landing-page-generate-palette-card):not(.meeting-form-picker):not(.trip-overview-kpi-card):not(.tmc-teacher-list-row):not(.travel-lead-lifecycle-button):not(.travel-payment-participant-row):not(.wanderlux-theme-choice-card):not(.diagnostics-section-tab):not(.template-picker-option),
-  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not(.brochure-place-input):not(.landing-pages-search),
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not(.brochure-place-input):not(.landing-pages-search):not(.search-with-leading-icon > input):not(.travel-staff-search > input):not(.staff-team-search > input),
   select,
   textarea:not(.meeting-confirmation-email-body),
-  .input-field:not(.landing-pages-search),
+  .input-field:not(.landing-pages-search):not(.travel-staff-search > input):not(.staff-team-search > input),
   .btn-primary,
   .btn-secondary,
   [class*="actions"] a,
@@ -334,13 +334,6 @@ body[data-vertical="travel"] .travel-app-shell .travel-content-frame .meeting-co
 }
 
 body[data-vertical="travel"] .travel-app-shell .travel-content-frame .meeting-font-search-input {
-  padding-left: 34px !important;
-  text-indent: 24px !important;
-}
-
-/* TripCombobox owns its leading search icon; keep the placeholder clear of it
-   after the travel control-density rule applies its !important inline padding. */
-body[data-vertical="travel"] .travel-app-shell .travel-content-frame .trip-search-input {
   padding-left: 34px !important;
   text-indent: 24px !important;
 }
@@ -424,7 +417,7 @@ body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
   body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
     [class*="actions"],
     [class*="toolbar"]
-  ) :is(button, a, label, .btn-primary, .btn-secondary) {
+  ) :is(button, a, label:not(.invoices-admin-page__reconciliation-file), .btn-primary, .btn-secondary) {
     width: auto !important;
     min-width: 0 !important;
     max-width: max-content;
@@ -435,7 +428,7 @@ body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
   /* Covers legacy filter rows that predate the shared filter class names.
      Their fixed inline widths are capped by the same viewport token. */
   body[data-vertical="travel"] .travel-app-shell .travel-content-frame
-    div[style*="flex-wrap"]:has(> label > :is(input, select)) > label {
+    div[style*="flex-wrap"]:has(> label > :is(input, select)) > label:not(.invoices-admin-page__reconciliation-file) {
     width: auto !important;
     min-width: 0 !important;
     max-width: var(--travel-ui-filter-field) !important;
@@ -443,9 +436,9 @@ body[data-vertical="travel"] .travel-app-shell .travel-content-frame :is(
   }
 
   body[data-vertical="travel"] .travel-app-shell .travel-content-frame
-    div[style*="flex-wrap"]:has(> label > :is(input, select)) > label > :is(input, select),
+    div[style*="flex-wrap"]:has(> label > :is(input, select)) > label > :is(input, select):not([type="file"]),
   body[data-vertical="travel"] .travel-app-shell .travel-content-frame
-    div[style*="flex-wrap"]:has(> :is(input, select)) > :is(input, select) {
+    div[style*="flex-wrap"]:has(> :is(input, select)) > :is(input, select):not([type="file"]) {
     min-width: 0 !important;
     max-width: var(--travel-ui-filter-field) !important;
     flex-shrink: 1 !important;

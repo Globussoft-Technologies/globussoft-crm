@@ -19,6 +19,7 @@ const { sanitizeCustomCss } = require("../lib/webFormCustomCss");
 const { createSelectionToken, selectionUrl } = require("../lib/genericPickupPlotSelection");
 const { genericLeadNotificationCategory, ensureGenericLeadNotificationTemplates } = require("../lib/genericLeadEmailTemplates");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
+const { notifyAdminsOfNewLead } = require("../lib/leadNotifications");
 
 const router = express.Router();
 
@@ -2384,6 +2385,17 @@ router.post("/public/:slug/submit", uploadAnyOrReject, async (req, res) => {
       } catch (eventError) {
         console.error("[web_forms] Travel contact welcome event failed:", eventError.message);
       }
+    }
+
+    // Public web-form submissions create contacts directly instead of going
+    // through POST /api/contacts. Keep Admin/Owner lead notifications
+    // consistent across both creation paths.
+    if (createdNewContact && String(contact.status || "").toLowerCase() === "lead") {
+      await notifyAdminsOfNewLead({
+        tenantId: form.tenantId,
+        contact,
+        io: req.io,
+      });
     }
 
     submitStage = "send_notification";

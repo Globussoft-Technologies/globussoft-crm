@@ -627,8 +627,10 @@ function TeacherReportsAdmin({ reports, loading, search, setSearch, onBack, onRe
       </div>
 
       <div style={teacherReportToolbarStyle}>
-        <Search size={16} aria-hidden style={{ color: "var(--text-secondary)" }} />
-        <input type="search" aria-label="Search teacher reports" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search institution, destination, teacher..." style={teacherReportSearchStyle} />
+        <div className="search-with-leading-icon" style={{ flex: 1, minWidth: 0 }}>
+          <Search size={16} aria-hidden />
+          <input type="search" aria-label="Search teacher reports" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search institution, destination, teacher..." style={teacherReportSearchStyle} />
+        </div>
         <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>{filtered.length} report{filtered.length === 1 ? "" : "s"}</span>
       </div>
 

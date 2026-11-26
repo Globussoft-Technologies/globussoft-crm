@@ -20,6 +20,7 @@ const DEFAULT_PREFERENCES = {
     approval: true,
     leave: true,
     expense: true,
+    tmc_catalogue: true,
   },
   channels: {
     db: true,
@@ -151,7 +152,7 @@ async function sendNotificationEmail(tenantId, to, subject, body) {
  * @param {string} [opts.category]   - Notification category for preference filtering (deal, task, ticket, lead, approval, leave, expense)
  * @param {number} [opts.entityId]   - ID of the entity
  * @param {number} [opts.dedupWindowHours=24] - Hours to look back for dedup
- * @param {string[]} [opts.channels] - Delivery channels: db, socket, push, email (default: ['db','socket'])
+ * @param {string[]} [opts.channels] - Delivery channels: db, socket, push, email (push is added when the user has enabled Browser Push and the caller requests db/socket)
  * @param {Object} [opts.io]         - Socket.io server instance
  * @returns {Promise<Object|null>}   - The created Notification record or null if deduped/blocked by prefs
  */
@@ -171,8 +172,26 @@ async function notify({ userId, tenantId, title, message, type, priority, link, 
     timezone: userPrefs.timezone,
   } : DEFAULT_PREFERENCES;
 
+  const notifCategory = category || type || "info";
+  const categoryChannels = prefs.channels?.byCategory?.[notifCategory] || prefs.channels;
+  const channelEnabled = (channel) => categoryChannels[channel] !== false;
+
+  // Browser Push and Email are user delivery preferences, not separate
+  // requirements every caller must remember to add. Most notification
+  // producers request the canonical in-app channels (db/socket); when the
+  // user has enabled either optional channel, fan that same notification out
+  // through it as well. Keep explicit non-in-app channel lists unchanged.
+  const wantsBrowserPush = channelEnabled("push")
+    && requestedChannels.includes("socket");
+  const wantsEmail = channelEnabled("email")
+    && requestedChannels.includes("socket");
+  const effectiveRequestedChannels = [
+    ...requestedChannels,
+    ...(wantsBrowserPush && !requestedChannels.includes("push") ? ["push"] : []),
+    ...(wantsEmail && !requestedChannels.includes("email") ? ["email"] : []),
+  ];
+
   // Check if category is enabled (map type to category if category not provided)
-  const notifCategory = category || type || 'info';
   if (!ignorePreferences && prefs.categoryToggles[notifCategory] === false) {
     console.log(`[notificationService] Category "${notifCategory}" is disabled for user ${userId}`);
     return null;
@@ -185,14 +204,19 @@ async function notify({ userId, tenantId, title, message, type, priority, link, 
   }
 
   // Determine active channels based on preferences
-  const activeChannels = ignorePreferences ? requestedChannels : requestedChannels.filter(ch => {
-    const allowed = prefs.channels[ch];
+  const activeChannels = ignorePreferences ? effectiveRequestedChannels : effectiveRequestedChannels.filter(ch => {
+    const allowed = categoryChannels[ch];
     if (allowed === false) {
       console.log(`[notificationService] Channel "${ch}" is disabled for user ${userId}`);
       return false;
     }
     return true;
   });
+
+  // A notification with no enabled delivery channel must not be persisted or
+  // delivered. This makes the preference checkboxes authoritative instead of
+  // leaving an unwanted row in the in-app bell.
+  if (activeChannels.length === 0) return null;
 
   // Deduplication check: look for duplicate within window
   if (entityId && entityType) {
@@ -214,21 +238,23 @@ async function notify({ userId, tenantId, title, message, type, priority, link, 
     }
   }
 
-  // 1. Always save to DB
-  const notification = await prisma.notification.create({
-    data: {
-      title,
-      message,
-      type: type || "info",
-      priority: priority || "normal",
-      link: link || null,
-      entityType: entityType || null,
-      entityId: entityId || null,
-      isRead: false,
-      userId,
-      tenantId,
-    },
-  });
+  // 1. Save to DB only when the user selected the in-app bell. Other channels
+  // still receive a transient payload without creating an in-app row.
+  const notificationData = {
+    title,
+    message,
+    type: type || "info",
+    priority: priority || "normal",
+    link: link || null,
+    entityType: entityType || null,
+    entityId: entityId || null,
+    isRead: false,
+    userId,
+    tenantId,
+  };
+  const notification = activeChannels.includes("db")
+    ? await prisma.notification.create({ data: notificationData })
+    : { id: null, createdAt: new Date(), ...notificationData };
 
   console.log(`[notificationService] Created notification for user ${userId}:`, { title, message, entityType, hasIo: !!io });
 
@@ -238,6 +264,7 @@ async function notify({ userId, tenantId, title, message, type, priority, link, 
     io.to(`user:${userId}`).emit("notification_new", {
       id: notification.id,
       userId,
+      notification,
       title: notification.title,
       message: notification.message,
       type: notification.type,
@@ -255,7 +282,19 @@ async function notify({ userId, tenantId, title, message, type, priority, link, 
   if (activeChannels.includes("push")) {
     try {
       const pushService = require("../services/pushService");
-      await pushService.sendToUser(userId, { title, body: message, url: link }, prisma);
+      // A user can have more than one active subscription after Chrome rotates
+      // a PushSubscription. Give deliveries for the same persisted entity a
+      // stable browser-notification tag so the service worker replaces a stale
+      // card instead of showing the same event twice.
+      const pushTag = entityType && entityId
+        ? `crm-${String(entityType).toLowerCase()}-${entityId}`
+        : undefined;
+      await pushService.sendToUser(userId, {
+        title,
+        body: message,
+        url: link,
+        ...(pushTag ? { tag: pushTag } : {}),
+      }, prisma);
     } catch (e) {
       console.warn("[Notification-Push] Push delivery failed:", e.message);
     }

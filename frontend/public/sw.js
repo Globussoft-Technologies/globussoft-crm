@@ -21,6 +21,10 @@ self.addEventListener('push', (event) => {
     icon: data.icon || '/favicon.ico',
     badge: '/favicon.ico',
     data: { url: data.url || '/' },
+    // Re-delivery to a rotated/duplicate browser subscription must update the
+    // existing OS card instead of creating a second card for the same event.
+    ...(data.tag ? { tag: data.tag } : {}),
+    renotify: false,
     requireInteraction: false,
   };
 

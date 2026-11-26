@@ -400,6 +400,74 @@ describe('lib/notificationService — notifyTenant', () => {
 // ---------------------------------------------------------------------------
 
 describe('lib/notificationService — notify: preference gates', () => {
+  test('Browser Push preference adds push to the canonical in-app channels', async () => {
+    prisma.notificationPreference.findUnique.mockResolvedValueOnce({
+      userId: 1, tenantId: 1,
+      categoryToggles: { info: true },
+      channels: { db: true, socket: true, push: true, email: false },
+      quietHoursStart: null, quietHoursEnd: null, timezone: null,
+    });
+
+    await notify({
+      userId: 1,
+      tenantId: 1,
+      title: 'Travel update',
+      message: 'A new travel update is ready.',
+      channels: ['db', 'socket'],
+    });
+
+    expect(pushService.sendToUser).toHaveBeenCalledWith(
+      1,
+      { title: 'Travel update', body: 'A new travel update is ready.', url: undefined },
+      prisma,
+    );
+  });
+
+  test('Email preference adds email to the canonical in-app channels', async () => {
+    prisma.notificationPreference.findUnique.mockResolvedValueOnce({
+      userId: 1, tenantId: 1,
+      categoryToggles: { info: true },
+      channels: { db: true, socket: true, push: false, email: true },
+      quietHoursStart: null, quietHoursEnd: null, timezone: null,
+    });
+    prisma.user.findUnique.mockResolvedValue({ email: 'indhu981827@gmail.com' });
+    global.fetch.mockResolvedValue({ ok: true });
+
+    await notify({
+      userId: 1,
+      tenantId: 1,
+      title: 'Travel update',
+      message: 'A new travel update is ready.',
+      channels: ['db', 'socket'],
+    });
+
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({ where: { id: 1 } });
+    expect(global.fetch).toHaveBeenCalled();
+    const [, options] = global.fetch.mock.calls[0];
+    expect(JSON.parse(options.body).personalizations).toEqual([
+      { to: [{ email: 'indhu981827@gmail.com' }] },
+    ]);
+  });
+
+  test('Browser Push remains opt-in when the preference is disabled', async () => {
+    prisma.notificationPreference.findUnique.mockResolvedValueOnce({
+      userId: 1, tenantId: 1,
+      categoryToggles: { info: true },
+      channels: { db: true, socket: true, push: false, email: false },
+      quietHoursStart: null, quietHoursEnd: null, timezone: null,
+    });
+
+    await notify({
+      userId: 1,
+      tenantId: 1,
+      title: 'In-app only',
+      message: 'This should stay in the CRM.',
+      channels: ['db', 'socket'],
+    });
+
+    expect(pushService.sendToUser).not.toHaveBeenCalled();
+  });
+
   test('category disabled → returns null + no DB write', async () => {
     prisma.notificationPreference.findUnique.mockResolvedValueOnce({
       userId: 1, tenantId: 1,

@@ -1,7 +1,7 @@
 /**
  * Boot-time RBAC backfill (idempotent).
  *
- * Wired into server.js's server.listen callback. On every server start, walks
+ * Runs before server.js starts listening. On every server start, walks
  * the DB and ensures the canonical RBAC shape exists:
  *   - Platform-level OWNER role (tenantId = null), with every OWNER user
  *     assigned to it.
@@ -511,6 +511,30 @@ async function grantPermissionList(stats, roleId, perms) {
   }
 }
 
+// Plan from the already-loaded grants, keeping legacy grants immutable so
+// newly mapped grants cannot cascade into additional permissions.
+function sidebarGrantBatch(stats) {
+  const pending = new Map();
+  return {
+    add(roleId, existing, module, action) {
+      const permission = `${module}.${action}`;
+      if (!existing.has(permission)) {
+        pending.set(`${roleId}:${permission}`, { roleId, module, action });
+      }
+    },
+    async flush() {
+      const data = [...pending.values()];
+      for (let index = 0; index < data.length; index += 500) {
+        const { count } = await prisma.rolePermission.createMany({
+          data: data.slice(index, index + 500),
+          skipDuplicates: true,
+        });
+        stats.permsCreated += count;
+      }
+    },
+  };
+}
+
 /**
  * Split legacy shared Generic grants into their page-specific equivalents.
  * A persistent marker makes this a true one-time compatibility migration:
@@ -529,6 +553,7 @@ async function migrateGenericSidebarPermissions(stats, tenantId) {
   if (marker) return;
 
   const catalog = getCatalogForVertical('generic');
+  const grants = sidebarGrantBatch(stats);
   const roles = await prisma.role.findMany({
     where: { tenantId },
     include: { permissions: true },
@@ -547,24 +572,25 @@ async function migrateGenericSidebarPermissions(stats, tenantId) {
       // Home and personal Notification Settings were intentionally ungated
       // before this split, so every existing role keeps its previous access.
       if (!legacy) {
-        await ensureRolePermission(stats, role.id, target.module, target.action);
+        grants.add(role.id, existing, target.module, target.action);
         continue;
       }
 
       if (existing.has(`${legacy.module}.${legacy.action}`)) {
-        await ensureRolePermission(stats, role.id, target.module, target.action);
+        grants.add(role.id, existing, target.module, target.action);
       }
 
       // Preserve mutation/export scope where the old and new cards expose the
       // same action name, without inventing broader access.
       for (const action of catalog[target.module]) {
         if (existing.has(`${legacy.module}.${action}`)) {
-          await ensureRolePermission(stats, role.id, target.module, action);
+          grants.add(role.id, existing, target.module, action);
         }
       }
     }
   }
 
+  await grants.flush();
   await prisma.tenantSetting.upsert({
     where: {
       tenantId_key: {
@@ -595,6 +621,7 @@ async function migrateTravelSidebarPermissions(stats, tenantId) {
   if (marker) return;
 
   const catalog = getCatalogForVertical('travel');
+  const grants = sidebarGrantBatch(stats);
   const roles = await prisma.role.findMany({
     where: { tenantId },
     include: { permissions: true },
@@ -610,16 +637,17 @@ async function migrateTravelSidebarPermissions(stats, tenantId) {
       if (!target || !legacy || !catalog[targetModule]) continue;
 
       if (existing.has(`${legacy.module}.${legacy.action}`)) {
-        await ensureRolePermission(stats, role.id, target.module, target.action);
+        grants.add(role.id, existing, target.module, target.action);
       }
       for (const action of catalog[target.module]) {
         if (existing.has(`${legacy.module}.${action}`)) {
-          await ensureRolePermission(stats, role.id, target.module, action);
+          grants.add(role.id, existing, target.module, action);
         }
       }
     }
   }
 
+  await grants.flush();
   await prisma.tenantSetting.upsert({
     where: {
       tenantId_key: {
@@ -650,6 +678,7 @@ async function migrateWellnessSidebarPermissions(stats, tenantId) {
   if (marker) return;
 
   const catalog = getCatalogForVertical('wellness');
+  const grants = sidebarGrantBatch(stats);
   const roles = await prisma.role.findMany({
     where: { tenantId },
     include: { permissions: true },
@@ -666,20 +695,21 @@ async function migrateWellnessSidebarPermissions(stats, tenantId) {
 
       // These pages were previously available without a permission grant.
       if (!legacy) {
-        await ensureRolePermission(stats, role.id, target.module, target.action);
+        grants.add(role.id, existing, target.module, target.action);
         continue;
       }
       if (existing.has(`${legacy.module}.${legacy.action}`)) {
-        await ensureRolePermission(stats, role.id, target.module, target.action);
+        grants.add(role.id, existing, target.module, target.action);
       }
       for (const action of catalog[target.module]) {
         if (existing.has(`${legacy.module}.${action}`)) {
-          await ensureRolePermission(stats, role.id, target.module, action);
+          grants.add(role.id, existing, target.module, action);
         }
       }
     }
   }
 
+  await grants.flush();
   await prisma.tenantSetting.upsert({
     where: {
       tenantId_key: {

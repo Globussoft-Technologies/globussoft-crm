@@ -46,6 +46,7 @@ const mockPrisma = {
   rolePermission: {
     findFirst: vi.fn(),
     create: vi.fn(),
+    createMany: vi.fn(),
   },
   userRole: {
     findUnique: vi.fn(),
@@ -102,6 +103,7 @@ beforeEach(() => {
   });
   // rolePermission.create + userRole.create succeed silently
   mockPrisma.rolePermission.create.mockResolvedValue({});
+  mockPrisma.rolePermission.createMany.mockImplementation(async ({ data }) => ({ count: data.length }));
   mockPrisma.userRole.create.mockResolvedValue({});
   // roleWidget might be absent (RoleWidget table optional)  the seeder
   // wraps in try/catch so an error here doesn't crash; return a stub.
@@ -177,9 +179,12 @@ describe('provisionTenantRbac - vertical-aware role provisioning', () => {
 
     await provisionTenantRbac(20, { vertical: 'generic' });
 
-    const grants = mockPrisma.rolePermission.create.mock.calls
-      .filter((call) => call[0].data.roleId === 501)
-      .map((call) => `${call[0].data.module}.${call[0].data.action}`);
+    expect(mockPrisma.rolePermission.createMany).toHaveBeenCalledTimes(1);
+    const [{ data, skipDuplicates }] = mockPrisma.rolePermission.createMany.mock.calls[0];
+    expect(skipDuplicates).toBe(true);
+    const grants = data.filter((row) => row.roleId === 501)
+      .map((row) => `${row.module}.${row.action}`);
+    expect(new Set(grants).size).toBe(grants.length);
     expect(grants).toContain('lead_reports.read');
     expect(grants).toContain('agent_reports.export');
     expect(grants).toContain('adsgpt.read');
@@ -201,9 +206,12 @@ describe('provisionTenantRbac - vertical-aware role provisioning', () => {
 
     await provisionTenantRbac(21, { vertical: 'travel' });
 
-    const grants = mockPrisma.rolePermission.create.mock.calls
-      .filter((call) => call[0].data.roleId === 502)
-      .map((call) => `${call[0].data.module}.${call[0].data.action}`);
+    expect(mockPrisma.rolePermission.createMany).toHaveBeenCalledTimes(1);
+    const [{ data, skipDuplicates }] = mockPrisma.rolePermission.createMany.mock.calls[0];
+    expect(skipDuplicates).toBe(true);
+    const grants = data.filter((row) => row.roleId === 502)
+      .map((row) => `${row.module}.${row.action}`);
+    expect(new Set(grants).size).toBe(grants.length);
     expect(grants).toContain('travel_dashboard.read');
     expect(grants).toContain('travel_reviews.read');
     expect(grants).toContain('email_automation.read');
@@ -228,9 +236,12 @@ describe('provisionTenantRbac - vertical-aware role provisioning', () => {
 
     await provisionTenantRbac(22, { vertical: 'wellness' });
 
-    const grants = mockPrisma.rolePermission.create.mock.calls
-      .filter((call) => call[0].data.roleId === 503)
-      .map((call) => `${call[0].data.module}.${call[0].data.action}`);
+    expect(mockPrisma.rolePermission.createMany).toHaveBeenCalledTimes(1);
+    const [{ data, skipDuplicates }] = mockPrisma.rolePermission.createMany.mock.calls[0];
+    expect(skipDuplicates).toBe(true);
+    const grants = data.filter((row) => row.roleId === 503)
+      .map((row) => `${row.module}.${row.action}`);
+    expect(new Set(grants).size).toBe(grants.length);
     expect(grants).toContain('wellness_home.read');
     expect(grants).toContain('wellness_owner_dashboard.read');
     expect(grants).toContain('wellness_recommendations.read');
@@ -240,6 +251,14 @@ describe('provisionTenantRbac - vertical-aware role provisioning', () => {
     expect(grants).toContain('wellness_adsgpt.read');
     expect(grants).toContain('wellness_callified.read');
     expect(mockPrisma.tenantSetting.upsert).toHaveBeenCalledTimes(1);
+  });
+
+  test('a failed sidebar batch does not mark the migration complete', async () => {
+    mockPrisma.role.findMany.mockResolvedValue([{ id: 504, permissions: [] }]);
+    mockPrisma.rolePermission.createMany.mockRejectedValueOnce(new Error('batch failed'));
+
+    await expect(provisionTenantRbac(23, { vertical: 'generic' })).rejects.toThrow('batch failed');
+    expect(mockPrisma.tenantSetting.upsert).not.toHaveBeenCalled();
   });
 
   test('unknown vertical does NOT create wellness clinical roles', async () => {

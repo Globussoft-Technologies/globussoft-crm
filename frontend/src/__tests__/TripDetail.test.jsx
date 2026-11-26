@@ -1833,3 +1833,19 @@ it('shows saved steps independently and opens the selected tab from either navig
   expect(screen.getByRole('tab', { name: 'Payment plan' })).toHaveAttribute('aria-selected', 'true');
   expect(screen.getByText('4 of 6 complete')).toBeInTheDocument();
 });
+it('restarts the landing highlight and moves it to the teacher row from the floating navigator', async () => {
+  installFetchMock();
+  renderPage();
+  const landing = await screen.findAllByRole('button', {name: /Step 4: Landing page/});
+  fireEvent.click(landing[0]);
+  const firstChip = await screen.findByText('Step 4 · Landing page');
+  expect(screen.getByTestId('landing-page-card')).toContainElement(firstChip);
+  fireEvent.click(landing[1]);
+  expect(await screen.findByText('Step 4 · Landing page')).not.toBe(firstChip);
+  fireEvent.click(screen.getAllByRole('button', {name: /Step 5: Assign teacher/})[1]);
+  expect(screen.queryByText('Step 4 · Landing page')).toBeNull();
+  expect(screen.getByText('Teacher portal access').closest('.ts-highlight-target'))
+    .toContainElement(await screen.findByText('Step 5 · Assign teacher'));
+  fireEvent.click(screen.getAllByRole('button', {name: /Step 6: Parent link/})[0]);
+  expect(screen.queryByText('Step 6 · Parent link')).toBeNull();
+});

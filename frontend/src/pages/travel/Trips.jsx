@@ -63,13 +63,6 @@ function handlePickerOnlyDateKeyDown(event) {
   if (["Enter", " ", "ArrowDown"].includes(event.key)) openNativeDatePicker(event);
 }
 
-const STATUS_COLORS = {
-  confirmed: { bg: "rgba(47,122,77,0.14)", color: "#2F7A4D" },
-  "in-trip": { bg: "rgba(200,154,78,0.18)", color: "#9A6F2E" },
-  completed: { bg: "rgba(38,88,85,0.16)", color: "#265855" },
-  cancelled: { bg: "rgba(168,50,63,0.14)", color: "#A8323F" },
-};
-
 function fmt(d) {
   if (!d) return "—";
   return new Date(d).toLocaleDateString();
@@ -733,10 +726,7 @@ export default function Trips() {
                 </thead>
                 <tbody>
                   {visibleTripRows.map(({ trip: t, isFamilyChild }) => {
-                    const sc = STATUS_COLORS[t.status] || {
-                      bg: "var(--subtle-bg)",
-                      color: "var(--text-secondary)",
-                    };
+                    const tripType = t.tripType || "international";
                     const familyVariantCount = Number(t._count?.familyVariants || 0)
                       || familyChildrenByParent[t.id]?.length
                       || 0;
@@ -788,6 +778,7 @@ export default function Trips() {
                             )}
                             <Link
                               to={`/travel/trips/${t.id}`}
+                              title={t.tripCode}
                               state={{
                                 backTo: tripsListPath,
                                 backLabel: fromReports
@@ -803,14 +794,15 @@ export default function Trips() {
                                 gap: 5,
                                 minWidth: 0,
                                 overflow: "hidden",
-                                textOverflow: "ellipsis",
                                 whiteSpace: "nowrap",
                               }}
                             >
                               {isFamilyChild && (
                                 <GitBranch size={14} aria-hidden style={{ color: "var(--text-secondary)", flexShrink: 0 }} />
                               )}
-                              <SearchHighlight text={t.tripCode} query={search} />
+                              <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+                                <SearchHighlight text={t.tripCode} query={search} />
+                              </span>
                             </Link>
                           </div>
                         </td>
@@ -891,24 +883,13 @@ export default function Trips() {
                           {fmtMoney(t.perStudentAmount)}
                         </td>
                         <td style={{ ...td, whiteSpace: "nowrap" }}>
-                          <span style={{ background: "rgba(79,70,229,0.10)", color: "var(--primary-color, #4f46e5)", padding: "4px 9px", borderRadius: 999, fontSize: 11, fontWeight: 700 }}>
-                            {String(t.tripType || "international").replace("_", " ")}
+                          <span className="tmc-trip-badge" data-type={tripType}>
+                            {String(tripType).replaceAll("_", " ")}
                           </span>
                         </td>
                         <td style={{ ...td, whiteSpace: "nowrap" }}>
-                          <span
-                            style={{
-                              background: sc.bg,
-                              color: sc.color,
-                              padding: "2px 8px",
-                              borderRadius: 4,
-                              fontSize: 11,
-                              fontWeight: 600,
-                              textTransform: "uppercase",
-                              letterSpacing: 0.5,
-                            }}
-                          >
-                            {t.status}
+                          <span className="tmc-trip-badge" data-status={t.status}>
+                            {t.status || "Unknown"}
                           </span>
                         </td>
                         <td

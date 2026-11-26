@@ -6,6 +6,37 @@ is that the sidebar text and icon will reduce based on viewport/* Travel pages w
   max-width: 100%;
 }
 
+.tmc-trip-badge {
+  color-scheme: light;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  text-transform: capitalize;
+  white-space: nowrap;
+  color: light-dark(var(--badge-ink, #475569), var(--badge-light-ink, #cbd5e1));
+  background: color-mix(in srgb, currentColor 12%, var(--surface-color, Canvas));
+}
+[data-theme="dark"] .tmc-trip-badge { color-scheme: dark; }
+.tmc-trip-badge[data-type="international"] { --badge-ink: #513899; --badge-light-ink: #cbbaff; }
+.tmc-trip-badge[data-type="domestic"] { --badge-ink: #23548b; --badge-light-ink: #a8cfff; }
+.tmc-trip-badge[data-type="day_trip"] { --badge-ink: #79416e; --badge-light-ink: #efb8de; }
+.tmc-trip-badge[data-status]::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.tmc-trip-badge[data-status="confirmed"] { --badge-ink: #256445; --badge-light-ink: #8de0b3; }
+.tmc-trip-badge[data-status="in-trip"] { --badge-ink: #79520c; --badge-light-ink: #f5cd86; }
+.tmc-trip-badge[data-status="completed"] { --badge-ink: #235c66; --badge-light-ink: #9cdee6; }
+.tmc-trip-badge[data-status="cancelled"] { --badge-ink: #923748; --badge-light-ink: #ffadbb; }
+
 .curriculum-admin__hint-popover {
   top: calc(100% + 8px) !important;
   bottom: auto !important;

@@ -6,7 +6,7 @@
 //   Rooming — assignment list with capacity guards
 //   Payment plan — upsert plan + materialised per-participant instalments
 
-import { useContext, useEffect, useRef, useState, useCallback, useMemo } from "react";
+import { createContext, useContext, useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { useLocation, useNavigate, useParams, Link } from "react-router-dom";
 import {
   Luggage, ChevronLeft, ChevronUp, ChevronDown, Users, BedDouble, Wallet, Globe,
@@ -110,7 +110,30 @@ function getPaymentPlanDateMinimum(index, instalments) {
   return previousDate > today ? previousDate : today;
 }
 
-import { SetupHeader, SetupNavigator, setupSteps, rememberParentLink, isPublishedTripPage, stepTab, anchors, tripStepPath } from "./TripSetupNavigation";
+import { SetupHeader, SetupNavigator, setupSteps, rememberParentLink, isPublishedTripPage, steps, stepTab, anchors, tripStepPath } from "./TripSetupNavigation";
+
+const HighlightContext = createContext(null);
+
+function StepHighlight({ anchor }) {
+  const selection = useContext(HighlightContext);
+  if (selection?.anchor !== anchor) return null;
+  return <TimedHighlight key={selection.visit} index={anchors.indexOf(anchor)} />;
+}
+
+function TimedHighlight({ index }) {
+  const overlay = useRef(null);
+  const [visible, setVisible] = useState(true);
+  useEffect(() => {
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    overlay.current?.parentElement?.scrollIntoView?.({ block: "center", behavior: reduced ? "instant" : "smooth" });
+    const timer = window.setTimeout(() => setVisible(false), 4400);
+    return () => window.clearTimeout(timer);
+  }, []);
+  if (!visible) return null;
+  return <span ref={overlay} className="ts-highlight" aria-hidden="true">
+    <span className="ts-highlight-chip">Step {index + 1} &middot; {steps[index]}</span>
+  </span>;
+}
 
 export default function TripDetail() {
   const { id } = useParams();
@@ -143,11 +166,7 @@ function SelectedTrip() {
     });
     return () => { active = false; };
   }, [id, notify]);
-  useEffect(() => {
-    if (loading || tab !== "overview" || !section) return;
-    const target = section === "landing" ? "trip-landing" : "trip-access-title";
-    document.getElementById(target)?.scrollIntoView?.({block:"start"});
-  }, [section, tab, loading]);
+
   const hasLoadedRef = useRef(false);
   const backTo = location.state?.backTo || savedListUrl;
   const backLabel = location.state?.backLabel || "Back to trips";
@@ -190,9 +209,8 @@ function SelectedTrip() {
 
   const jump = index => {
     selectTab(stepTab[index], anchors[index]);
-    requestAnimationFrame(() => {
-      const target = index === 3 ? "trip-landing" : index >= 4 ? "trip-access-title" : "trip-header";
-      document.getElementById(target)?.scrollIntoView?.({block:"start"});
+    if (!anchors[index]) requestAnimationFrame(() => {
+      document.getElementById("trip-header")?.scrollIntoView?.({block:"start"});
     });
   };
   if (loading) return <div style={{ padding: 24 }}>Loading&hellip;</div>;
@@ -206,10 +224,10 @@ function SelectedTrip() {
   const flags = setupSteps(trip, page === undefined ? undefined : isPublishedTripPage(page), generated);
   return (
     <div className="travel-trip-detail-page ts-detail" style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
-      <div id="trip-header" className="ts-trip-header">
+      <header id="trip-header" className="ts-trip-header">
+        <Link className="ts-back" to={backTo} style={backLink}><ChevronLeft size={16} /> {backLabel}</Link>
         <div>
-          <Link to={backTo} style={backLink}><ChevronLeft size={16} /> {backLabel}</Link>
-          <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: "8px 0 4px" }}>
+          <h1 style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 6px" }}>
             <Luggage size={28} aria-hidden /> {trip.tripCode}
           </h1>
           <div style={{ color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 6 }}>
@@ -218,13 +236,10 @@ function SelectedTrip() {
         </div>
         <SetupHeader flags={flags} viewed={viewed} jump={jump}/>
         <StatusBadge status={trip.status} />
-      </div>
+      </header>
 
       {/* Tab strip */}
-      <div className="travel-trip-detail-tabs" role="tablist" aria-label="Trip sections" style={{
-        display: "flex", gap: 4, borderBottom: "1px solid var(--border-color)",
-        marginTop: 20, marginBottom: 16, flexWrap: "wrap",
-      }}>
+      <div className="travel-trip-detail-tabs" role="tablist" aria-label="Trip sections">
         {TABS.map((t) => {
           const Icon = t.icon;
           const active = tab === t.key;
@@ -235,13 +250,6 @@ function SelectedTrip() {
               role="tab"
               aria-selected={active}
               onClick={() => selectTab(t.key)}
-              style={{
-                padding: "8px 16px", border: "none", background: "transparent",
-                fontWeight: 600, fontSize: 14, cursor: "pointer",
-                borderBottom: active ? "2px solid var(--primary-color)" : "2px solid transparent",
-                color: active ? "var(--primary-color)" : "var(--text-secondary)",
-                display: "inline-flex", alignItems: "center", gap: 6, marginBottom: -1,
-              }}
             >
               <Icon size={16} aria-hidden /> {t.label}
             </button>
@@ -249,12 +257,12 @@ function SelectedTrip() {
         })}
       </div>
 
-      {tab === "overview" && <OverviewTab page={page} sharingChanged={(ids, link) => {
+      {tab === "overview" && <HighlightContext.Provider value={{anchor: section, visit: location.key}}><OverviewTab page={page} sharingChanged={(ids, link) => {
         const teacherContactIds = ids.map(Number);
         const saved = link ? trip : { ...trip, teacherContactIds, teacherContactId: teacherContactIds[0] ?? null,
           teacherAssignments: teacherContactIds.map(teacherContactId => ({teacherContactId})) };
         rememberParentLink(saved, link); setGenerated(link); setTrip(saved);
-      }} trip={trip} onJump={selectTab} notify={notify} />}
+      }} trip={trip} onJump={selectTab} notify={notify} /></HighlightContext.Provider>}
       {tab === "participants" && <SimpleParticipantsTab trip={trip} onChange={load} notify={notify} />}
       {tab === "documents" && <DocumentsTab trip={trip} onChange={load} notify={notify} />}
       {tab === "rooming" && <RoomingTab trip={trip} notify={notify} readOnly showExports={false} />}
@@ -316,7 +324,7 @@ function OverviewTab({ trip, onJump, notify, page, sharingChanged }) {
   })();
 
   return (
-    <div data-testid="trip-overview" style={{ display: "grid", gap: 20 }}>
+    <div data-testid="trip-overview" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 20 }}>
       {/* Hero band — destination + dates + readiness gauge */}
       <section style={overviewSectionCard} aria-label="Trip at a glance">
         <div style={{
@@ -427,7 +435,7 @@ function OverviewTab({ trip, onJump, notify, page, sharingChanged }) {
 
       <TripFinancialSummary trip={trip} />
 
-      <section style={overviewSectionCard} aria-labelledby="trip-access-title">
+      <section className="ts-sharing" style={overviewSectionCard} aria-labelledby="trip-access-title">
         <OverviewSectionHeader
           eyebrow="SETUP & SHARING"
           title="Access and sharing"
@@ -658,7 +666,7 @@ function TeacherAssignment({ trip, notify, isAdmin, sharingChanged, embedded = f
       borderRadius: 10,
       padding: embedded ? 0 : 14,
     }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+      <div className="ts-highlight-target" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", zIndex: teacherPickerOpen ? 1 : undefined }}>
         <div>
           <div style={{ fontSize: 14, fontWeight: 600 }}>Teacher portal access</div>
           <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
@@ -667,7 +675,7 @@ function TeacherAssignment({ trip, notify, isAdmin, sharingChanged, embedded = f
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           {teachers.length > 0 && (
-            <div ref={teacherPickerRef} style={{ position: "relative", minWidth: 230 }}>
+            <div className="ts-teacher-picker" ref={teacherPickerRef} style={{ position: "relative", width: 230, maxWidth: "100%", minWidth: 0 }}>
               <button
                 type="button"
                 className="btn-secondary"
@@ -676,13 +684,13 @@ function TeacherAssignment({ trip, notify, isAdmin, sharingChanged, embedded = f
                 aria-expanded={teacherPickerOpen}
                 onClick={() => setTeacherPickerOpen((open) => !open)}
                 disabled={loading || saving}
-                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, width: "100%", minWidth: 230, maxWidth: 300, textAlign: "left" }}
+                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, width: "100%", minWidth: 0, overflowWrap: "anywhere", textAlign: "left" }}
               >
                 <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{teacherPickerLabel}</span>
                 <ChevronDown size={15} style={{ flexShrink: 0, transform: teacherPickerOpen ? "rotate(180deg)" : undefined }} />
               </button>
               {teacherPickerOpen && (
-                <div role="group" aria-label="Available TMC teachers" style={{ position: "absolute", zIndex: 30, top: "calc(100% + 6px)", right: 0, minWidth: "100%", maxHeight: 240, overflowY: "auto", padding: 8, border: "1px solid var(--border-color)", borderRadius: 8, background: "var(--surface-color, #fff)", boxShadow: "0 10px 24px rgba(20, 24, 35, 0.16)" }}>
+                <div role="group" aria-label="Available TMC teachers" style={{ position: "absolute", zIndex: 30, top: "calc(100% + 6px)", right: 0, minWidth: "100%", maxHeight: 240, overflowY: "auto", padding: 8, border: "1px solid var(--border-color)", borderRadius: 8, background: "var(--popover-bg, #fff)", boxShadow: "0 10px 24px rgba(20, 24, 35, 0.16)" }}>
                   {teachers.map((teacher) => {
                     const id = String(teacher.id);
                     return (
@@ -703,11 +711,13 @@ function TeacherAssignment({ trip, notify, isAdmin, sharingChanged, embedded = f
           )}
           <button type="button" className="btn-secondary" onClick={save} disabled={loading || saving}>{saving ? "Saving…" : "Save teachers"}</button>
         </div>
+        <StepHighlight anchor="teacher" />
       </div>
       {!loading && teachers.length === 0 && <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)" }}>No TMC teachers have registered yet. Copy the teacher portal link to invite them.</div>}
       {!loading && teachers.length === 0 && teacherIds.length > 0 && <button type="button" className="btn-secondary" onClick={() => setTeacherIds([])}>Clear unavailable assignments</button>}
       {isAdmin && teachers.length > 0 && teacherIds.length > 0 && assignmentSaved && (
-        <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border-color)" }}>
+        <div className="ts-highlight-target" style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border-color)" }}>
+          <StepHighlight anchor="parent" />
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
             <div>
               <div style={{ fontSize: 13, fontWeight: 600 }}>Parent registration</div>
@@ -3822,7 +3832,7 @@ function LandingPageCard({ trip, page, loading }) {
   const landingPagesReturnState = buildLandingPagesReturnState(trip, location.state || {});
   return (
     <div
-      id="trip-landing" data-testid="landing-page-card"
+      id="trip-landing" className="ts-highlight-target" data-testid="landing-page-card"
       style={!loading && !page ? {
         border: "1px solid rgba(205, 117, 37, 0.55)",
         borderRadius: 12,
@@ -3831,6 +3841,7 @@ function LandingPageCard({ trip, page, loading }) {
         boxShadow: "0 8px 24px rgba(205, 117, 37, 0.10)",
       } : undefined}
     >
+      <StepHighlight anchor="landing" />
       <h3 style={{ margin: "0 0 12px", fontSize: 15, display: "flex", alignItems: "center", gap: 8, color: !loading && !page ? "#B86620" : "inherit" }}>
         <Globe size={16} aria-hidden /> Landing page
         {!loading && !page && <span style={{ marginLeft: "auto", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em" }}>Action needed</span>}

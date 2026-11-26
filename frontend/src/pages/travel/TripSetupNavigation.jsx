@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, ChevronLeft, ChevronRight, ChevronsUpDown, Plus, X } from "lucide-react";
 import { fetchApi } from "../../utils/api";
@@ -72,6 +72,25 @@ function FloatingTripNavigator({ trip, flags, viewed, jump, switchTrip, newTrip,
   const [loading, setLoading] = useState(false);
   const trigger = useRef(null);
   const menu = useRef(null);
+  const bar = useRef(null);
+
+  useLayoutEffect(() => {
+    const element = bar.current;
+    const root = document.documentElement;
+    const measure = () => {
+      root.style.setProperty('--tmc-nav-height', Math.ceil(element.getBoundingClientRect().height) + 'px');
+    };
+    measure();
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    observer?.observe(element);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+      root.style.removeProperty('--tmc-nav-height');
+    };
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     let active = true;
@@ -102,7 +121,7 @@ function FloatingTripNavigator({ trip, flags, viewed, jump, switchTrip, newTrip,
     return () => { active=false; clearTimeout(timer); document.removeEventListener('pointerdown',dismiss); document.removeEventListener('keydown',dismiss); };
   }, [open,offset,search,trip.id]);
   const count=flags.filter(Boolean).length, pct=Math.round(count/6*100);
-  return createPortal(<nav className="ts-float ts-ui" aria-label="Trip navigator">
+  return createPortal(<nav ref={bar} className="ts-float ts-ui" aria-label="Trip navigator">
     <div className="ts-switch"><button className="ts-trigger" ref={trigger} type="button" aria-expanded={open} onClick={()=>{setSearch('');setOffset(0);setOpen(!open);}}>
       <b className="ts-initial">{initials(trip)}</b><span><strong>{trip.tripCode}</strong><small>{count} of 6 steps done</small></span><ChevronsUpDown size={16}/></button>
       {open && <div className="ts-menu" ref={menu}>

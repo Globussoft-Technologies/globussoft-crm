@@ -122,6 +122,7 @@ export function getAuthToken() {
 }
 
 export function clearAuthToken() {
+  clearPageListCache();
   _inMemoryToken = null;
   sessionToastKeys.clear();
   try {
@@ -215,7 +216,35 @@ export function setActiveTenantId(id) {
 // bother the user.
 let lastAiSetupNoticeAt = 0;
 
-export const fetchApi = async (url, options = {}) => {
+// The sidebar, route guards and omnibar read the same permission-filtered list.
+// Share the pending request as well as its successful result for this page load.
+let pageListCache = null;
+function clearPageListCache() {
+  pageListCache = null;
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('sidebar:pages-changed', clearPageListCache, true);
+}
+
+export function fetchApi(url, options = {}) {
+  if (url !== '/api/pages/me' || options.silent !== true || Object.keys(options).length !== 1) {
+    return requestApi(url, options);
+  }
+  const token = getAuthToken();
+  if (!token) return requestApi(url, options);
+  const tenant = getActiveTenantId();
+  if (pageListCache?.token === token && pageListCache.tenant === tenant) {
+    return pageListCache.request;
+  }
+  const request = requestApi(url, options).catch(error => {
+    if (pageListCache?.request === request) clearPageListCache();
+    throw error;
+  });
+  pageListCache = { token, tenant, request };
+  return request;
+}
+
+const requestApi = async (url, options) => {
   const token = getAuthToken();
   // FormData carries its own multipart boundary in the Content-Type header,
   // which the browser sets on send. Forcing application/json here would clobber

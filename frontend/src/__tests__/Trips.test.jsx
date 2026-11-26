@@ -329,6 +329,8 @@ describe('<Trips /> — load + render lifecycle', () => {
     });
     expect(await screen.findByText('TMC-AND-2026-MUMBAI-G7')).toBeInTheDocument();
     expect(screen.getByText('TMC-GOA-2026-DPS-G8')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'TMC-GOA-2026-DPS-G8' }))
+      .toHaveAttribute('title', 'TMC-GOA-2026-DPS-G8');
     expect(screen.getByText('TMC-SHIM-2025-BPS-G10')).toBeInTheDocument();
   });
 
@@ -407,7 +409,8 @@ describe('<Trips /> — row rendering: status / link / dates / participants / pr
   it('renders the status text per row (confirmed / in-trip / completed)', async () => {
     renderPage();
     const row1 = (await screen.findByText('TMC-AND-2026-MUMBAI-G7')).closest('tr');
-    expect(within(row1).getByText('confirmed')).toBeInTheDocument();
+    expect(within(row1).getByText('confirmed')).toHaveAttribute('data-status', 'confirmed');
+    expect(within(row1).getByText('international')).toHaveAttribute('data-type', 'international');
     const row2 = screen.getByText('TMC-GOA-2026-DPS-G8').closest('tr');
     expect(within(row2).getByText('in-trip')).toBeInTheDocument();
     const row3 = screen.getByText('TMC-SHIM-2025-BPS-G10').closest('tr');

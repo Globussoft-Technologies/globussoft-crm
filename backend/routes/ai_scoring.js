@@ -80,6 +80,17 @@ router.get("/contact/:contactId", verifyToken, async (req, res) => {
     const { computeScore } = require("../cron/leadScoringEngine");
     const score = computeScore(contact);
 
+    // Generic CRM keeps the contact header and AI Insights on the same
+    // persisted score. Wellness and Travel retain their existing
+    // stored-vs-live comparison behavior.
+    if (req.user?.vertical === "generic" && Number(contact.aiScore) !== Number(score)) {
+      await prisma.contact.update({
+        where: { id: contact.id },
+        data: { aiScore: score, aiScoreLastComputedAt: new Date() },
+      });
+      contact.aiScore = score;
+    }
+
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const recentActivityCount = contact.activities.filter(
       (a) => new Date(a.createdAt) > thirtyDaysAgo

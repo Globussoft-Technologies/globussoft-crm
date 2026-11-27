@@ -104,7 +104,7 @@ router.get("/", async (req, res) => {
 
     if (isSummary) {
       const rows = await prisma.territory.findMany({
-        where: { tenantId },
+        where: { tenantId, ...(isGeneric ? { isActive: true } : {}) },
         orderBy: { id: "asc" },
         select: {
           id: true,
@@ -136,6 +136,38 @@ router.get("/", async (req, res) => {
         _count: { _all: true },
       });
       counts = Object.fromEntries(grouped.map(g => [g.territoryId, g._count._all]));
+
+      const territoryIdsByUser = new Map();
+      territories.forEach((territory) => {
+        safeJson(territory.assignedUserIds, []).forEach((userId) => {
+          const numericUserId = Number(userId);
+          if (!Number.isInteger(numericUserId)) return;
+          const territoryIds = territoryIdsByUser.get(numericUserId) || [];
+          territoryIds.push(territory.id);
+          territoryIdsByUser.set(numericUserId, territoryIds);
+        });
+      });
+      const assignedUserIds = [...territoryIdsByUser.keys()];
+      if (isGeneric && assignedUserIds.length) {
+        const assignedContacts = await prisma.contact.findMany({
+          where: {
+            tenantId,
+            OR: [
+              { territoryId: { in: ids } },
+              { assignedToId: { in: assignedUserIds } },
+            ],
+          },
+          select: { territoryId: true, assignedToId: true },
+        });
+        const resolvedCounts = Object.fromEntries(ids.map((id) => [id, 0]));
+        assignedContacts.forEach((contact) => {
+          const matchingTerritoryIds = new Set();
+          if (ids.includes(contact.territoryId)) matchingTerritoryIds.add(contact.territoryId);
+          (territoryIdsByUser.get(Number(contact.assignedToId)) || []).forEach((id) => matchingTerritoryIds.add(id));
+          matchingTerritoryIds.forEach((id) => { resolvedCounts[id] += 1; });
+        });
+        counts = resolvedCounts;
+      }
     }
 
     res.json(territories.map(t => shape(t, { contactCount: counts[t.id] || 0 }, isGeneric)));
@@ -187,6 +219,34 @@ router.put("/:id", ...adminOnly, async (req, res) => {
     const isGeneric = req.user.vertical === "generic";
     if (isGeneric && req.body?.country !== undefined && !String(req.body.country || "").trim()) return res.status(400).json({ error: "Country is required", code: "TERRITORY_COUNTRY_REQUIRED" });
     const assignedIds = Array.isArray(assignedUserIds) ? assignedUserIds.map(Number).filter(n => Number.isInteger(n) && n > 0) : [];
+    if (isGeneric && assignedUserIds !== undefined) {
+      const currentAssignedIds = new Set(safeJson(existing.assignedUserIds, []).map(Number));
+      const nextAssignedIds = new Set(assignedIds);
+      const removedIds = [...currentAssignedIds].filter((userId) => !nextAssignedIds.has(userId));
+      if (removedIds.length) {
+        const lockedTeams = await prisma.salesTeam.findMany({
+          where: { tenantId, territoryMode: "team", territoryId: id },
+          select: {
+            name: true,
+            members: {
+              where: { userId: { in: removedIds }, tenantId },
+              select: { userId: true, user: { select: { name: true, email: true } } },
+            },
+          },
+        });
+        const blocked = lockedTeams.flatMap((team) => team.members.map((member) => ({
+          teamName: team.name,
+          staffName: member.user?.name || member.user?.email || `Staff #${member.userId}`,
+        })));
+        if (blocked.length) {
+          const details = blocked.map(({ staffName, teamName }) => `${staffName} (${teamName})`).join(", ");
+          return res.status(409).json({
+            error: `Cannot remove staff assigned through a team: ${details}. Remove the team territory assignment first.`,
+            code: "TERRITORY_TEAM_STAFF_LOCKED",
+          });
+        }
+      }
+    }
     const genericData = isGeneric ? await resolveGenericAssignment(req, assignedIds, req.body?.managerId) : {};
     const updated = await prisma.territory.update({
       where: { id },

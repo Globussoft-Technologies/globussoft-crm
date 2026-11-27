@@ -119,19 +119,26 @@ async function getGenericTaskAssignmentRules(req) {
 async function genericAssignmentRuleAllows(req, assigneeId) {
   const rules = (await getGenericTaskAssignmentRules(req)).filter((rule) => rule && rule.assigneeRole);
   if (!rules.length) return true;
-  const target = await prisma.user.findFirst({
-    where: { id: Number(assigneeId), tenantId: req.user.tenantId, userType: "STAFF", deactivatedAt: null },
-    select: { role: true },
-  });
-  if (!target) return false;
-  const role = genericTaskRole(req);
+  const [target, assigner] = await Promise.all([
+    prisma.user.findFirst({
+      where: { id: Number(assigneeId), tenantId: req.user.tenantId, userType: "STAFF", deactivatedAt: null },
+      select: { role: true, userRoles: { take: 1, orderBy: { assignedAt: "desc" }, select: { role: { select: { key: true } } } } },
+    }),
+    prisma.user.findFirst({
+      where: { id: Number(req.user.userId), tenantId: req.user.tenantId },
+      select: { role: true, userRoles: { take: 1, orderBy: { assignedAt: "desc" }, select: { role: { select: { key: true } } } } },
+    }),
+  ]);
+  if (!target || !assigner) return false;
+  const role = String(assigner.userRoles?.[0]?.role?.key || assigner.role || genericTaskRole(req)).toUpperCase();
+  const targetRole = String(target.userRoles?.[0]?.role?.key || target.role || "").toUpperCase();
   return rules.some((rule) => {
     if (rule?.isActive !== true) return false;
     const mappings = Array.isArray(rule.mappings)
       ? rule.mappings
       : [{ assignerRole: rule.assignerRole, assigneeRole: rule.assigneeRole }];
     return mappings.some((mapping) => String(mapping?.assignerRole || "").toUpperCase() === role
-      && String(mapping?.assigneeRole || "").toUpperCase() === String(target.role || "").toUpperCase());
+      && String(mapping?.assigneeRole || "").toUpperCase() === targetRole);
   });
 }
 
@@ -704,11 +711,20 @@ router.post("/", verifyToken, requireTaskWrite, async (req, res) => {
     // clients that still POST `userId`.
     const travelTenant = await isTravelTenant(req);
     const genericTenant = !travelTenant && req.user.vertical === "generic";
-    const { title, dueDate, contactId, targetUserId, notes, priority, type, outcome } = req.body;
+    const { title, dueDate, completedAt, contactId, targetUserId, notes, priority, type, outcome } = req.body;
     let assigneeRaw = (targetUserId !== undefined && targetUserId !== null && targetUserId !== "")
       ? targetUserId
       : (req.strippedFields && req.strippedFields.userId);
     if (!title) return res.status(400).json({ error: "title is required" });
+    if (genericTenant && (
+      !String(title).trim()
+      || assigneeRaw === undefined || assigneeRaw === null || assigneeRaw === ""
+      || !String(type || "").trim()
+      || !String(priority || "").trim()
+      || !dueDate
+    )) {
+      return res.status(400).json({ error: "Task name, type, priority, due date, and assignee are required.", code: "REQUIRED_TASK_FIELDS_MISSING" });
+    }
     // #163: reject invalid status / priority instead of silently coercing.
     const normalizedStatus = normalizeTaskStatusForTenant(req.body.status, travelTenant);
     const inputErr = validateTaskInput({ ...req.body, status: normalizedStatus }, { travelTenant });
@@ -727,6 +743,9 @@ router.post("/", verifyToken, requireTaskWrite, async (req, res) => {
         // the IST parser so the wall-clock the user typed survives storage.
         // Full ISO timestamps stay on the native ctor.
         dueDate: dueDate ? parseTenantDateInput(dueDate) : null,
+        ...(genericTenant
+          ? { completedAt: completedAt ? parseTenantDateInput(completedAt) : null }
+          : {}),
         contactId: contactId ? parseInt(contactId) : null,
         userId: assigneeRaw !== undefined && assigneeRaw !== null && assigneeRaw !== ""
           ? parseInt(assigneeRaw)

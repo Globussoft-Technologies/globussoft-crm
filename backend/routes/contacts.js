@@ -37,6 +37,7 @@ const {
   evaluateAutoCampaignRules,
 } = require("../lib/callifiedAutoCampaignRules");
 const callifiedClient = require("../services/callifiedClient");
+const s3Service = require("../services/s3Service");
 const {
   CALL_STATUS,
   normalizeLeadStatus,
@@ -5074,6 +5075,52 @@ router.get("/:id/attachments", async (req, res) => {
 // #176: JSON-only contract — UI sends {filename, fileUrl}. Multipart isn't wired
 // (no multer in this router) and is not supported here; document the contract
 // rather than crash with a generic 500.
+// Generic CRM attachment preview proxy. Keeping the browser request same-origin
+// avoids cross-origin PDF viewer restrictions while the file remains stored in
+// OCI Object Storage and the attachment row continues to store its OCI URL.
+router.get("/:id/attachments/:attachId/preview", async (req, res) => {
+  try {
+    if (req.user?.vertical !== "generic") {
+      return res.status(404).json({ error: "Attachment not found" });
+    }
+    const contactId = Number.parseInt(req.params.id, 10);
+    const attachmentId = Number.parseInt(req.params.attachId, 10);
+    if (!Number.isFinite(contactId) || !Number.isFinite(attachmentId)) {
+      return res.status(404).json({ error: "Attachment not found" });
+    }
+
+    const contact = await prisma.contact.findFirst({
+      where: { id: contactId, tenantId: req.user.tenantId },
+    });
+    if (!contact || !(await canAccessLead(req, contact))) {
+      return res.status(404).json({ error: "Attachment not found" });
+    }
+
+    const attachment = await prisma.contactAttachment.findFirst({
+      where: { id: attachmentId, contactId, tenantId: req.user.tenantId },
+    });
+    if (!attachment) return res.status(404).json({ error: "Attachment not found" });
+
+    res.setHeader("Content-Type", attachment.mimeType || "application/octet-stream");
+    res.setHeader("Content-Disposition", "inline");
+
+    if (s3Service.isLocalUrl(attachment.fileUrl)) {
+      const localFile = await s3Service.readLocalFile(attachment.fileUrl);
+      if (!localFile) return res.status(404).json({ error: "File not found" });
+      return res.send(localFile);
+    }
+
+    const objectKey = s3Service.extractKeyFromUrl(attachment.fileUrl);
+    if (!objectKey) return res.status(404).json({ error: "File not found" });
+    const object = await s3Service.getObjectStream(objectKey);
+    if (object.contentLength !== undefined) res.setHeader("Content-Length", object.contentLength);
+    return object.stream.pipe(res);
+  } catch (error) {
+    console.error("GET /contacts/:id/attachments/:attachId/preview failed:", error);
+    return res.status(404).json({ error: "File not found" });
+  }
+});
+
 router.post("/:id/attachments", async (req, res) => {
   try {
     const contactId = parseInt(req.params.id);
@@ -5115,7 +5162,10 @@ router.post("/:id/attachments", async (req, res) => {
         field: "fileUrl",
       });
     }
-    if (!/^https?:\/\//i.test(fileUrl.trim())) {
+    const normalizedFileUrl = fileUrl.trim();
+    const isGenericLocalUpload = req.user?.vertical === "generic"
+      && /^\/api\/uploads\//i.test(normalizedFileUrl);
+    if (!/^https?:\/\//i.test(normalizedFileUrl) && !isGenericLocalUpload) {
       return res.status(400).json({
         error: "fileUrl must be an http(s) URL",
         code: "INVALID_FILEURL",
@@ -5138,7 +5188,7 @@ router.post("/:id/attachments", async (req, res) => {
     const attachment = await prisma.contactAttachment.create({
       data: {
         filename: filename.trim().slice(0, 255),
-        fileUrl: fileUrl.trim(),
+        fileUrl: normalizedFileUrl,
         fileSize: sizeNum,
         mimeType:
           mimeType && typeof mimeType === "string"

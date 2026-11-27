@@ -13,9 +13,16 @@ const includeTeam = {
   updatedBy: { select: userSelect },
 };
 const tenantWhere = (req, id) => ({ id, tenantId: req.user.tenantId });
-const validScopes = new Set(["Sales", "Support", "Technical", "Marketing", "HR", "Finance", "Operations"]);
+const parseIdList = (value) => {
+  if (Array.isArray(value)) return value.map(Number).filter(Number.isInteger);
+  try {
+    const parsed = JSON.parse(value || "[]");
+    return Array.isArray(parsed) ? parsed.map(Number).filter(Number.isInteger) : [];
+  } catch (_err) {
+    return [];
+  }
+};
 const readTeamFields = (body, generic = false) => ({
-  scope: validScopes.has(String(body?.scope || "")) ? String(body.scope) : "Sales",
   description: body?.description === undefined ? undefined : String(body.description || "").trim() || null,
   status: body?.status === "Inactive" ? "Inactive" : "Active",
   ...(generic ? {
@@ -25,6 +32,32 @@ const readTeamFields = (body, generic = false) => ({
       : null,
   } : {}),
 });
+const syncGenericTeamTerritory = async (req, previousTerritoryId, nextTerritoryId, previousMemberIds, nextMemberIds) => {
+  if (req.user.vertical !== "generic") return;
+  const previousId = Number(previousTerritoryId) || null;
+  const nextId = Number(nextTerritoryId) || null;
+  const previousMembers = new Set((previousMemberIds || []).map(Number));
+  const nextMembers = new Set((nextMemberIds || []).map(Number));
+  if (previousId) {
+    const previousTerritory = await prisma.territory.findFirst({ where: { id: previousId, tenantId: req.user.tenantId } });
+    if (previousTerritory) {
+      const assignedUserIds = parseIdList(previousTerritory.assignedUserIds).filter((userId) => !previousMembers.has(userId));
+      if (previousId !== nextId) {
+        await prisma.territory.update({ where: { id: previousTerritory.id }, data: { assignedUserIds: JSON.stringify(assignedUserIds) } });
+      }
+    }
+  }
+  if (nextId) {
+    const nextTerritory = await prisma.territory.findFirst({ where: { id: nextId, tenantId: req.user.tenantId } });
+    if (nextTerritory) {
+      const assignedUserIds = new Set(parseIdList(nextTerritory.assignedUserIds));
+      nextMembers.forEach((userId) => assignedUserIds.add(userId));
+      if (previousId === nextId) previousMembers.forEach((userId) => assignedUserIds.delete(userId));
+      nextMembers.forEach((userId) => assignedUserIds.add(userId));
+      await prisma.territory.update({ where: { id: nextTerritory.id }, data: { assignedUserIds: JSON.stringify([...assignedUserIds]) } });
+    }
+  }
+};
 const resolveManagerId = async (req, res) => {
   if (req.body?.managerId === null || req.body?.managerId === "") return null;
   const managerId = Number(req.body?.managerId);
@@ -58,7 +91,9 @@ router.post("/", async (req, res) => {
     const managerId = req.body?.managerId === undefined ? null : await resolveManagerId(req, res);
     if (managerId === undefined) return;
     const users = await prisma.user.findMany({ where: { tenantId: req.user.tenantId, id: { in: memberIds } }, select: { id: true } });
-    const team = await prisma.salesTeam.create({ data: { name, ...readTeamFields(req.body, req.user.vertical === "generic"), managerId, tenantId: req.user.tenantId, createdById: req.user.userId, updatedById: req.user.userId, members: { create: users.map(({ id }) => ({ userId: id, tenantId: req.user.tenantId })) } }, include: includeTeam });
+    const teamFields = readTeamFields(req.body, req.user.vertical === "generic");
+    const team = await prisma.salesTeam.create({ data: { name, ...teamFields, managerId, tenantId: req.user.tenantId, createdById: req.user.userId, updatedById: req.user.userId, members: { create: users.map(({ id }) => ({ userId: id, tenantId: req.user.tenantId })) } }, include: includeTeam });
+    await syncGenericTeamTerritory(req, null, teamFields.territoryId, [], users.map(({ id }) => id));
     res.status(201).json(team);
   } catch (_err) { res.status(500).json({ error: "Failed to create team", code: "TEAM_CREATE_FAILED" }); }
 });
@@ -71,6 +106,8 @@ router.put("/:id", async (req, res) => {
   try {
     const existing = await prisma.salesTeam.findFirst({ where: tenantWhere(req, id) });
     if (!existing) return res.status(404).json({ error: "Team not found", code: "TEAM_NOT_FOUND" });
+    const existingMembers = await prisma.salesTeamMember.findMany({ where: { teamId: id, tenantId: req.user.tenantId }, select: { userId: true } });
+    const previousMemberIds = existingMembers.map(({ userId }) => userId);
     const managerId = req.body?.managerId === undefined ? (existing.managerId ?? null) : await resolveManagerId(req, res);
     if (managerId === undefined) return;
     if (memberIds) {
@@ -78,7 +115,10 @@ router.put("/:id", async (req, res) => {
       await prisma.salesTeamMember.deleteMany({ where: { teamId: id, tenantId: req.user.tenantId } });
       await prisma.salesTeamMember.createMany({ data: users.map(({ id: userId }) => ({ teamId: id, userId, tenantId: req.user.tenantId })) });
     }
-    res.json(await prisma.salesTeam.update({ where: { id }, data: { name, ...readTeamFields(req.body, req.user.vertical === "generic"), managerId, updatedById: req.user.userId }, include: includeTeam }));
+    const teamFields = readTeamFields(req.body, req.user.vertical === "generic");
+    const updated = await prisma.salesTeam.update({ where: { id }, data: { name, ...teamFields, managerId, updatedById: req.user.userId }, include: includeTeam });
+    await syncGenericTeamTerritory(req, existing.territoryId, teamFields.territoryId, previousMemberIds, memberIds || previousMemberIds);
+    res.json(updated);
   } catch (_err) { res.status(500).json({ error: "Failed to update team", code: "TEAM_UPDATE_FAILED" }); }
 });
 

@@ -40,8 +40,6 @@ const NotificationBell = () => {
   const ref = useRef(null);
   const requestGeneration = useRef(0);
   const loadingRef = useRef(false);
-  const nextPageRef = useRef(1);
-  const hasMoreRef = useRef(true);
 
   const getPriorityColor = (priority) => {
     switch (priority) {
@@ -67,13 +65,13 @@ const NotificationBell = () => {
     }
   }, []);
 
-  const fetchNotifications = useCallback(async (page, generation) => {
-    if (loadingRef.current || !hasMoreRef.current) return;
+  const fetchNotifications = useCallback(async (generation) => {
+    if (loadingRef.current) return;
     loadingRef.current = true;
     setLoading(true);
     setLoadError(false);
     try {
-      const data = await fetchApi(`/api/notifications?page=${page}&limit=${PAGE_SIZE}`);
+      const data = await fetchApi(`/api/notifications?page=1&limit=${PAGE_SIZE}`);
       if (generation !== requestGeneration.current) return;
       // Backend returns { notifications, total, page, limit, pages }; tolerate the
       // older array shape too in case any other consumer is still on it. Crashed the
@@ -83,21 +81,13 @@ const NotificationBell = () => {
         : Array.isArray(data?.notifications)
           ? data.notifications
           : [];
-      setNotifications((previous) => {
-        if (page === 1) return sortNewestFirst(list);
-        const seen = new Set(previous.map((item) => item.id));
-        return sortNewestFirst([...previous, ...list.filter((item) => !seen.has(item.id))]);
-      });
-      nextPageRef.current = page + 1;
-      hasMoreRef.current = Number.isFinite(data?.total)
-        ? page * PAGE_SIZE < data.total
-        : list.length === PAGE_SIZE;
+      setNotifications(sortNewestFirst(list).slice(0, PAGE_SIZE));
       // The unread badge represents all pages, not just the loaded rows.
       const unread = Number.isFinite(data?.unreadTotal)
         ? data.unreadTotal
         : null;
       if (unread !== null) setUnreadCount(unread);
-      else if (page === 1) setUnreadCount(list.filter((n) => !n.isRead).length);
+      else setUnreadCount(list.filter((n) => !n.isRead).length);
     } catch (err) {
       if (generation === requestGeneration.current) setLoadError(true);
     } finally {
@@ -165,7 +155,9 @@ const NotificationBell = () => {
       // If the dropdown happens to be open, prepend the new notification so
       // it shows up without a re-fetch.
       if (payload.notification) {
-        setNotifications((prev) => sortNewestFirst([payload.notification, ...prev]));
+        setNotifications((prev) =>
+          sortNewestFirst([payload.notification, ...prev]).slice(0, PAGE_SIZE),
+        );
       }
     });
 
@@ -190,28 +182,13 @@ const NotificationBell = () => {
     if (!open) return undefined;
     const generation = ++requestGeneration.current;
     loadingRef.current = false;
-    nextPageRef.current = 1;
-    hasMoreRef.current = true;
     setNotifications([]);
-    fetchNotifications(1, generation);
+    fetchNotifications(generation);
     return () => {
       requestGeneration.current += 1;
       loadingRef.current = false;
     };
   }, [open, userId, fetchNotifications]);
-
-  const loadNextPage = () => {
-    if (hasMoreRef.current && !loadingRef.current) {
-      fetchNotifications(nextPageRef.current, requestGeneration.current);
-    }
-  };
-
-  const handlePanelScroll = (event) => {
-    const panel = event.currentTarget;
-    if (panel.scrollTop + panel.clientHeight >= panel.scrollHeight - 80) {
-      loadNextPage();
-    }
-  };
 
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -327,7 +304,6 @@ const NotificationBell = () => {
       {open && (
         <div
           className="travel-notification-panel"
-          onScroll={handlePanelScroll}
           aria-label="Notification list"
           style={{
             position: isMobile ? "fixed" : "absolute",
@@ -572,7 +548,12 @@ const NotificationBell = () => {
           )}
           {loadError && (
             <div style={{ padding: 12, textAlign: "center" }}>
-              <button type="button" onClick={loadNextPage}>Could not load notifications. Retry</button>
+              <button
+                type="button"
+                onClick={() => fetchNotifications(requestGeneration.current)}
+              >
+                Could not load notifications. Retry
+              </button>
             </div>
           )}
 
@@ -580,7 +561,7 @@ const NotificationBell = () => {
               NotificationsCenter inbox page (paginated history + filters).
               Hidden when the panel is empty since there's nothing to "view all
               of" yet. */}
-          {notifications.length > 0 && (
+          {tenantVertical === "travel" && notifications.length > 0 && (
             <div
               style={{
                 borderTop: "1px solid var(--border-color)",
@@ -588,7 +569,8 @@ const NotificationBell = () => {
                 textAlign: "center",
               }}
             >
-              {/* <button
+              <button
+                type="button"
                 onClick={() => {
                   navigate("/notifications");
                   setOpen(false);
@@ -596,7 +578,7 @@ const NotificationBell = () => {
                 style={{
                   background: "none",
                   border: "none",
-                  color: "var(--accent-color)",
+                  color: "var(--primary-color, var(--accent-color))",
                   cursor: "pointer",
                   fontSize: 13,
                   fontWeight: 500,
@@ -604,7 +586,7 @@ const NotificationBell = () => {
                 aria-label="View all notifications"
               >
                 View all notifications →
-              </button> */}
+              </button>
             </div>
           )}
         </div>

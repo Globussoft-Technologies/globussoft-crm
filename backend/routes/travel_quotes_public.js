@@ -166,7 +166,7 @@ async function notifyStaffOfQuoteDecision({ tenantId, subBrand, quoteId, action,
     const link = action === 'countered'
       ? `/travel/quotes/${quoteId}/counter-review`
       : `/travel/quotes/builder/${quoteId}`;
-    await notifyMany({ userIds, tenantId, title, message, type, link });
+    await notifyMany({ userIds, tenantId, title, message, type, category: 'travel_quote', link });
   } catch (e) {
     console.warn('[travel-quotes-public] staff decision notification failed (non-fatal):', e.message);
   }

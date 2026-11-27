@@ -1,11 +1,15 @@
+/**
+ * @fileoverview
+ * Tests backend/lib/diagnosticNotifications.js delivery routing, including
+ * the regression where its zero-config fallback emailed every ADMIN/MANAGER
+ * instead of using saved tenant notification addresses. Covers
+ * notifyDiagnosticSubmitted's fallback and explicitly configured recipient
+ * paths, plus sendTestNotification. CJS sibling modules are patched before
+ * requiring the SUT because vi.mock() does not intercept its require calls.
+ */
 // @ts-check
-//
-// backend/lib/diagnosticNotifications.js — fan-out orchestrator for "a
-// diagnostic was just submitted." Self-mocks sibling modules BEFORE
-// requiring the SUT (CJS load semantics bypass vi.mock() — same pattern
-// used throughout backend/test/routes/*.test.js in this repo).
 
-import { describe, test, expect, beforeEach, vi } from "vitest";
+import { describe, test, expect, afterAll, beforeEach, vi } from "vitest";
 import prisma from "../../lib/prisma.js";
 import { createRequire } from "node:module";
 
@@ -21,6 +25,9 @@ notificationService.notifyMany = vi.fn();
 const emailSender = requireCJS("../../lib/emailSender");
 emailSender.sendEmail = vi.fn();
 
+const notificationEmailCc = requireCJS("../../lib/notificationEmailCc");
+notificationEmailCc.getNotificationEmailConfig = vi.fn();
+
 const whatsappWebClient = requireCJS("../../services/whatsappWebClient");
 whatsappWebClient.sendBestEffort = vi.fn();
 whatsappWebClient.isConnected = vi.fn();
@@ -30,8 +37,24 @@ prisma.user = {
   findMany: vi.fn(),
   findFirst: vi.fn(),
 };
+prisma.tenant = {
+  ...(prisma.tenant || {}),
+  findUnique: vi.fn(),
+};
+prisma.travelDiagnostic = {
+  ...(prisma.travelDiagnostic || {}),
+  findFirst: vi.fn(),
+};
 
 const diagnosticNotifications = requireCJS("../../lib/diagnosticNotifications");
+
+const savedFrontendUrl = process.env.FRONTEND_URL;
+process.env.FRONTEND_URL = "http://localhost:5173";
+
+afterAll(() => {
+  if (savedFrontendUrl === undefined) delete process.env.FRONTEND_URL;
+  else process.env.FRONTEND_URL = savedFrontendUrl;
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -39,10 +62,16 @@ beforeEach(() => {
   notificationService.notify.mockResolvedValue({ id: 1 });
   notificationService.notifyMany.mockResolvedValue([]);
   emailSender.sendEmail.mockResolvedValue({ sent: true });
+  notificationEmailCc.getNotificationEmailConfig.mockResolvedValue({
+    ccRecipients: [],
+    receiverEmail: null,
+  });
   whatsappWebClient.sendBestEffort.mockResolvedValue({ sent: true, stub: false });
   whatsappWebClient.isConnected.mockReturnValue(true);
   prisma.user.findMany.mockResolvedValue([]);
   prisma.user.findFirst.mockResolvedValue(null);
+  prisma.tenant.findUnique.mockResolvedValue(null);
+  prisma.travelDiagnostic.findFirst.mockResolvedValue(null);
 });
 
 describe("notifyDiagnosticSubmitted — zero-config fallback", () => {
@@ -56,12 +85,13 @@ describe("notifyDiagnosticSubmitted — zero-config fallback", () => {
 
     expect(prisma.user.findMany).toHaveBeenCalledWith({
       where: { tenantId: 1, role: { in: ["ADMIN", "MANAGER"] } },
-      select: { id: true },
+      select: { id: true, email: true },
     });
     expect(notificationService.notifyMany).toHaveBeenCalledTimes(1);
     const call = notificationService.notifyMany.mock.calls[0][0];
     expect(call.userIds).toEqual([10, 11]);
     expect(call.channels).toEqual(["db", "socket"]);
+    expect(call.link).toBe("/travel/diagnostics/500");
     expect(call.title).toMatch(/New TMC diagnostic submission/i);
     expect(call.message).toMatch(/Hampi School submitted a diagnostic/i);
     // Fallback never touches email/WhatsApp.
@@ -76,6 +106,56 @@ describe("notifyDiagnosticSubmitted — zero-config fallback", () => {
       diagnosticNotifications.notifyDiagnosticSubmitted({ tenantId: 1, subBrand: "tmc", diagnosticId: 500 }),
     ).resolves.toBeUndefined();
     expect(notificationService.notifyMany).not.toHaveBeenCalled();
+  });
+
+  test("sends one email only to saved tenant recipients when email settings are configured", async () => {
+    settingsLib.getNotificationRecipients.mockResolvedValue([]);
+    prisma.user.findMany.mockResolvedValue([
+      { id: 10, email: "manager@example.com" },
+      { id: 11, email: "admin@example.com" },
+      { id: 12, email: "advisor@example.com" },
+    ]);
+    notificationEmailCc.getNotificationEmailConfig.mockResolvedValue({
+      receiverEmail: "receiver@example.com",
+      ccRecipients: ["staff@example.com", "copy@example.com", "RECEIVER@example.com"],
+    });
+
+    await diagnosticNotifications.notifyDiagnosticSubmitted({
+      tenantId: 1,
+      subBrand: "tmc",
+      diagnosticId: 500,
+      contactLabel: "Hampi School",
+    });
+
+    expect(notificationService.notifyMany).toHaveBeenCalledWith(expect.objectContaining({
+      userIds: [10, 11, 12],
+      channels: ["db", "socket"],
+    }));
+    expect(emailSender.sendEmail).toHaveBeenCalledTimes(1);
+    expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 1,
+      to: "receiver@example.com",
+      cc: ["staff@example.com", "copy@example.com"],
+      subject: "New TMC diagnostic submission",
+    }));
+  });
+
+  test("retains the ADMIN/MANAGER email fallback when no tenant email recipients are saved", async () => {
+    settingsLib.getNotificationRecipients.mockResolvedValue([]);
+    prisma.user.findMany.mockResolvedValue([
+      { id: 10, email: "manager@example.com" },
+      { id: 11, email: "admin@example.com" },
+    ]);
+
+    await diagnosticNotifications.notifyDiagnosticSubmitted({
+      tenantId: 1,
+      subBrand: "tmc",
+      diagnosticId: 500,
+    });
+
+    expect(emailSender.sendEmail).toHaveBeenCalledTimes(2);
+    expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: "manager@example.com" }));
+    expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ to: "admin@example.com" }));
   });
 });
 
@@ -110,6 +190,87 @@ describe("notifyDiagnosticSubmitted — configured recipients", () => {
 
     // notifyMany (the fallback path) must NOT fire when recipients ARE configured.
     expect(notificationService.notifyMany).not.toHaveBeenCalled();
+  });
+
+  test("copies configured tenant notification recipients on explicitly configured diagnostic emails", async () => {
+    settingsLib.getNotificationRecipients.mockResolvedValue([{ userId: 1, channels: ["email"] }]);
+    prisma.user.findMany.mockResolvedValue([{ id: 1, email: "priya@example.com", phone: null }]);
+    notificationEmailCc.getNotificationEmailConfig.mockResolvedValue({
+      receiverEmail: "receiver@example.com",
+      ccRecipients: ["copy@example.com"],
+    });
+
+    await diagnosticNotifications.notifyDiagnosticSubmitted({
+      tenantId: 1,
+      subBrand: "tmc",
+      diagnosticId: 500,
+    });
+
+    expect(emailSender.sendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: "priya@example.com",
+      cc: ["copy@example.com", "receiver@example.com"],
+    }));
+  });
+
+  test("uses the diagnostic PDF for email and keeps the in-app detail link", async () => {
+    settingsLib.getNotificationRecipients.mockResolvedValue([{ userId: 1, channels: ["db", "email"] }]);
+    prisma.user.findMany.mockResolvedValue([{ id: 1, email: "priya@example.com", phone: null }]);
+    prisma.travelDiagnostic.findFirst.mockResolvedValue({
+      reportPdfUrl: "/api/uploads/diagnostics/diag-500.pdf",
+      reportSlugToken: "0123456789abcdef",
+    });
+
+    await diagnosticNotifications.notifyDiagnosticSubmitted({
+      tenantId: 1, subBrand: "tmc", diagnosticId: 500,
+    });
+
+    const email = emailSender.sendEmail.mock.calls[0][0];
+    expect(email.html).toContain('href="http://localhost:5173/api/uploads/diagnostics/diag-500.pdf"');
+    expect(email.html).toContain(">Open diagnostic report</a>");
+    expect(email.text).toContain("http://localhost:5173/api/uploads/diagnostics/diag-500.pdf");
+    expect(notificationService.notify).toHaveBeenCalledWith(expect.objectContaining({
+      link: "/travel/diagnostics/500",
+    }));
+  });
+
+  test("uses a just-generated PDF URL when the database has not returned one yet", async () => {
+    settingsLib.getNotificationRecipients.mockResolvedValue([{ userId: 1, channels: ["email"] }]);
+    prisma.user.findMany.mockResolvedValue([{ id: 1, email: "priya@example.com", phone: null }]);
+    prisma.travelDiagnostic.findFirst.mockResolvedValue({ reportPdfUrl: null, reportSlugToken: null });
+
+    await diagnosticNotifications.notifyDiagnosticSubmitted({
+      tenantId: 7,
+      subBrand: "tmc",
+      diagnosticId: 500,
+      reportPdfUrl: "/api/uploads/diagnostics/generated.pdf",
+    });
+
+    expect(emailSender.sendEmail.mock.calls[0][0].html).toContain(
+      'href="http://localhost:5173/api/uploads/diagnostics/generated.pdf"',
+    );
+  });
+
+  test("uses the full public diagnostic report instead of the TMC readiness page", async () => {
+    settingsLib.getNotificationRecipients.mockResolvedValue([{ userId: 1, channels: ["db", "email"] }]);
+    prisma.user.findMany.mockResolvedValue([{ id: 1, email: "priya@example.com", phone: null }]);
+    prisma.travelDiagnostic.findFirst.mockResolvedValue({
+      reportPdfUrl: null,
+      reportSlugToken: "0123456789abcdef",
+    });
+    prisma.tenant.findUnique.mockResolvedValue({ slug: "travel-stall" });
+
+    await diagnosticNotifications.notifyDiagnosticSubmitted({
+      tenantId: 7,
+      subBrand: "tmc",
+      diagnosticId: 500,
+    });
+
+    const expectedPath = "/diagnostic-form/travel-stall/tmc/report/500-0123456789abcdef";
+    expect(notificationService.notify).toHaveBeenCalledWith(expect.objectContaining({
+      link: "/travel/diagnostics/500",
+    }));
+    expect(emailSender.sendEmail.mock.calls[0][0].html).toContain(expectedPath);
+    expect(emailSender.sendEmail.mock.calls[0][0].html).not.toContain("/p/tmc/report/");
   });
 
   test("skips email for a recipient with no email on file, even if selected", async () => {

@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { AlignCenter, AlignLeft, AlignRight, Bold, ChevronDown, ChevronUp, Eye, Italic, Mail, Pause, Pencil, Play, Plus, RefreshCw, Save, Send, SlidersHorizontal, Sparkles, Trash2, Underline, X } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
+import { useActiveSubBrand } from "../../utils/subBrand";
+import { getDomainBranding } from "../../utils/domainBranding";
 import Pagination from "../../components/ui/Pagination";
 import "../../styles/travel-email-automation.css";
 
@@ -188,6 +191,7 @@ function LegacyDeliveryHistory({ logs, pagination, selectedIds, busy, onTogglePa
 }
 
 function DeliveryHistory({ logs, pagination, selectedIds, busy, resendBusyId, onTogglePage, onToggleOne, onSelectIds, onDelete, onOpen, onResend, onPageChange }) {
+  const navigate = useNavigate();
   const notify = useNotify();
   const [bulkActionsOpen, setBulkActionsOpen] = useState(false);
   const [selectingAll, setSelectingAll] = useState(false);
@@ -199,7 +203,7 @@ function DeliveryHistory({ logs, pagination, selectedIds, busy, resendBusyId, on
       notify.success("Email sent successfully.");
       window.location.reload();
     } catch (error) {
-      notify.error(error?.message || "Email could not be sent. Check your email provider settings.");
+      notify.info(error?.message || "Email could not be sent. Check your email provider settings.", { onClick: () => navigate("/settings") });
     }
   };
   const toggleCurrentPage = () => {
@@ -245,6 +249,7 @@ function DeliveryHistory({ logs, pagination, selectedIds, busy, resendBusyId, on
 }
 
 export default function TravelEmailAutomation() {
+  const { activeSubBrand } = useActiveSubBrand();
   const notify = useNotify();
   const [catalog, setCatalog] = useState({ essential: [], optional: [], subBrands: [] });
   const [templates, setTemplates] = useState([]);
@@ -375,7 +380,15 @@ export default function TravelEmailAutomation() {
     }
   };
 
-  const preview = async item => setPreviewData(await fetchApi(`/api/travel/email-automation/templates/${item.id}/preview`));
+  const preview = async item => {
+    const previewBrand = item.subBrand && item.subBrand !== "all" ? item.subBrand : activeSubBrand;
+    const params = new URLSearchParams();
+    if (previewBrand) params.set("subBrand", previewBrand);
+    const domainLogoUrl = getDomainBranding().logoUrl;
+    params.set("defaultLogoUrl", new URL(domainLogoUrl, window.location.origin).toString());
+    const suffix = `?${params.toString()}`;
+    setPreviewData(await fetchApi(`/api/travel/email-automation/templates/${item.id}/preview${suffix}`));
+  };
   const toggleTemplate = async item => {
     try {
       await fetchApi(`/api/travel/email-automation/templates/${item.id}`, { method: "PUT", body: JSON.stringify({ isActive: !item.isActive }) });
@@ -448,7 +461,7 @@ export default function TravelEmailAutomation() {
     {loading ? <p>Loading...</p> : error ? <p>{error}</p> : tab === "templates" ? <section><div className="travel-section-heading"><div><h2>Email templates</h2><p>Each active template sends when its event trigger occurs.</p></div><span>{visibleTemplates.length}{visibleTemplates.length !== templates.length ? ` of ${templates.length}` : ""} templates</span></div><div className="travel-template-filter"><select className="input-field" aria-label="Filter templates by subbrand" value={templateSubBrand} onChange={e => setTemplateSubBrand(e.target.value)}><option value="all">All subbrands</option>{catalog.subBrands.map(item => <option key={item} value={item}>{brandLabel(item)}</option>)}</select><input className="input-field" aria-label="Search Travel email templates" placeholder="Search templates..." value={templateSearch} onChange={e => setTemplateSearch(e.target.value)} /></div><div className="travel-template-grid">{Object.values(grouped).flatMap(items => items.map(item => <article className="card" key={item.id}><div className="travel-card-heading"><div><h3>{item.name}</h3><small>{brandLabel(item.subBrand)}</small></div><button className="btn-secondary" onClick={() => preview(item)} aria-label={`Preview ${item.name}`}><Eye size={14} /></button></div><div className="travel-template-badges"><span className={`travel-template-status-badge ${item.isActive ? "running" : "paused"}`}>{item.isActive ? "Running" : "Paused"}</span></div><div className="travel-template-card-divider" /><div className="travel-template-subject"><small>Subject</small><strong>{item.subject}</strong></div><p>{String(item.body || "").replace(/<[^>]+>/g, "").slice(0, 150)}</p><div className="travel-template-actions"><div className="travel-template-controls"><button className={`btn-secondary travel-template-action travel-template-primary-action ${item.isActive ? "pause" : "run"}`} onClick={() => toggleTemplate(item)}>{item.isActive ? <Pause size={14} /> : <Play size={14} />} {item.isActive ? "Pause" : "Run"}</button><div className="travel-template-secondary-actions"><button className="btn-secondary travel-template-action edit" onClick={() => setTemplateDraft({ ...item, subBrand: item.subBrand || "all" })}><Pencil size={14} /> Edit</button><button className="btn-secondary travel-template-action danger travel-template-delete" title={`Delete ${item.name}`} aria-label={`Delete ${item.name}`} onClick={() => removeTemplate(item)}><Trash2 size={14} /></button></div></div></div></article>))}</div></section> : <DeliveryHistory logs={logs} pagination={logPagination} selectedIds={selectedLogIds} busy={historyBusy} onTogglePage={toggleCurrentPage} onToggleOne={toggleLogSelection} onSelectIds={ids => setSelectedLogIds(ids)} onDelete={deleteSelectedLogs} onOpen={openLogDetail} onPageChange={changeHistoryPage} />}
     {templateDraft && <TravelTemplateEditor draft={templateDraft} setDraft={updateTemplateDraft} catalog={catalog} onSave={saveTemplate} onClose={() => setTemplateDraft(null)} />}
     {deleteTemplate && <div className="travel-modal" role="alertdialog" aria-modal="true" aria-label="Delete template"><div className="card travel-modal-card"><h2>Delete email template</h2><p>Delete template "{deleteTemplate.name}"?</p><footer><button type="button" className="btn-secondary" onClick={() => setDeleteTemplate(null)}>Cancel</button><button type="button" className="btn-primary danger" onClick={confirmRemoveTemplate}>Delete template</button></footer></div></div>}
-    {previewData && <div className="travel-modal"><div className="card travel-modal-card"><h2>{previewData.subject}</h2><div dangerouslySetInnerHTML={{ __html: previewData.body }} /><button className="btn-secondary" onClick={() => setPreviewData(null)}>Close</button></div></div>}
+    {previewData && <div className="travel-modal"><div className="card travel-modal-card travel-email-preview-card"><header className="travel-email-preview-header"><div><small>Preview email</small><h2>{previewData.subject}</h2></div><button type="button" className="travel-icon-button" onClick={() => setPreviewData(null)} aria-label="Close email preview"><X size={18} /></button></header><iframe className="travel-email-preview-frame" title="Rendered Travel email preview" srcDoc={previewData.body} /><footer><button className="btn-secondary" onClick={() => setPreviewData(null)}>Close</button></footer></div></div>}
     {logDetail && <div className="travel-modal" role="dialog" aria-modal="true" aria-label="Sent email details"><div className="card travel-modal-card travel-history-detail"><header><div><small>{logDetail.eventKey}</small><h2>{logDetail.subject}</h2></div><button type="button" className="travel-icon-button" aria-label="Close sent email details" onClick={() => setLogDetail(null)}><X size={18} /></button></header><dl><div><dt>To</dt><dd>{logDetail.recipientEmail}</dd></div><div><dt>Status</dt><dd>{logDetail.status}</dd></div><div><dt>Sent</dt><dd>{new Date(logDetail.sentAt || logDetail.createdAt).toLocaleString()}</dd></div></dl><section><h3>Message</h3>{logDetail.bodyHtml ? <div className="travel-history-message" dangerouslySetInnerHTML={{ __html: logDetail.bodyHtml }} /> : <p className="travel-history-unavailable">The message body was not recorded for this older delivery.</p>}</section><footer><button type="button" className="btn-secondary" onClick={() => setLogDetail(null)}>Close</button></footer></div></div>}
   </main>;
 }

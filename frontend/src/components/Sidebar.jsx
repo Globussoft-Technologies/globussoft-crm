@@ -2432,11 +2432,12 @@ function renderTravelNav({
         <Link to="/travel/pricing-rules" icon={BadgePercent} label="Pricing Rules" requiredPermission={{ module: "pricing", action: "manage" }} />
       </>)}
 
-      {group("Administration", ["/staff", "/settings/roles", ...(canManageTmcTeachers ? ["/travel/tmc/teachers"] : []), "/audit-log", "/travel/reports"], <>
+      {group("Administration", ["/staff", "/settings/roles", ...(canManageTmcTeachers ? ["/travel/tmc/teachers"] : []), "/audit-log", "/notifications", "/travel/reports"], <>
         <Link to="/staff" icon={UsersRound} label="Staff" requiredPermission={{ module: "staff", action: "read" }} />
         <Link to="/settings/roles" icon={ShieldCheck} label="Roles" requiredPermission={{ module: "roles", action: "read" }} />
         {canManageTmcTeachers && <Link to="/travel/tmc/teachers" icon={GraduationCap} label="Teacher OnBoarding" requiredPermission={{ module: "roles", action: "read" }} />}
         <Link to="/audit-log" icon={ScrollText} label="Audit Log" requiredPermission={{ module: "audit", action: "read" }} />
+        <Link to="/notifications" icon={Bell} label="Notifications" />
         <Link to="/travel/reports" icon={BarChart3} label="Reports" requiredPermission={{ module: "reports", action: "read" }} />
       </>)}
 

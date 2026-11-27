@@ -132,7 +132,7 @@ function Toast({ msg, onClose }) {
         right: "1.5rem",
         zIndex: 9999,
         background: isError ? "rgba(239,68,68,0.96)" : "rgba(34,197,94,0.95)",
-        color: "#fff",
+        color: isError ? "#fff" : "#fff",
         padding: "0.75rem 1.25rem",
         borderRadius: "10px",
         boxShadow: "0 8px 24px rgba(0,0,0,0.18)",

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useNavigate } from "react-router-dom";
 import { CalendarClock, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Copy, GripVertical, ImagePlus, KeyRound, Plus, RefreshCw, Save, Search, Settings2, Trash2, X } from "lucide-react";
 import { fetchApi } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -257,6 +258,7 @@ function GoogleFontPicker({ value, onChange }) {
 }
 
 export default function MeetingForms() {
+  const navigate = useNavigate();
   const notify = useNotify();
   const [forms, setForms] = useState([]);
   const [hosts, setHosts] = useState([]);
@@ -567,7 +569,7 @@ export default function MeetingForms() {
       setBookings((rows) => rows.map((row) => row.id === bookingId ? { ...row, emailStatus: "SENT", emailChannel: result.channel || "unified_inbox" } : row));
       notify.success("Branded confirmation email sent");
     } catch (error) {
-      notify.error(error?.body?.error || error.message || "Confirmation email could not be sent");
+      notify.info(error?.body?.error || error.message || "Confirmation email could not be sent", { onClick: () => navigate("/inbox") });
     }
   }
 

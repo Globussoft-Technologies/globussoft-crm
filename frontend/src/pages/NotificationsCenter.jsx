@@ -1,13 +1,13 @@
 /**
  * NotificationsCenter.jsx — full-page notifications inbox (#853).
  *
- * Pairs with the header NotificationBell dropdown (which shows the most
- * recent ~20 unread + read). This page is the persistent history feed:
- * paginated, filterable by read/unread + priority + entityType, with
+ * Pairs with the header NotificationBell dropdown (which shows the 25 most
+ * recent unread + read). This page is the persistent history feed:
+ * paginated, filterable by read/unread + notification type + date range, with
  * per-row mark-as-read / dismiss + a "Mark all read" bulk action.
  *
  * Backend endpoints (already shipped in routes/notifications.js):
- *   GET    /api/notifications?status=unread|read&priority=&entityType=&page=N&limit=50
+ *   GET    /api/notifications?status=unread|read&notificationType=&fromDate=&toDate=&page=N&limit=50
  *          → { notifications, total, page, limit, pages }
  *   PUT    /api/notifications/:id/read
  *   DELETE /api/notifications/:id   (soft-dismiss / resolve)
@@ -19,18 +19,42 @@
  *
  * Route: /notifications (mounted in App.jsx under the protected Layout).
  */
-import { useState, useEffect, useCallback, useContext } from 'react';
+import { useState, useEffect, useCallback, useContext, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, Check, CheckCheck, X, AlertCircle, Info, AlertTriangle, CircleCheck } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { resolveNotificationLink } from '../utils/notificationLinks';
 import { useNotify } from '../utils/notify';
 import { AuthContext } from '../App';
+import CountBadge from '../components/CountBadge';
+import CalendarRangePicker from '../components/CalendarRangePicker';
 
 const FILTERS = [
   { value: 'all', label: 'All' },
   { value: 'unread', label: 'Unread' },
   { value: 'read', label: 'Read' },
+];
+
+const TYPE_FILTERS = [
+  { value: 'all', label: 'All types' },
+  { value: 'diagnostic', label: 'Diagnostics' },
+  { value: 'catalogue', label: 'Catalogue' },
+  { value: 'lead', label: 'Leads' },
+  { value: 'task', label: 'Tasks' },
+  { value: 'ticket', label: 'Tickets' },
+  { value: 'approval', label: 'Approvals' },
+  { value: 'payment', label: 'Payments' },
+  { value: 'quote', label: 'Quotes' },
+  { value: 'travel', label: 'Travel & itineraries' },
+  { value: 'visa', label: 'Visa' },
+  { value: 'web_checkin', label: 'Web check-in' },
+  { value: 'contact', label: 'Contacts' },
+  { value: 'calendar', label: 'Calendar' },
+  { value: 'expense', label: 'Expenses' },
+  { value: 'leave', label: 'Leave' },
+  { value: 'signature', label: 'Signatures' },
+  { value: 'automation', label: 'AI & automation' },
+  { value: 'system', label: 'General / system' },
 ];
 
 const PRIORITY_BADGES = {
@@ -65,6 +89,11 @@ export default function NotificationsCenter() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState('all');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  const [typeMenuOpen, setTypeMenuOpen] = useState(false);
+  const typeMenuRef = useRef(null);
   const [page, setPage] = useState(1);
   const [pages, setPages] = useState(1);
   const [total, setTotal] = useState(0);
@@ -77,6 +106,9 @@ export default function NotificationsCenter() {
       const params = new URLSearchParams({ page: String(page), limit: '50' });
       if (filter === 'unread') params.set('status', 'unread');
       if (filter === 'read') params.set('status', 'read');
+      if (typeFilter !== 'all') params.set('notificationType', typeFilter);
+      if (fromDate) params.set('fromDate', fromDate);
+      if (toDate) params.set('toDate', toDate);
       const data = await fetchApi(`/api/notifications?${params.toString()}`, { signal });
       if (signal?.aborted) return;
       setItems(Array.isArray(data?.notifications) ? data.notifications : []);
@@ -88,7 +120,7 @@ export default function NotificationsCenter() {
     } finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [filter, page]);
+  }, [filter, fromDate, page, toDate, typeFilter]);
 
   useEffect(() => {
     const ctrl = new AbortController();
@@ -106,11 +138,52 @@ export default function NotificationsCenter() {
     return () => { cancelled = true; };
   }, [items]);
 
+  useEffect(() => {
+    if (!typeMenuOpen) return undefined;
+    const closeOnOutsideClick = (event) => {
+      if (!typeMenuRef.current?.contains(event.target)) setTypeMenuOpen(false);
+    };
+    document.addEventListener('mousedown', closeOnOutsideClick);
+    return () => document.removeEventListener('mousedown', closeOnOutsideClick);
+  }, [typeMenuOpen]);
+
+  const selectedType = TYPE_FILTERS.find((option) => option.value === typeFilter) || TYPE_FILTERS[0];
+  const hasActiveFilters = filter !== 'all' || typeFilter !== 'all' || fromDate || toDate;
+  const resetFilters = () => {
+    setFilter('all');
+    setTypeFilter('all');
+    setFromDate('');
+    setToDate('');
+    setPage(1);
+  };
+  const handleTypeKeyDown = (event) => {
+    const currentIndex = TYPE_FILTERS.findIndex((option) => option.value === typeFilter);
+    if (event.key === 'Escape') {
+      setTypeMenuOpen(false);
+      return;
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Home' || event.key === 'End') {
+      event.preventDefault();
+      const nextIndex = event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? TYPE_FILTERS.length - 1
+          : Math.max(0, Math.min(TYPE_FILTERS.length - 1, currentIndex + (event.key === 'ArrowDown' ? 1 : -1)));
+      setTypeFilter(TYPE_FILTERS[nextIndex].value);
+      setPage(1);
+      setTypeMenuOpen(true);
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      setTypeMenuOpen((open) => !open);
+    }
+  };
+
   const markRead = async (id) => {
     try {
       await fetchApi(`/api/notifications/${id}/read`, { method: 'PUT' });
       setItems((arr) => arr.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
-    } catch (e) {
+    } catch {
       notify.error('Could not mark notification as read');
     }
   };
@@ -120,7 +193,7 @@ export default function NotificationsCenter() {
       await fetchApi(`/api/notifications/${id}`, { method: 'DELETE' });
       setItems((arr) => arr.filter((n) => n.id !== id));
       setTotal((t) => Math.max(0, t - 1));
-    } catch (e) {
+    } catch {
       notify.error('Could not dismiss notification');
     }
   };
@@ -130,7 +203,7 @@ export default function NotificationsCenter() {
       await fetchApi('/api/notifications/mark-all-read', { method: 'POST' });
       setItems((arr) => arr.map((n) => ({ ...n, isRead: true })));
       setUnreadCount(0);
-    } catch (e) {
+    } catch {
       notify.error('Could not mark all as read');
     }
   };
@@ -142,15 +215,16 @@ export default function NotificationsCenter() {
   };
 
   return (
-    <div style={{ padding: 0, width: '100%', minWidth: 0, boxSizing: 'border-box' }}>
+    <div
+      className="notifications-center-page"
+      style={{ padding: '2rem', width: '100%', minWidth: 0, boxSizing: 'border-box' }}
+    >
       <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', gap: '1rem', flexWrap: 'wrap' }}>
         <div>
           <h1 style={{ fontSize: '1.75rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
             <Bell size={22} /> Notifications
+            <CountBadge count={total} title={`${total.toLocaleString()} total`} />
           </h1>
-          <p style={{ color: 'var(--text-secondary)', margin: '0.25rem 0 0', fontSize: '0.9rem' }}>
-            {total} total · {unreadCount} unread
-          </p>
         </div>
         {unreadCount > 0 && (
           <button
@@ -164,28 +238,136 @@ export default function NotificationsCenter() {
         )}
       </header>
 
-      {/* Filter tabs */}
-      <div role="tablist" aria-label="Notification filter" style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-        {FILTERS.map((f) => (
+      {/* Read-state and domain filters are independent and server-backed. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+        <div role="tablist" aria-label="Notification status filter" style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+          {FILTERS.map((f) => (
+            <button
+              key={f.value}
+              type="button"
+              role="tab"
+              aria-selected={filter === f.value}
+              onClick={() => { setFilter(f.value); setPage(1); }}
+              style={{
+                padding: '0.5rem 1rem',
+                borderRadius: 8,
+                border: `1px solid ${filter === f.value ? 'var(--accent-color)' : 'var(--border-color)'}`,
+                background: filter === f.value ? 'var(--accent-bg, rgba(59,130,246,0.1))' : 'transparent',
+                color: filter === f.value ? 'var(--accent-color)' : 'var(--text-primary)',
+                cursor: 'pointer',
+                fontWeight: filter === f.value ? 600 : 400,
+              }}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <div ref={typeMenuRef} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)', fontSize: '0.8rem', fontWeight: 600 }}>
+          Type
           <button
-            key={f.value}
             type="button"
-            role="tab"
-            aria-selected={filter === f.value}
-            onClick={() => { setFilter(f.value); setPage(1); }}
+            aria-label="Notification type"
+            role="combobox"
+            aria-expanded={typeMenuOpen}
+            aria-controls="notification-type-options"
+            aria-haspopup="listbox"
+            onClick={() => setTypeMenuOpen((open) => !open)}
+            onKeyDown={handleTypeKeyDown}
             style={{
-              padding: '0.5rem 1rem',
+              minWidth: 180,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '0.75rem',
+              padding: '0.5rem 0.75rem',
               borderRadius: 8,
-              border: `1px solid ${filter === f.value ? 'var(--accent-color)' : 'var(--border-color)'}`,
-              background: filter === f.value ? 'var(--accent-bg, rgba(59,130,246,0.1))' : 'transparent',
-              color: filter === f.value ? 'var(--accent-color)' : 'var(--text-primary)',
+              border: '1px solid var(--border-color)',
+              background: 'var(--input-bg, var(--surface-color))',
+              color: 'var(--text-primary)',
               cursor: 'pointer',
-              fontWeight: filter === f.value ? 600 : 400,
+              font: 'inherit',
+              fontWeight: 500,
             }}
           >
-            {f.label}
+            <span>{selectedType.label}</span><span aria-hidden="true">⌄</span>
           </button>
-        ))}
+          {typeMenuOpen && (
+            <div
+              id="notification-type-options"
+              role="listbox"
+              aria-label="Notification type options"
+              style={{
+                position: 'absolute',
+                zIndex: 20,
+                top: 'calc(100% + 4px)',
+                right: 0,
+                minWidth: 180,
+                maxWidth: 'min(260px, calc(100vw - 2rem))',
+                maxHeight: 'min(300px, calc(100vh - 180px))',
+                overflowY: 'auto',
+                padding: 4,
+                border: '1px solid var(--border-color)',
+                borderRadius: 8,
+                // Use the dedicated opaque popover token; surface-color is
+                // intentionally translucent for glass cards and would let
+                // notification rows show through this menu.
+                background: 'var(--popover-bg, #fff)',
+                boxShadow: '0 8px 24px rgba(0,0,0,0.18)',
+              }}
+            >
+              {TYPE_FILTERS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="option"
+                  aria-selected={typeFilter === option.value}
+                  onClick={() => { setTypeFilter(option.value); setPage(1); setTypeMenuOpen(false); }}
+                  style={{
+                    display: 'block', width: '100%', padding: '0.5rem 0.65rem', border: 0,
+                    borderRadius: 5, background: typeFilter === option.value ? 'var(--accent-color)' : 'transparent',
+                    color: typeFilter === option.value ? '#fff' : 'var(--text-primary)',
+                    textAlign: 'left', cursor: 'pointer', font: 'inherit', fontSize: '0.8rem',
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <CalendarRangePicker
+          value={{ from: fromDate, to: toDate }}
+          onChange={(next) => {
+            setFromDate(next?.from || '');
+            setToDate(next?.to || '');
+            setPage(1);
+          }}
+          label="All time"
+          width={148}
+          height={36}
+          compact
+        />
+        {hasActiveFilters && (
+          <button
+            type="button"
+            onClick={resetFilters}
+            aria-label="Reset notification filters"
+            style={{
+              height: 36,
+              padding: '0 0.75rem',
+              border: '1px solid var(--border-color)',
+              borderRadius: 6,
+              background: 'transparent',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              font: 'inherit',
+              fontSize: 13,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Reset filters
+          </button>
+        )}
       </div>
 
       {/* List */}

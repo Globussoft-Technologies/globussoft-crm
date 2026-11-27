@@ -14,6 +14,7 @@ const { sanitizeText, sanitizeJsonForStringColumn } = require("../lib/sanitizeJs
 const { validateIdentitySubmission } = require("../lib/diagnosticIdentityFields");
 const { getFrontendUrlFromRequest } = require("../lib/requestOrigin");
 const { notifyMany } = require("../lib/notificationService");
+const { renderTravelEmailHtml } = require("../lib/travelEmailAutomation");
 const { writeAudit } = require("../lib/audit");
 const tmcEngine = require("../lib/tmcDiagnosticEngine");
 const tmcLeadQuality = require("../lib/tmcLeadQuality");
@@ -70,6 +71,16 @@ const TMC_CONSENT_TEMPLATE_ASSETS = Object.freeze({
   international: { filename: "international-terms.pdf", sourceFile: "international-terms.pdf" },
 });
 const TMC_CONSENT_TEMPLATE_ASSET_DIR = path.resolve(__dirname, "../assets/tmc-consent-templates");
+
+function escapeEmailHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, character => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#39;",
+  }[character]));
+}
 
 function verifyPortalToken(req, res, next) {
   const header = req.headers.authorization || "";
@@ -2074,17 +2085,51 @@ router.post(
         if (adminUserIds.length > 0) {
           const teacherName = req.tmcContact.name || req.tmcContact.email || "A TMC teacher";
           const catalogueLabel = selectedCatalogues.length === 1 ? "catalogue" : "catalogues";
+          const catalogueNames = selectedCatalogues
+            .map((file) => file.fileName || file.name || "Unnamed catalogue")
+            .join(", ");
+          const catalogueLink = `/travel/diagnostics?tab=catalogues&teacherId=${encodeURIComponent(String(req.tmcContact.id))}`;
+          const catalogueUrl = `${String(process.env.FRONTEND_URL || "https://crm.globusdemos.com").replace(/\/$/, "")}${catalogueLink}`;
+          const catalogueList = selectedCatalogues
+            .map((file) => `<li>${escapeEmailHtml(file.fileName || file.name || "Unnamed catalogue")}</li>`)
+            .join("");
+          const emailBody = [
+            `<h1 style="margin:0 0 12px;font-size:24px;line-height:1.3;color:#172b3a;">TMC catalogue selection received</h1>`,
+            `<p style="margin:0 0 22px;">${escapeEmailHtml(teacherName)} submitted ${selectedCatalogues.length} ${catalogueLabel} for review. Here are the submission details:</p>`,
+            `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;font-size:14px;">`,
+            `<tr><th align="left" style="padding:10px;border-bottom:1px solid #e5e9ec;">Teacher</th><td style="padding:10px;border-bottom:1px solid #e5e9ec;">${escapeEmailHtml(teacherName)}</td></tr>`,
+            `<tr><th align="left" style="padding:10px;border-bottom:1px solid #e5e9ec;">Email</th><td style="padding:10px;border-bottom:1px solid #e5e9ec;">${escapeEmailHtml(req.tmcContact.email || "Not provided")}</td></tr>`,
+            `<tr><th align="left" style="padding:10px;border-bottom:1px solid #e5e9ec;">Teacher contact ID</th><td style="padding:10px;border-bottom:1px solid #e5e9ec;">${escapeEmailHtml(req.tmcContact.id)}</td></tr>`,
+            `<tr><th align="left" style="padding:10px;border-bottom:1px solid #e5e9ec;">Catalogues (${selectedCatalogues.length})</th><td style="padding:10px;border-bottom:1px solid #e5e9ec;"><ul style="margin:0;padding-left:20px;">${catalogueList}</ul></td></tr>`,
+            `<tr><th align="left" style="padding:10px;">Submitted (UTC)</th><td style="padding:10px;">${escapeEmailHtml(submittedAt.toISOString())}</td></tr>`,
+            `</table>`,
+            `<p style="margin:24px 0 0;text-align:center;"><a href="${escapeEmailHtml(catalogueUrl)}" style="display:inline-block;padding:12px 20px;border-radius:6px;background:#0f766e;color:#ffffff;text-decoration:none;font-weight:700;">Open TMC Catalogue Responses</a></p>`,
+          ].join("");
+          const emailHtml = await renderTravelEmailHtml({
+            tenantId,
+            subBrand: "tmc",
+            body: emailBody,
+            tenantName: "TMC Travel Team",
+          });
           await notifyMany({
             userIds: adminUserIds,
             tenantId,
             title: "TMC catalogue selection received",
-            message: `${teacherName} submitted a selection of ${selectedCatalogues.length} ${catalogueLabel} for review.`,
+            message: [
+              `${teacherName} submitted a selection of ${selectedCatalogues.length} ${catalogueLabel} for review.`,
+              `Email: ${req.tmcContact.email || "Not provided"}`,
+              `Teacher contact ID: ${req.tmcContact.id}`,
+              `Selected catalogues: ${catalogueNames}`,
+              `Submitted: ${submittedAt.toISOString()}`,
+              `Open submission: ${catalogueUrl}`,
+            ].join("\n"),
             type: "info",
+            category: "tmc_catalogue",
             priority: "high",
-            link: `/travel/diagnostics?tab=catalogues&teacherId=${encodeURIComponent(String(req.tmcContact.id))}`,
+            link: catalogueLink,
             channels: ["db", "socket"],
+            emailHtml,
             io: req.io || null,
-            ignorePreferences: true,
           });
         }
       } catch (notifyErr) {
@@ -2612,11 +2657,16 @@ router.get(
       });
       const history = await Promise.all(diagnostics.map(async (diagnostic) => {
         const chosenInterests = chosenByDiagnostic.get(diagnostic.id) || null;
+        const reportPdfUrl = await ensureTeacherReportPdfUrl(diagnostic);
+        const reportSlug = reportPdfUrl
+          ? reportPdfUrl.match(/readiness-report\/(\d+-[0-9a-f]{16})\.pdf$/i)?.[1] || null
+          : null;
         return {
           id: diagnostic.id,
           engineState: diagnostic.engineState,
           createdAt: diagnostic.createdAt,
-          reportPdfUrl: await ensureTeacherReportPdfUrl(diagnostic),
+          reportPdfUrl,
+          reportSlug,
           reportReady: Boolean(chosenInterests),
           hasCurriculumRecommendations: Boolean(diagnostic.curriculumFitJson),
         };
@@ -3728,6 +3778,7 @@ router.post(
             title: "Signed visa letter uploaded",
             message: `${req.tmcContact.name || "A parent"} uploaded ${document.documentType} for application #${document.visaApplicationId}.`,
             type: "info",
+            category: "travel_visa",
             link: `/travel/visa/applications/${document.visaApplicationId}`,
             io: req.io || null,
           });

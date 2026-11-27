@@ -17,6 +17,7 @@ const FEATURE_PROFILES = {
   // Home is a read-only, role-aware dashboard; it has no create/edit form.
   home: ["analytics", "widget", "widgets", "personalize"],
   inbox: ["queue", "conversation", "conversations", "reply to or assign"],
+  notifications: ["queue", "notification", "notifications", "review and mark notifications as read"],
   "converted-leads": ["queue", "converted lead", "converted leads", "open the resulting customer"],
   clients: ["workspace", "company", "companies", "update company ownership and relationships"],
   tasks: ["workspace", "task", "tasks", "complete, reschedule, or reassign"],

@@ -2,7 +2,7 @@
  * Profile.jsx — self-service phone number.
  *
  * A CUSTOMER account had no way to supply a contact number, so a self-booked
- * appointment reached the clinic with nothing to call. The Edit Profile form
+ * appointment reached the clinic with nothing to call. The Profile Details form
  * now carries a Phone field that saves through the same PUT /api/auth/me the
  * name/email fields use.
  *
@@ -93,6 +93,10 @@ async function waitForForm() {
   return screen.getByTestId('profile-phone-input');
 }
 
+function enterEditMode() {
+  fireEvent.click(screen.getByRole('button', { name: /edit profile details/i }));
+}
+
 describe('<Profile /> — self-service phone number', () => {
   beforeEach(() => {
     setupApi();
@@ -116,6 +120,7 @@ describe('<Profile /> — self-service phone number', () => {
     setupApi({ updated: { ...BASELINE_PROFILE, phone: '+919876543210' } });
     renderProfile();
     const input = await waitForForm();
+    enterEditMode();
 
     fireEvent.change(input, { target: { value: '9876543210' } });
     fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
@@ -131,6 +136,7 @@ describe('<Profile /> — self-service phone number', () => {
     });
     renderProfile();
     const input = await waitForForm();
+    enterEditMode();
 
     fireEvent.change(input, { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
@@ -146,6 +152,7 @@ describe('<Profile /> — self-service phone number', () => {
     });
     renderProfile();
     await waitForForm();
+    enterEditMode();
 
     fireEvent.change(screen.getByDisplayValue('Mohit Das'), { target: { value: 'Mohit D.' } });
     fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
@@ -161,9 +168,8 @@ describe('<Profile /> — self-service phone number', () => {
     renderProfile();
     await waitForForm();
 
-    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
-
-    await waitFor(() => expect(screen.getByText(/No changes to save/i)).toBeInTheDocument());
+    enterEditMode();
+    expect(screen.getByRole('button', { name: /Save Changes/i })).toBeDisabled();
     expect(getPutCalls()).toHaveLength(0);
   });
 
@@ -171,6 +177,7 @@ describe('<Profile /> — self-service phone number', () => {
     setupApi({ updated: { ...BASELINE_PROFILE, phone: '+919876543210' } });
     renderProfile();
     const input = await waitForForm();
+    enterEditMode();
 
     fireEvent.change(input, { target: { value: '9876543210' } });
     fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
@@ -179,9 +186,9 @@ describe('<Profile /> — self-service phone number', () => {
       expect(screen.getByTestId('profile-phone-input')).toHaveValue('+919876543210'),
     );
 
-    // Saving again is now correctly a no-op — the field matches the baseline.
-    fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
-    await waitFor(() => expect(screen.getByText(/No changes to save/i)).toBeInTheDocument());
+    // Editing again leaves Save disabled because the canonical value is the baseline.
+    enterEditMode();
+    expect(screen.getByRole('button', { name: /Save Changes/i })).toBeDisabled();
     expect(getPutCalls()).toHaveLength(1);
   });
 });

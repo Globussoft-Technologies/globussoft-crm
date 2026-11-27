@@ -40,6 +40,7 @@
 
 import { useEffect, useRef, useState, useContext } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { Receipt, Plus, Pencil, Trash2, FileDown, Ban, CreditCard, HandCoins, Link2, History, Upload, ArrowUpDown, ChevronUp, ChevronDown, Search } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -337,6 +338,7 @@ function formatDate(iso) {
 }
 
 export default function InvoicesAdmin() {
+  const navigate = useNavigate();
   const notify = useNotify();
   const { user } = useContext(AuthContext) || {};
   const { activeSubBrand } = useActiveSubBrand();
@@ -1059,7 +1061,7 @@ export default function InvoicesAdmin() {
       if (err?.status === 400 && /already.*paid/i.test(err?.message || "")) {
         notify.info("This invoice is already fully paid.");
       } else if (err?.data?.code === "NO_GATEWAY" || /gateway/i.test(err?.message || "")) {
-        notify.error("No payment gateway configured — add your Razorpay keys in Settings → Payment.");
+        notify.info("No payment gateway configured — add your Razorpay keys in Payments Received.", { onClick: () => navigate("/payments") });
       } else {
         notify.error(err?.message || "Could not generate a payment link.");
       }

@@ -63,6 +63,19 @@ html[data-theme="dark"] .login-logo--tmc-dark {
   --border-color: rgba(255, 255, 255, 0.08);
 
   --font-family: "Outfit", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-size-body: clamp(0.75rem, 0.7rem + 0.14vw, 0.875rem);
+  --font-size-label: clamp(0.6875rem, 0.64rem + 0.12vw, 0.8125rem);
+  --font-size-caption: clamp(0.625rem, 0.6rem + 0.1vw, 0.75rem);
+  --font-size-page-title: clamp(1.35rem, 1.15rem + 0.6vw, 1.75rem);
+  --font-size-section-title: clamp(0.95rem, 0.88rem + 0.15vw, 1.125rem);
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+  --line-height-body: 1.55;
+  --line-height-heading: 1.25;
+  --letter-spacing-body: 0;
+  --letter-spacing-heading: -0.035em;
 
   --glass-bg: rgba(20, 22, 28, 0.35);
   --glass-border: rgba(255, 255, 255, 0.1);

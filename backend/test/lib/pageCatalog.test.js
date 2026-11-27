@@ -349,7 +349,7 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
     expect(travel).not.toContain('/channels');
   });
 
-  it('every vertical includes the cross-vertical core (/home, /contacts, /tasks, /notification-settings)', () => {
+  it('every vertical includes the cross-vertical core (/home, /contacts, /tasks, /notifications, /notification-settings)', () => {
     for (const v of ['wellness', 'travel', 'generic']) {
       const pages = getCatalogForVertical(v);
       const paths = pages.map((p) => p.path);
@@ -357,6 +357,7 @@ describe('getCatalogForVertical (vertical-aware filtering)', () => {
       expect(paths, `${v}: /contacts should be in the catalog`).toContain('/contacts');
       expect(paths, `${v}: /tasks should be in the catalog`).toContain('/tasks');
       expect(paths, `${v}: /notification-settings should be in the catalog`).toContain('/notification-settings');
+      expect(paths, `${v}: /notifications should be in the catalog`).toContain('/notifications');
     }
   });
 

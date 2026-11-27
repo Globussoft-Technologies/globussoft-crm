@@ -2,6 +2,63 @@
 
 const prisma = require("./prisma");
 const { sendEmail } = require("./emailSender");
+const { resolveSendGridConfig } = require("../services/travelSendGrid");
+
+const DEFAULT_EMAIL_PRIMARY = "#0f766e";
+
+function escapeAttribute(value) {
+  return String(value || "").replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[character]));
+}
+
+async function resolveTravelBrand(tenantId, subBrand) {
+  try {
+    let brand = null;
+    if (prisma.brandKit?.findFirst) {
+      if (subBrand) {
+        brand = await prisma.brandKit.findFirst({ where: { tenantId, subBrand, isActive: true } });
+      }
+      if (!brand) brand = await prisma.brandKit.findFirst({ where: { tenantId, subBrand: null, isActive: true } });
+    }
+    if (brand?.logoUrl || brand?.primaryColor) return brand;
+
+    const tenant = await prisma.tenant?.findUnique?.({
+      where: { id: tenantId },
+      select: { logoUrl: true, brandColor: true },
+    });
+    return {
+      ...(brand || {}),
+      logoUrl: brand?.logoUrl || tenant?.logoUrl || null,
+      primaryColor: brand?.primaryColor || tenant?.brandColor || null,
+    };
+  } catch (error) {
+    console.warn(`[TravelEmailAutomation] brand kit could not be resolved: ${error.message}`);
+    return null;
+  }
+}
+
+async function renderTravelEmailHtml({ tenantId, subBrand, body, tenantName, defaultLogoUrl = "" }) {
+  const brand = await resolveTravelBrand(tenantId, subBrand);
+  let senderEmail = String(process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com").trim();
+  try {
+    const provider = await resolveSendGridConfig(tenantId);
+    senderEmail = provider.fromEmail || senderEmail;
+  } catch (_error) {
+    // The email sender will report provider configuration errors separately.
+  }
+  const primary = brand?.primaryColor || DEFAULT_EMAIL_PRIMARY;
+  const publicOrigin = String(process.env.FRONTEND_URL || "https://crm.globusdemos.com").replace(/\/$/, "");
+  const configuredLogo = brand?.logoUrl || defaultLogoUrl;
+  const logoUrl = configuredLogo
+    ? String(configuredLogo).startsWith("http")
+      ? configuredLogo
+      : `${publicOrigin}${String(configuredLogo).startsWith("/") ? "" : "/"}${configuredLogo}`
+    : "";
+  const logo = logoUrl
+    ? `<img src="${escapeAttribute(logoUrl)}" alt="${escapeAttribute(tenantName || "Travel")}" style="display:block;max-width:180px;max-height:54px;width:auto;height:auto;margin:0 auto;">`
+    : `<div style="font-size:22px;line-height:28px;font-weight:700;color:${escapeAttribute(primary)};">${escapeAttribute(tenantName || "Travel")}</div>`;
+  const footer = brand?.footerText || brand?.tagline || `You received this email from ${tenantName || "our travel team"}.`;
+  return `<!doctype html><html><body style="margin:0;padding:0;background:#f3f6f8;color:#24313a;font-family:Arial,Helvetica,sans-serif;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f6f8;padding:32px 12px;"><tr><td align="center"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border:1px solid #d9e0e5;border-radius:12px;overflow:hidden;"><tr><td style="padding:28px 32px 24px;text-align:center;border-bottom:1px solid #e7ecef;">${logo}</td></tr><tr><td style="padding:32px;color:#24313a;font-size:16px;line-height:1.7;">${body}</td></tr><tr><td style="padding:20px 32px;background:#f8fafb;border-top:1px solid #e7ecef;text-align:center;color:#6b7780;font-size:12px;line-height:1.5;">${escapeAttribute(footer)}<br><span>Sent from </span><a href="mailto:${escapeAttribute(senderEmail)}" style="color:${escapeAttribute(primary)};text-decoration:none;">${escapeAttribute(senderEmail)}</a></td></tr></table></td></tr></table></body></html>`;
+}
 
 const REMOVED_EVENT_KEYS = new Set([
   "site_visit.scheduled", "trip.confirmed", "booking.confirmed", "trip.reminder", "trip.upcoming_reminder", "payment.reminder",
@@ -95,6 +152,19 @@ function getPath(value, path) {
 
 function renderText(value, context) {
   return String(value || "").replace(/{{\s*([^}]+?)\s*}}/g, (_match, key) => String(getPath(context, key.trim()) ?? ""));
+}
+
+function buildDiagnosticReportUrl({ id, subBrand, tenantSlug, reportSlugToken, reportPdfUrl }) {
+  const base = String(process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
+  if (reportPdfUrl) {
+    if (/^https?:\/\//i.test(reportPdfUrl)) return reportPdfUrl;
+    return `${base || "http://localhost:5173"}${reportPdfUrl.startsWith("/") ? "" : "/"}${reportPdfUrl}`;
+  }
+  if (String(subBrand || "").trim().toLowerCase() === "tmc" && tenantSlug && reportSlugToken) {
+    const reportSlug = encodeURIComponent(`${id}-${reportSlugToken}`);
+    return `${base || "http://localhost:5173"}/diagnostic-form/${encodeURIComponent(tenantSlug)}/tmc/report/${reportSlug}`;
+  }
+  return "";
 }
 
 function recipientForEvent(payload = {}, contact = null) {
@@ -254,10 +324,11 @@ async function processTravelEmailEvent(eventKey, payload = {}, tenantId) {
   const subject = renderText(template.subject, context);
   context.event.subject = subject;
   const html = renderText(template.body, context);
+  const brandedHtml = await renderTravelEmailHtml({ tenantId, subBrand: template.subBrand || requestedBrand, body: html, tenantName: context.tenant.name });
   context.event.customerMessage = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-  const result = await sendEmail({ tenantId, to: recipientEmail, subject, html, text: html.replace(/<[^>]+>/g, " ") });
+  const result = await sendEmail({ tenantId, to: recipientEmail, subject, html: brandedHtml, text: brandedHtml.replace(/<[^>]+>/g, " ") });
   const deliveryData = {
-    tenantId, templateId: template.id, contactId: context.contact?.id || null, eventKey, recipientEmail, subject, bodyHtml: html,
+    tenantId, templateId: template.id, contactId: context.contact?.id || null, eventKey, recipientEmail, subject, bodyHtml: brandedHtml,
     status: result.sent ? "SENT" : "FAILED", provider: "sendgrid", errorMessage: result.sent ? null : result.reason, sentAt: result.sent ? new Date() : null,
   };
   if (payload.resendLogId) {
@@ -275,19 +346,24 @@ async function resendTravelEmailDelivery(logId, tenantId) {
   if (!log) return { ignored: true, reason: "not_found" };
   if (!log.recipientEmail || !log.bodyHtml) return { ignored: true, reason: "missing_message" };
 
-  // Diagnostic links must be rebuilt from the current generic diagnostic PDF.
-  // Replaying the stored HTML would resend an older TMC-readiness URL.
+  // Rebuild diagnostic links so a resend cannot preserve an older readiness URL.
   if (log.eventKey === "diagnostic.completed" && log.contactId) {
     const diagnostic = await prisma.travelDiagnostic.findFirst({
-      where: { tenantId, contactId: log.contactId, reportPdfUrl: { not: null } },
+      where: {
+        tenantId,
+        contactId: log.contactId,
+        OR: [{ reportPdfUrl: { not: null } }, { reportSlugToken: { not: null } }],
+      },
       orderBy: { createdAt: "desc" },
-      select: { id: true, contactId: true, reportPdfUrl: true },
+      select: { id: true, contactId: true, subBrand: true, reportSlugToken: true, reportPdfUrl: true },
     });
-    if (diagnostic?.reportPdfUrl) {
-      const baseUrl = String(process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
-      const reportUrl = /^https?:\/\//i.test(diagnostic.reportPdfUrl)
-        ? diagnostic.reportPdfUrl
-        : `${baseUrl || "http://localhost:5173"}${diagnostic.reportPdfUrl.startsWith("/") ? "" : "/"}${diagnostic.reportPdfUrl}`;
+    if (diagnostic) {
+      const tenant = await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { slug: true },
+      });
+      const reportUrl = buildDiagnosticReportUrl({ ...diagnostic, tenantSlug: tenant?.slug });
+      if (!reportUrl) return { ignored: true, reason: "report_unavailable" };
       const resent = await processTravelEmailEvent("diagnostic.completed", {
         diagnosticId: diagnostic.id,
         contactId: diagnostic.contactId,
@@ -342,10 +418,11 @@ async function tickTravelEmailAutomation() {
     }
     const subject = renderText(template.subject, context);
     const html = renderText(template.body, context);
-    const result = await sendEmail({ tenantId: enrollment.tenantId, to: enrollment.recipientEmail, subject, html, text: html.replace(/<[^>]+>/g, " ") });
+    const brandedHtml = await renderTravelEmailHtml({ tenantId: enrollment.tenantId, subBrand: template.subBrand || eventSubBrand, body: html, tenantName: context.tenant.name });
+    const result = await sendEmail({ tenantId: enrollment.tenantId, to: enrollment.recipientEmail, subject, html: brandedHtml, text: brandedHtml.replace(/<[^>]+>/g, " ") });
     await prisma.travelEmailDeliveryLog.create({ data: {
       tenantId: enrollment.tenantId, sequenceId: enrollment.sequenceId, enrollmentId: enrollment.id, stepId: step.id, templateId: template.id,
-      contactId: enrollment.contactId, eventKey: enrollment.eventKey, recipientEmail: enrollment.recipientEmail, subject, bodyHtml: html,
+      contactId: enrollment.contactId, eventKey: enrollment.eventKey, recipientEmail: enrollment.recipientEmail, subject, bodyHtml: brandedHtml,
       status: result.sent ? "SENT" : "FAILED", provider: "sendgrid", errorMessage: result.sent ? null : result.reason, sentAt: result.sent ? new Date() : null,
     } });
     const next = enrollment.currentStep + 1;
@@ -371,12 +448,11 @@ async function sendRecentDiagnosticEmails() {
     if (alreadyDelivered) continue;
     const contact = await prisma.contact.findFirst({ where: { id: diagnostic.contactId, tenantId: diagnostic.tenantId }, select: { id: true, name: true, email: true } });
     if (!contact?.email) continue;
-    const base = String(process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL || "").replace(/\/+$/, "");
-    const reportUrl = diagnostic.reportPdfUrl
-      ? (/^https?:\/\//i.test(diagnostic.reportPdfUrl)
-        ? diagnostic.reportPdfUrl
-        : `${base || "http://localhost:5173"}${diagnostic.reportPdfUrl.startsWith("/") ? "" : "/"}${diagnostic.reportPdfUrl}`)
-      : "";
+    const tenant = await prisma.tenant.findUnique({
+      where: { id: diagnostic.tenantId },
+      select: { slug: true },
+    });
+    const reportUrl = buildDiagnosticReportUrl({ ...diagnostic, tenantSlug: tenant?.slug });
     if (!reportUrl) continue;
     await processTravelEmailEvent("diagnostic.completed", {
       diagnosticId: diagnostic.id,
@@ -391,4 +467,4 @@ async function sendRecentDiagnosticEmails() {
   }
 }
 
-module.exports = { ESSENTIAL_EVENTS, OPTIONAL_EVENTS, EVENT_LABELS, REMOVED_EVENT_KEYS, ensureDefaultTemplates, renderText, processTravelEmailEvent, resendTravelEmailDelivery, tickTravelEmailAutomation, sendRecentDiagnosticEmails, buildContext };
+module.exports = { ESSENTIAL_EVENTS, OPTIONAL_EVENTS, EVENT_LABELS, REMOVED_EVENT_KEYS, ensureDefaultTemplates, renderText, renderTravelEmailHtml, buildDiagnosticReportUrl, processTravelEmailEvent, resendTravelEmailDelivery, tickTravelEmailAutomation, sendRecentDiagnosticEmails, buildContext };

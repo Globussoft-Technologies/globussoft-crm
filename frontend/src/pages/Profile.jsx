@@ -1,6 +1,6 @@
 ﻿import React, { useState, useEffect, useContext, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { User, Mail, Phone, Key, Save, Stethoscope, Download, FileText, Camera, Trash2, AlertTriangle } from 'lucide-react';
+import { User, Mail, Phone, Key, Save, Pencil, Stethoscope, Download, FileText, Camera, Trash2, AlertTriangle } from 'lucide-react';
 import { fetchApi, getAuthToken } from '../utils/api';
 import { AuthContext } from '../App';
 import { useNotify } from '../utils/notify';
@@ -38,6 +38,7 @@ const Profile = () => {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [profileMsg, setProfileMsg] = useState({ text: '', type: '' });
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [passwordMsg, setPasswordMsg] = useState({ text: '', type: '' });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -186,18 +187,53 @@ const Profile = () => {
       });
       setProfile((current) => ({ ...current, ...updated }));
       // Reflect the server's canonical form (e.g. "9876543210" saved back as
-      // "+919876543210") so the field shows what is actually stored and a
-      // second save is correctly detected as a no-op.
+      // "+919876543210") so view mode always shows what is actually stored.
+      setName(updated.name ?? trimmedName);
+      setEmail(updated.email ?? trimmedEmail);
       setPhone(updated.phone || '');
       if (setAuthUser && authUser) {
         setAuthUser({ ...authUser, name: updated.name, email: updated.email, phone: updated.phone });
       }
       setProfileMsg({ text: 'Profile updated successfully', type: 'success' });
+      setIsEditingProfile(false);
+      notify.success('Profile updated successfully');
     } catch (err) {
       setProfileMsg({ text: err.message || 'Failed to update profile', type: 'error' });
     }
     setSaving(false);
   };
+
+  const handleEditProfile = () => {
+    setName(profile?.name || '');
+    setEmail(profile?.email || '');
+    setPhone(profile?.phone || '');
+    setProfileMsg({ text: '', type: '' });
+    setIsEditingProfile(true);
+  };
+
+  const handleCancelProfileEdit = () => {
+    setName(profile?.name || '');
+    setEmail(profile?.email || '');
+    setPhone(profile?.phone || '');
+    setProfileMsg({ text: '', type: '' });
+    setIsEditingProfile(false);
+  };
+
+  const trimmedProfileFields = {
+    name: (name || '').trim(),
+    email: (email || '').trim(),
+    phone: (phone || '').trim(),
+  };
+  const profileHasChanges = !!profile && (
+    trimmedProfileFields.name !== (profile.name || '').trim()
+    || trimmedProfileFields.email !== (profile.email || '').trim()
+    || trimmedProfileFields.phone !== (profile.phone || '').trim()
+  );
+  const profilePhoneDigits = trimmedProfileFields.phone.replace(/\D/g, '');
+  const profileFieldsValid = !!trimmedProfileFields.name
+    && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedProfileFields.email)
+    && (!trimmedProfileFields.phone
+      || (profilePhoneDigits.length >= 10 && profilePhoneDigits.length <= 15));
 
   const handlePickPicture = () => {
     if (fileInputRef.current) fileInputRef.current.click();
@@ -647,11 +683,24 @@ const Profile = () => {
         </div>
       )}
 
-      {/* Edit Profile */}
+      {/* Profile Details */}
       <div className="card glass" style={{ padding: '1.5rem', marginBottom: '1.5rem' }}>
-        <h3 style={{ fontSize: '1rem', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <User size={18} /> Edit Profile
-        </h3>
+        <div style={{ marginBottom: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+          <h3 style={{ fontSize: '1rem', fontWeight: '600', color: 'var(--text-primary)', margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <User size={18} /> Profile Details
+          </h3>
+          {!isEditingProfile && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleEditProfile}
+              aria-label="Edit profile details"
+              style={{ padding: '0.45rem 0.75rem', display: 'inline-flex', alignItems: 'center', gap: '0.4rem' }}
+            >
+              <Pencil size={15} /> Edit
+            </button>
+          )}
+        </div>
         <form onSubmit={handleUpdateProfile}>
           <div style={{ marginBottom: '1rem' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginBottom: '0.4rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
@@ -663,6 +712,8 @@ const Profile = () => {
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Your name"
+              readOnly={!isEditingProfile}
+              required
             />
           </div>
           <div style={{ marginBottom: '1rem' }}>
@@ -675,6 +726,8 @@ const Profile = () => {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="Your email"
+              readOnly={!isEditingProfile}
+              required
             />
           </div>
           <div style={{ marginBottom: '1rem' }}>
@@ -693,6 +746,7 @@ const Profile = () => {
               placeholder="e.g. 9876543210"
               autoComplete="tel"
               data-testid="profile-phone-input"
+              readOnly={!isEditingProfile}
             />
             <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: '0.35rem' }}>
               Used to reach you about your appointments. Leave blank to remove it.
@@ -707,8 +761,9 @@ const Profile = () => {
               type="text"
               className="input-field"
               value={profileRoleLabel(profile)}
-              disabled
-              style={{ opacity: 0.6, cursor: 'not-allowed' }}
+              readOnly
+              aria-readonly="true"
+              style={{ opacity: 0.6, cursor: 'default' }}
             />
           </div>
 
@@ -730,9 +785,26 @@ const Profile = () => {
             </div>
           )}
 
-          <button type="submit" className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }} disabled={saving}>
-            <Save size={16} /> {saving ? 'Saving...' : 'Save Changes'}
-          </button>
+          {isEditingProfile && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <button
+                type="submit"
+                className="btn-primary"
+                style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                disabled={saving || !profileHasChanges || !profileFieldsValid}
+              >
+                <Save size={16} /> {saving ? 'Saving...' : 'Save Changes'}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={handleCancelProfileEdit}
+                disabled={saving}
+              >
+                Cancel
+              </button>
+            </div>
+          )}
         </form>
       </div>
 

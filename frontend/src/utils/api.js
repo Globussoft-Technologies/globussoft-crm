@@ -283,6 +283,16 @@ const requestApi = async (url, options) => {
     // dev-server origins; callers can still explicitly override it.
     response = await fetch(url, { credentials: 'include', ...fetchOpts, headers });
   } catch (networkErr) {
+    // An AbortController cancellation is an intentional lifecycle event, not
+    // a connectivity failure. React Strict Mode mounts, cleans up, and mounts
+    // effects again in development, so converting the cleanup abort into the
+    // generic network error can race the succeeding request and leave a page
+    // showing both loaded totals and an error state. Preserve AbortError so
+    // callers can ignore cancelled work without displaying a toast.
+    if (networkErr?.name === 'AbortError' || fetchOpts.signal?.aborted) {
+      if (networkErr?.name === 'AbortError') throw networkErr;
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
     // No response at all — DNS failure, offline, CORS, etc.
     const msg = 'Network error — check your connection and try again.';
     if (!silent && _globalNotify) _globalNotify.error(msg);
@@ -397,7 +407,26 @@ const requestApi = async (url, options) => {
       if (shouldShowAiNotice) {
         if (isAiSetupRequired) lastAiSetupNoticeAt = Date.now();
         if (sessionToastKey) sessionToastKeys.add(sessionToastKey);
-        _globalNotify.error(userMsg);
+        const normalizedCode = String(errorCode || '').toUpperCase();
+        const normalizedMessage = String(userMsg || '').toLowerCase();
+        const integrationRoute = isAiSetupRequired || normalizedCode.includes('AI_PROVIDER')
+          ? '/settings'
+          : normalizedCode === 'NO_GATEWAY' || normalizedMessage.includes('razorpay') || normalizedMessage.includes('payment gateway')
+            ? '/payments'
+            : normalizedCode.includes('DRIVE_NOT_CONNECTED') || normalizedCode.includes('KB_ROOT_NOT_CONFIGURED')
+              ? '/travel/trip-knowledge'
+              : normalizedMessage.includes('calendar not connected') || normalizedCode.includes('CALENDAR_NOT_CONNECTED')
+                ? '/calendar-sync'
+              : normalizedCode.includes('SENDGRID') || normalizedMessage.includes('sendgrid') || normalizedMessage.includes('email provider')
+                ? '/settings'
+                : null;
+        if (integrationRoute) {
+          _globalNotify.info(userMsg, {
+            onClick: () => window.location.assign(integrationRoute),
+          });
+        } else {
+          _globalNotify.error(userMsg);
+        }
       }
     }
     const err = new Error(userMsg);

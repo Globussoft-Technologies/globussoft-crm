@@ -417,6 +417,20 @@ describe('<TripDetail /> — header + status badge', () => {
     expect(screen.getByText('confirmed')).toBeInTheDocument();
   });
 
+  it('shows the inclusive number of trip days beside the trip name', async () => {
+    installFetchMock({
+      trip: makeTrip({
+        departDate: '2026-12-07T00:00:00.000Z',
+        returnDate: '2026-12-11T00:00:00.000Z',
+      }),
+    });
+    renderPage();
+
+    const heading = await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7' });
+    const titleRow = heading.closest('.ts-trip-title-row');
+    expect(within(titleRow).getByLabelText('Trip duration: 5 days')).toHaveTextContent('5 days');
+  });
+
   it('Trips back-link in header points to /travel/trips', async () => {
     renderPage();
     await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
@@ -938,6 +952,7 @@ describe('<TripDetail /> — Header date edge cases', () => {
     // The em-dash is the only place "—" appears on the un-published trip
     // (Overview cards use English copy, not em-dashes); assert ≥ 1 instance.
     expect(screen.getAllByText((content) => content.includes('—')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByLabelText(/Trip duration:/i)).not.toBeInTheDocument();
   });
 
   it('Overview hero band renders locale-formatted price / student inline', async () => {

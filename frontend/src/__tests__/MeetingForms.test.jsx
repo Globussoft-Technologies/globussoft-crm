@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { render as rtlRender, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 
 const fetchApi = vi.fn();
 const notify = { success: vi.fn(), error: vi.fn() };
@@ -7,6 +8,13 @@ vi.mock("../utils/api", () => ({ fetchApi: (...args) => fetchApi(...args) }));
 vi.mock("../utils/notify", () => ({ useNotify: () => notify }));
 
 import MeetingForms from "../pages/travel/MeetingForms";
+
+const renderMeetingForms = () => render(<MemoryRouter><MeetingForms /></MemoryRouter>);
+
+const render = (ui, options) => rtlRender(
+  ui?.type === MeetingForms ? <MemoryRouter>{ui}</MemoryRouter> : ui,
+  options,
+);
 
 const FORM = {
   id: 7,

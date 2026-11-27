@@ -9,6 +9,10 @@
 
 const prisma = require("./prisma");
 const { sendEmail } = require("./emailSender");
+const {
+  DEFAULT_SENDER_EMAIL,
+  getNotificationEmailConfig,
+} = require("./notificationEmailCc");
 
 // Default preferences when no custom row exists
 const DEFAULT_PREFERENCES = {
@@ -21,6 +25,8 @@ const DEFAULT_PREFERENCES = {
     leave: true,
     expense: true,
     tmc_catalogue: true,
+    travel_quote: true,
+    travel_visa: true,
   },
   channels: {
     db: true,
@@ -73,17 +79,43 @@ function isInQuietHours(timezone, quietHoursStart, quietHoursEnd) {
 
 // --------------- SendGrid helper (inline, same pattern as communications.js) ---------------
 const SENDGRID_API_KEY = process.env.SENDGRID_API_KEY || "";
-const FROM_EMAIL = process.env.SENDGRID_FROM_EMAIL || "noreply@crm.globusdemos.com";
+const FROM_EMAIL = DEFAULT_SENDER_EMAIL;
 
-async function sendSendGrid(to, subject, body) {
+function escapeEmailHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, character => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#39;",
+  }[character]));
+}
+
+function buildTravelNotificationUrl(link) {
+  const value = String(link || "").trim();
+  if (!value) return "";
+  if (/^https?:\/\//i.test(value)) return value;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith("//")) return "";
+
+  const origin = String(process.env.FRONTEND_URL || "https://crm.globusdemos.com").replace(/\/+$/, "");
+  return `${origin}${value.startsWith("/") ? "" : "/"}${value}`;
+}
+
+async function sendSendGrid(to, subject, body, emailHtml, cc = []) {
   if (!SENDGRID_API_KEY) {
     console.log(`[Notification-Email] SendGrid not configured — email to ${to} logged but not sent`);
     return { sent: false, reason: "no_api_key" };
   }
 
-  const htmlBody = body.replace(/\n/g, "<br>");
+  const htmlBody = emailHtml || body.replace(/\n/g, "<br>");
+  const ccRecipients = [...new Set(cc
+    .map((email) => String(email || "").trim().toLowerCase())
+    .filter((email) => email && email !== String(to).trim().toLowerCase()))]
+    .map((email) => ({ email }));
+  const personalization = { to: [{ email: to }] };
+  if (ccRecipients.length) personalization.cc = ccRecipients;
   const payload = {
-    personalizations: [{ to: [{ email: to }] }],
+    personalizations: [personalization],
     from: { email: FROM_EMAIL },
     subject: subject,
     content: [
@@ -116,23 +148,41 @@ async function sendSendGrid(to, subject, body) {
   }
 }
 
-async function sendNotificationEmail(tenantId, to, subject, body) {
+async function sendNotificationEmail(tenantId, to, subject, body, emailHtml, link, cc = []) {
   let tenant = null;
   try {
-    tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true } });
+    tenant = await prisma.tenant.findUnique({ where: { id: tenantId }, select: { vertical: true, name: true } });
   } catch (_error) {
     // Preserve the existing backend-managed path if tenant lookup is unavailable.
   }
   if (String(tenant?.vertical || "").toLowerCase() === "travel") {
+    const notificationUrl = buildTravelNotificationUrl(link);
+    const emailText = notificationUrl && !String(body).includes(notificationUrl)
+      ? `${body}\n\nView details: ${notificationUrl}`
+      : body;
+    const notificationBody = [
+      `<h1 style="margin:0 0 16px;font-size:24px;line-height:1.3;color:#172b3a;">${escapeEmailHtml(subject)}</h1>`,
+      `<div style="font-size:15px;line-height:1.7;">${escapeEmailHtml(body).replace(/\r\n|\n|\r/g, "<br>")}</div>`,
+      `<p style="margin:24px 0 0;color:#6b7780;font-size:12px;">Received (UTC): ${escapeEmailHtml(new Date().toISOString())}</p>`,
+      notificationUrl
+        ? `<p style="margin:22px 0 0;text-align:center;"><a href="${escapeEmailHtml(notificationUrl)}" style="display:inline-block;padding:12px 20px;border-radius:6px;background:#0f766e;color:#ffffff;text-decoration:none;font-weight:700;">Open notification</a></p>`
+        : "",
+    ].join("");
+    const brandedHtml = emailHtml || await require("./travelEmailAutomation").renderTravelEmailHtml({
+      tenantId,
+      body: notificationBody,
+      tenantName: tenant?.name || "Travel team",
+    });
     return sendEmail({
       tenantId,
       to,
+      cc,
       subject,
-      text: body,
-      html: String(body).replace(/\n/g, "<br>"),
+      text: emailText,
+      html: brandedHtml,
     });
   }
-  return sendSendGrid(to, subject, body);
+  return sendSendGrid(to, subject, body, emailHtml, cc);
 }
 
 // --------------- Core dispatcher ---------------
@@ -150,13 +200,14 @@ async function sendNotificationEmail(tenantId, to, subject, body) {
  * @param {string} [opts.link]       - Deep-link path (e.g. "/pipeline")
  * @param {string} [opts.entityType] - lead | ticket | approval | expense | leave
  * @param {string} [opts.category]   - Notification category for preference filtering (deal, task, ticket, lead, approval, leave, expense)
+ * @param {string} [opts.emailHtml]  - Optional email-only HTML body; in-app content remains `message`
  * @param {number} [opts.entityId]   - ID of the entity
  * @param {number} [opts.dedupWindowHours=24] - Hours to look back for dedup
  * @param {string[]} [opts.channels] - Delivery channels: db, socket, push, email (push is added when the user has enabled Browser Push and the caller requests db/socket)
  * @param {Object} [opts.io]         - Socket.io server instance
  * @returns {Promise<Object|null>}   - The created Notification record or null if deduped/blocked by prefs
  */
-async function notify({ userId, tenantId, title, message, type, priority, link, entityType, entityId, category, dedupWindowHours = 24, channels, io, ignorePreferences = false }) {
+async function notify({ userId, tenantId, title, message, type, priority, link, entityType, entityId, category, emailHtml, dedupWindowHours = 24, channels, io, ignorePreferences = false, fanoutOptionalChannels = true, fanoutEmail = fanoutOptionalChannels, fanoutBrowserPush = fanoutOptionalChannels }) {
   const requestedChannels = channels || ["db", "socket"];
 
   // Fetch user preferences
@@ -181,9 +232,9 @@ async function notify({ userId, tenantId, title, message, type, priority, link, 
   // producers request the canonical in-app channels (db/socket); when the
   // user has enabled either optional channel, fan that same notification out
   // through it as well. Keep explicit non-in-app channel lists unchanged.
-  const wantsBrowserPush = channelEnabled("push")
+  const wantsBrowserPush = fanoutBrowserPush && channelEnabled("push")
     && requestedChannels.includes("socket");
-  const wantsEmail = channelEnabled("email")
+  const wantsEmail = fanoutEmail && channelEnabled("email")
     && requestedChannels.includes("socket");
   const effectiveRequestedChannels = [
     ...requestedChannels,
@@ -305,7 +356,16 @@ async function notify({ userId, tenantId, title, message, type, priority, link, 
     try {
       const user = await prisma.user.findUnique({ where: { id: userId } });
       if (user?.email) {
-        await sendNotificationEmail(tenantId, user.email, title, message);
+        let cc = [];
+        try {
+          const emailConfig = await getNotificationEmailConfig(prisma, tenantId);
+          cc = [...new Set([...emailConfig.ccRecipients, emailConfig.receiverEmail]
+            .filter(Boolean)
+            .filter((email) => email !== String(user.email).trim().toLowerCase()))];
+        } catch (error) {
+          console.error("[Notification-Email] Failed to load tenant email settings:", error.message);
+        }
+        await sendNotificationEmail(tenantId, user.email, title, message, emailHtml, link, cc);
       }
     } catch (e) {
       console.warn("[Notification-Email] Email delivery failed:", e.message);
@@ -318,10 +378,10 @@ async function notify({ userId, tenantId, title, message, type, priority, link, 
 /**
  * Notify multiple users.
  */
-async function notifyMany({ userIds, tenantId, title, message, type, priority, link, entityType, entityId, category, dedupWindowHours, channels, io, ignorePreferences = false }) {
+async function notifyMany({ userIds, tenantId, title, message, type, priority, link, entityType, entityId, category, emailHtml, dedupWindowHours, channels, io, ignorePreferences = false, fanoutOptionalChannels = true, fanoutEmail = fanoutOptionalChannels, fanoutBrowserPush = fanoutOptionalChannels }) {
   const results = [];
   for (const uid of userIds) {
-    const n = await notify({ userId: uid, tenantId, title, message, type, priority, link, entityType, entityId, category, dedupWindowHours, channels, io, ignorePreferences });
+    const n = await notify({ userId: uid, tenantId, title, message, type, priority, link, entityType, entityId, category, emailHtml, dedupWindowHours, channels, io, ignorePreferences, fanoutOptionalChannels, fanoutEmail, fanoutBrowserPush });
     results.push(n);
   }
   return results;

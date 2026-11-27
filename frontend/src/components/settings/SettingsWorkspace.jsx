@@ -6,6 +6,7 @@ import {
   FileSignature, Globe2, Stethoscope,
 } from "lucide-react";
 import "./SettingsWorkspace.css";
+import "../../styles/settings-typography.css";
 
 const WorkspaceContext = createContext(null);
 

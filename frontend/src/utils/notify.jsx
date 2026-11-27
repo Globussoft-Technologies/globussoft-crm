@@ -47,7 +47,7 @@ export function NotifyProvider({ children }) {
         (t) => t.kind === kind && t.message === message && Date.now() - t.createdAt < 1500,
       );
       if (recent) return prev;
-      return [...prev, { id, kind, message, createdAt: Date.now() }];
+      return [...prev, { id, kind, message, onClick: opts.onClick, createdAt: Date.now() }];
     });
     if (ttl > 0) {
       setTimeout(() => {
@@ -201,7 +201,7 @@ function ToastStack({ toasts, onDismiss }) {
               pointerEvents: 'auto',
               background: c.bg,
               border: `1px solid ${c.border}`,
-              color: t.kind === 'error' ? c.text : 'var(--text-primary, #1f2937)',
+              color: t.kind === 'info' ? 'var(--toast-info-text, var(--text-primary, #111827))' : c.text,
               padding: '0.75rem 1rem',
               borderRadius: 10,
               boxShadow: '0 6px 24px rgba(0,0,0,0.18)',
@@ -219,7 +219,20 @@ function ToastStack({ toasts, onDismiss }) {
                 flexShrink: 0, marginTop: 1,
               }}
             >{c.icon}</span>
-            <span style={{ flex: 1, minWidth: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{t.message}</span>
+            {t.onClick ? (
+              <button
+                type="button"
+                onClick={() => { t.onClick(); onDismiss(t.id); }}
+                style={{
+                  flex: 1, minWidth: 0, textAlign: 'left', padding: 0,
+                  border: 'none', background: 'transparent', color: 'inherit',
+                  cursor: 'pointer', font: 'inherit', textDecoration: 'underline',
+                  whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+                }}
+              >{t.message}</button>
+            ) : (
+              <span style={{ flex: 1, minWidth: 0, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{t.message}</span>
+            )}
             <button
               type="button"
               onClick={() => onDismiss(t.id)}

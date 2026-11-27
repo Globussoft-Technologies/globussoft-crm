@@ -1557,6 +1557,13 @@ const PAGE_CATALOG = [
     category: 'User',
     requiredPermissions: [],
   },
+  {
+    path: '/notifications',
+    label: 'Notifications',
+    description: 'View all notifications',
+    category: 'User',
+    requiredPermissions: [],
+  },
 ];
 
 const PAGES_BY_PATH = new Map(PAGE_CATALOG.map((p) => [p.path, p]));

@@ -34,6 +34,7 @@ import { EmptyState, FormField } from "../../components/ui";
 import TopScrollSync from "../../components/TopScrollSync";
 import { GENERIC_LEAD_QUICK_ADD_FIELD_KEYS } from "../../utils/genericLeadQuickAddFields";
 import "./FieldConfig.css";
+import "../../styles/settings-typography.css";
 
 const FIELD_TYPE_OPTIONS = [
   { value: "text", label: "Text field" },
@@ -1484,7 +1485,7 @@ export default function LeadFields({
 
   return (
     <div
-      className={tenant?.vertical === "travel" ? "lead-fields-page" : undefined}
+      className={`settings-nested-page${tenant?.vertical === "travel" ? " lead-fields-page" : ""}`}
       style={{ padding: "2rem", paddingBottom: "3rem", maxWidth: showSystemFields ? "1180px" : "860px", margin: "0 auto", animation: "fadeIn 0.3s ease" }}
     >
       {tenant?.vertical === "travel" && (

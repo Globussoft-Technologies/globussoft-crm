@@ -25,11 +25,11 @@
  *      await findBy for data-dependent text).
  *   5. GET on mount: hits /api/travel/dashboard (exactly one call, no query
  *      args, no method override — default GET).
- *   6. KPI tiles — seven current tiles render with their labels: Active trips,
+ *   6. KPI tiles — seven current tiles render with their labels: TMC trips,
  *      Diagnostics, Itineraries, Landing pages, Cost master, Pricing rules,
  *      and Web check-ins. Plus their headline numeric values.
  *   7. KPI tiles — accent + footer text: "12 departing in 30 days" under
- *      Active trips; the landing-page state footer; missed count rendered in
+ *      TMC trips; the landing-page state footer; missed count rendered in
  *      danger color when webCheckins.missed > 0.
  *   8. KPI tiles — links: each linked tile wraps a <Link> with the expected
  *      href (/travel/trips, /travel/diagnostics, /travel/itineraries,
@@ -345,7 +345,7 @@ describe('<TravelDashboard /> — KPI tiles', () => {
     // Wait for data render via the trips.total headline.
     await screen.findByText('47');
     // Seven tile labels.
-    expect(screen.getByText('Active trips')).toBeInTheDocument();
+    expect(screen.getByText('TMC trips')).toBeInTheDocument();
     expect(screen.getByText('Diagnostics (last 30 days)')).toBeInTheDocument();
     expect(screen.getByText('Itineraries')).toBeInTheDocument();
     expect(screen.getByText('Landing pages')).toBeInTheDocument();
@@ -369,7 +369,15 @@ describe('<TravelDashboard /> — KPI tiles', () => {
   it('renders the upcoming-30d accent and the landing pages published footer', async () => {
     installFetchMock();
     renderPage();
-    await screen.findByText(/12 departing in 30 days/);
+    const upcomingLink = (await screen.findByText(/12 departing in 30 days/)).closest('a');
+    expect(upcomingLink).toBeTruthy();
+    const upcomingUrl = new URL(upcomingLink.getAttribute('href'), 'https://crm.test');
+    expect(upcomingUrl.pathname).toBe('/travel/trips');
+    expect(upcomingUrl.searchParams.get('departFrom')).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(upcomingUrl.searchParams.get('departTo')).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    const from = new Date(`${upcomingUrl.searchParams.get('departFrom')}T00:00:00Z`);
+    const to = new Date(`${upcomingUrl.searchParams.get('departTo')}T00:00:00Z`);
+    expect((to - from) / 86_400_000).toBe(30);
     // DASHBOARD_DEFAULT has landingPages: { total: 8, published: 5 }
     expect(screen.getByTitle('Published: 5')).toBeInTheDocument();
   });
@@ -416,8 +424,8 @@ describe('<TravelDashboard /> — KPI tiles', () => {
     renderPage();
     await screen.findByText('47');
 
-    // Active trips → /travel/trips
-    expect(screen.getByText('Active trips').closest('[role="link"]')).toBeTruthy();
+    // TMC trips → /travel/trips
+    expect(screen.getByText('TMC trips').closest('[role="link"]')).toBeTruthy();
 
     // Diagnostics → /travel/diagnostics
     expect(screen.getByText('Diagnostics (last 30 days)').closest('[role="link"]')).toBeTruthy();
@@ -479,11 +487,31 @@ describe('<TravelDashboard /> — Recent trips table', () => {
 });
 
 describe('<TravelDashboard /> — sub-brand scoping', () => {
+  it('shows the TMC trips card for the All scope', async () => {
+    activeSubBrandRef.current = null;
+    installFetchMock();
+    renderPage();
+    expect(await screen.findByText('TMC trips')).toBeInTheDocument();
+  });
+
+  it('shows the TMC trips card for TMC and hides it for other sub-brands', async () => {
+    activeSubBrandRef.current = 'tmc';
+    installFetchMock();
+    const { unmount } = renderPage();
+    expect(await screen.findByText('TMC trips')).toBeInTheDocument();
+    unmount();
+
+    activeSubBrandRef.current = 'rfu';
+    renderPage();
+    await screen.findByText('Diagnostics (last 30 days)');
+    expect(screen.queryByText('TMC trips')).not.toBeInTheDocument();
+  });
+
   it('appends ?subBrand= when a sidebar sub-brand is active', async () => {
     activeSubBrandRef.current = 'rfu';
     installFetchMock();
     renderPage();
-    await screen.findByText('47');
+    await screen.findByText('Diagnostics (last 30 days)');
     expect(fetchApiMock).toHaveBeenCalledWith('/api/travel/dashboard?subBrand=rfu');
   });
 

@@ -38,6 +38,8 @@
  * routes/notifications.js — distinct contracts, both pinned.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { AuthContext } from '../App';
@@ -71,6 +73,18 @@ const notifyObj = {
 };
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
+}));
+
+vi.mock('../components/CalendarRangePicker', () => ({
+  default: ({ onChange, label }) => (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={() => onChange({ from: '2026-11-01', to: '2026-11-27' })}
+    >
+      {label}
+    </button>
+  ),
 }));
 
 import NotificationsCenter from '../pages/NotificationsCenter';
@@ -145,14 +159,19 @@ describe('<NotificationsCenter /> — page surface (#853)', () => {
     navigateMock.mockReset();
   });
 
-  it('renders the heading and the "N total · M unread" counter line', async () => {
+  it('is route-gated to Travel tenants', () => {
+    const appSource = readFileSync(resolve(process.cwd(), 'src/App.jsx'), 'utf8');
+    expect(appSource).toMatch(/path="notifications"[\s\S]*?element=\{<TravelOnly><NotificationsCenter \/><\/TravelOnly>\}/);
+  });
+
+  it('renders the heading and total counter line', async () => {
     renderCenter();
-    expect(
-      await screen.findByRole('heading', { name: /Notifications/i })
-    ).toBeInTheDocument();
-    // Counter pulls `total` from the list endpoint + `count` from /unread-count.
-    expect(await screen.findByText(/3 total/i)).toBeInTheDocument();
-    expect(await screen.findByText(/2 unread/i)).toBeInTheDocument();
+    const heading = await screen.findByRole('heading', { name: /Notifications/i });
+    expect(heading).toBeInTheDocument();
+    expect(heading.closest('.notifications-center-page')).toHaveStyle({ padding: '2rem' });
+    // Counter pulls `total` from the list endpoint.
+    expect(screen.getByLabelText(/3 total/i)).toBeInTheDocument();
+    expect(screen.queryByText(/2 unread/i)).not.toBeInTheDocument();
   });
 
   it('initial mount fires GET /api/notifications with page=1 and NO status= filter', async () => {
@@ -196,6 +215,84 @@ describe('<NotificationsCenter /> — page surface (#853)', () => {
     // Active-tab semantics: aria-selected flips on the new tab.
     expect(screen.getByRole('tab', { name: /^Unread$/ })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tab', { name: /^All$/ })).toHaveAttribute('aria-selected', 'false');
+  });
+
+  it('travel notification type filters refetch diagnostics and catalogue server-side', async () => {
+    renderCenter({
+      user: { id: 7 },
+      tenant: { vertical: 'travel' },
+      loading: false,
+    });
+    await screen.findByText('New lead assigned');
+    fetchApiMock.mockClear();
+
+    const typeSelect = screen.getByRole('combobox', { name: 'Notification type' });
+    fireEvent.click(typeSelect);
+    fireEvent.click(screen.getByRole('option', { name: 'Diagnostics' }));
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) =>
+        url.includes('notificationType=diagnostic') && url.includes('page=1')
+      )).toBe(true);
+    });
+
+    fetchApiMock.mockClear();
+    fireEvent.click(typeSelect);
+    fireEvent.click(screen.getByRole('option', { name: 'Catalogue' }));
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) =>
+        url.includes('notificationType=catalogue') && url.includes('page=1')
+      )).toBe(true);
+    });
+    expect(typeSelect).toHaveTextContent('Catalogue');
+  });
+
+  it('offers the notification domains that Travel CRM can receive', async () => {
+    renderCenter();
+    const typeSelect = await screen.findByRole('combobox', { name: 'Notification type' });
+    fireEvent.click(typeSelect);
+    expect(screen.getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'All types', 'Diagnostics', 'Catalogue', 'Leads', 'Tasks', 'Tickets', 'Approvals',
+      'Payments', 'Quotes', 'Travel & itineraries', 'Visa', 'Web check-in', 'Contacts', 'Calendar',
+      'Expenses', 'Leave', 'Signatures', 'AI & automation', 'General / system',
+    ]);
+  });
+
+  it('resets status, type, date range, and pagination together', async () => {
+    renderCenter();
+    await screen.findByText('New lead assigned');
+
+    fireEvent.click(screen.getByRole('tab', { name: /^Unread$/ }));
+    const typeSelect = screen.getByRole('combobox', { name: 'Notification type' });
+    fireEvent.click(typeSelect);
+    fireEvent.click(screen.getByRole('option', { name: 'Diagnostics' }));
+
+    const reset = await screen.findByRole('button', { name: 'Reset notification filters' });
+    fireEvent.click(reset);
+
+    expect(screen.getByRole('tab', { name: /^All$/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('combobox', { name: 'Notification type' })).toHaveTextContent('All types');
+    expect(screen.queryByRole('button', { name: 'Reset notification filters' })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) =>
+        url.includes('page=1') && !url.includes('status=') && !url.includes('notificationType=')
+      )).toBe(true);
+    });
+  });
+
+  it('date range filter refetches notification history from page 1', async () => {
+    renderCenter();
+    await screen.findByText('New lead assigned');
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'All time' }));
+
+    await waitFor(() => {
+      expect(fetchApiMock.mock.calls.some(([url]) =>
+        url.includes('fromDate=2026-11-01')
+        && url.includes('toDate=2026-11-27')
+        && url.includes('page=1')
+      )).toBe(true);
+    });
   });
 
   it('per-row "Mark as read" fires PUT /api/notifications/:id/read', async () => {

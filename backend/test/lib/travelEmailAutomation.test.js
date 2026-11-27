@@ -17,20 +17,28 @@ vi.mock("../../lib/emailSender", () => ({
 vi.mock("../../lib/prisma", () => ({
   tenant: { findUnique: vi.fn() },
   tenantSetting: { findUnique: vi.fn() },
+  brandKit: { findFirst: vi.fn() },
   contact: { findFirst: vi.fn() },
   payment: { findFirst: vi.fn() },
+  travelDiagnostic: { findMany: vi.fn(), findFirst: vi.fn() },
   travelEmailTemplate: { findMany: vi.fn(), createMany: vi.fn(), updateMany: vi.fn() },
   travelEmailSequence: { findMany: vi.fn() },
   travelEmailEnrollment: { create: vi.fn(), findMany: vi.fn() },
-  travelEmailDeliveryLog: { create: vi.fn() },
+  travelEmailDeliveryLog: { create: vi.fn(), findFirst: vi.fn() },
 }));
 const prisma = requireCJS("../../lib/prisma");
+const emailSender = requireCJS("../../lib/emailSender");
+emailSender.sendEmail = mockedSendEmail;
 const automation = requireCJS("../../lib/travelEmailAutomation");
 
 beforeEach(() => {
   prisma.tenant.findUnique = vi.fn();
+  prisma.tenantSetting.findUnique = vi.fn().mockResolvedValue(null);
+  prisma.brandKit.findFirst = vi.fn().mockResolvedValue(null);
   prisma.contact.findFirst = vi.fn();
   prisma.payment.findFirst = vi.fn();
+  prisma.travelDiagnostic.findMany = vi.fn();
+  prisma.travelDiagnostic.findFirst = vi.fn();
   prisma.travelEmailTemplate.findMany = vi.fn();
   prisma.travelEmailTemplate.createMany = vi.fn();
   prisma.travelEmailTemplate.updateMany = vi.fn();
@@ -38,10 +46,25 @@ beforeEach(() => {
   prisma.travelEmailEnrollment.create = vi.fn();
   prisma.travelEmailEnrollment.findMany = vi.fn().mockResolvedValue([]);
   prisma.travelEmailDeliveryLog.create = vi.fn();
+  prisma.travelEmailDeliveryLog.findFirst = vi.fn();
   mockedSendEmail.mockReset().mockResolvedValue({ sent: true });
 });
 
 describe("Travel email automation", () => {
+  test("uses tenant text branding when no logo is configured", async () => {
+    prisma.tenant.findUnique.mockResolvedValue({ logoUrl: null, brandColor: null });
+
+    const html = await automation.renderTravelEmailHtml({
+      tenantId: 7,
+      subBrand: "tmc",
+      body: "<p>Catalogue details</p>",
+      tenantName: "TMC Travel Team",
+    });
+
+    expect(html).toContain(">TMC Travel Team</div>");
+    expect(html).not.toContain('src="https://crm.globusdemos.com"');
+  });
+
   test("catalogues exactly the requested default and optional events", () => {
     expect(automation.ESSENTIAL_EVENTS).toHaveLength(9);
     expect(automation.OPTIONAL_EVENTS.map(([key]) => key)).toEqual([
@@ -86,6 +109,73 @@ describe("Travel email automation", () => {
     const rendered = automation.renderText("Hi {{recipient.name}} {{account.signInLink}}", { recipient: { name: "Asha" }, account: { signInLink: "/travel/sign-in" } });
     expect(rendered).toBe("Hi Asha /travel/sign-in");
     expect(rendered).not.toMatch(/password/i);
+  });
+
+  test("uses the TMC diagnostic PDF when available", () => {
+    expect(automation.buildDiagnosticReportUrl({
+      id: 72,
+      subBrand: "TMC",
+      tenantSlug: "travel-stall",
+      reportSlugToken: "09771480a28543eb",
+      reportPdfUrl: "/api/uploads/diagnostics/diag-72.pdf",
+    })).toBe("http://localhost:5173/api/uploads/diagnostics/diag-72.pdf");
+  });
+
+  test("uses the full public diagnostic report when a TMC PDF is unavailable", () => {
+    expect(automation.buildDiagnosticReportUrl({
+      id: 72,
+      subBrand: "TMC",
+      tenantSlug: "travel-stall",
+      reportSlugToken: "09771480a28543eb",
+      reportPdfUrl: null,
+    })).toBe("http://localhost:5173/diagnostic-form/travel-stall/tmc/report/72-09771480a28543eb");
+    expect(automation.buildDiagnosticReportUrl({
+      id: 72,
+      subBrand: "TMC",
+      reportSlugToken: "09771480a28543eb",
+    })).toBe("");
+  });
+
+  test("sends the scheduled TMC diagnostic email to the full public report", async () => {
+    prisma.travelDiagnostic.findMany.mockResolvedValueOnce([{
+      id: 72,
+      tenantId: 7,
+      contactId: 4,
+      subBrand: "tmc",
+      createdAt: new Date(),
+      reportSlugToken: "09771480a28543eb",
+      reportPdfUrl: null,
+    }]);
+    prisma.travelEmailDeliveryLog.findFirst.mockResolvedValueOnce(null);
+    prisma.contact.findFirst.mockResolvedValue({
+      id: 4,
+      name: "Asha Rao",
+      email: "asha@example.com",
+      subBrand: "tmc",
+    });
+    prisma.tenant.findUnique
+      .mockResolvedValueOnce({ slug: "travel-stall" })
+      .mockResolvedValueOnce({ vertical: "travel" })
+      .mockResolvedValueOnce({ name: "Travel Stall", slug: "travel-stall", ownerEmail: "hello@travel.co" })
+      .mockResolvedValueOnce({ logoUrl: null, brandColor: null });
+    prisma.travelEmailTemplate.findMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: 73,
+        eventKey: "diagnostic.completed",
+        subject: "Diagnostic report ready",
+        body: '<a href="{{diagnostic.reportUrl}}">View report</a>',
+        subBrand: "tmc",
+      }]);
+    prisma.travelEmailTemplate.createMany.mockResolvedValueOnce({ count: 12 });
+
+    await automation.sendRecentDiagnosticEmails();
+
+    expect(mockedSendEmail).toHaveBeenCalledWith(expect.objectContaining({
+      to: "asha@example.com",
+      html: expect.stringContaining("/diagnostic-form/travel-stall/tmc/report/72-09771480a28543eb"),
+    }));
+    expect(mockedSendEmail.mock.calls[0][0].html).not.toContain("/p/tmc/report/");
   });
 
   test("includes the account deletion reason in the event context", async () => {
@@ -160,7 +250,7 @@ describe("Travel email automation", () => {
     prisma.travelEmailTemplate.createMany.mockResolvedValueOnce({ count: 11 });
     prisma.contact.findFirst.mockResolvedValueOnce({ id: 4, name: "Asha Rao", email: "asha@example.com", subBrand: "tmc" });
     await expect(automation.processTravelEmailEvent("payment.received", { contactId: 4 }, 2)).resolves.toMatchObject({ templateId: 10, recipientEmail: "asha@example.com" });
-    expect(prisma.travelEmailDeliveryLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ templateId: 10, eventKey: "payment.received", bodyHtml: "Hello Asha Rao" }) }));
+    expect(prisma.travelEmailDeliveryLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ templateId: 10, eventKey: "payment.received", bodyHtml: expect.stringContaining("Hello Asha Rao") }) }));
     expect(prisma.travelEmailSequence.findMany).not.toHaveBeenCalled();
     expect(prisma.travelEmailEnrollment.create).not.toHaveBeenCalled();
     expect(prisma.tenant.findUnique).toHaveBeenNthCalledWith(2, {
@@ -202,7 +292,7 @@ describe("Travel email automation", () => {
     expect(prisma.travelEmailDeliveryLog.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         recipientEmail: "asha@example.com",
-        bodyHtml: "Hello Asha Rao, payment received: 5000",
+        bodyHtml: expect.stringContaining("Hello Asha Rao, payment received: 5000"),
       }),
     }));
   });
@@ -237,7 +327,7 @@ describe("Travel email automation", () => {
     expect(prisma.travelEmailDeliveryLog.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         subject: "Payment received for Bali Family Tour",
-        bodyHtml: "Payment received for Bali Family Tour",
+        bodyHtml: expect.stringContaining("Payment received for Bali Family Tour"),
       }),
     }));
   });

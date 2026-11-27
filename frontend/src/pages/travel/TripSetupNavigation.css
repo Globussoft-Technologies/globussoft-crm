@@ -22,6 +22,28 @@ body:has(.ts-float) .landing-builder {
 .ts-trip-header>div {min-width:0;overflow-wrap:anywhere}
 .ts-trip-header svg {flex-shrink:0}
 .ts-trip-header .ts-header {width:100%;justify-self:center}
+.ts-trip-title-row {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-bottom:6px;
+  min-width:0;
+}
+.ts-trip-title-row h1 {min-width:0;overflow-wrap:anywhere}
+.ts-trip-duration-badge {
+  display:inline-flex;
+  align-items:center;
+  flex-shrink:0;
+  padding:3px 9px;
+  border:1px solid #aeb4ff;
+  border-radius:999px;
+  background:#eef0ff;
+  color:#4b57d9;
+  font-size:12px;
+  font-weight:700;
+  line-height:1.2;
+  white-space:nowrap;
+}
 .travel-trip-detail-tabs {
   display:flex;flex-wrap:wrap;gap:4px;margin:16px 0;
   border-bottom:1px solid var(--border-color);

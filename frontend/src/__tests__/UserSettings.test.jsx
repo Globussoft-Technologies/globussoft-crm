@@ -64,6 +64,8 @@ vi.mock('../utils/notify', () => ({
 }));
 
 import UserSettings from '../pages/UserSettings';
+import NotificationEmailCcSettings from '../components/NotificationEmailCcSettings';
+import { AuthContext } from '../App';
 
 const SAMPLE_PREFS = {
   categoryToggles: {
@@ -135,6 +137,165 @@ describe('UserSettings (Notification Settings)', () => {
     fetchApiMock.mockImplementation(() => new Promise(() => {}));
     render(<UserSettings />);
     expect(screen.getByText(/Loading preferences/i)).toBeInTheDocument();
+  });
+
+  it('opens email notification settings from the gear without toggling email delivery', async () => {
+    setSuccessfulLoad();
+    const user = userEvent.setup();
+    render(
+      <AuthContext.Provider value={{ user: { role: 'ADMIN' }, tenant: { vertical: 'generic' } }}>
+        <UserSettings />
+      </AuthContext.Provider>,
+    );
+
+    const emailToggle = await screen.findByRole('checkbox', { name: 'Email', exact: true });
+    expect(emailToggle).toBeChecked();
+    expect(screen.queryByRole('heading', { name: 'Email notification settings' })).toBeNull();
+
+    await user.click(screen.getByRole('button', { name: 'Open email notification settings' }));
+    expect(await screen.findByRole('heading', { name: 'Email notification settings' })).toBeInTheDocument();
+    expect(emailToggle).toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: 'Close email notification settings' }));
+    expect(screen.queryByRole('heading', { name: 'Email notification settings' })).toBeNull();
+  });
+
+  describe('NotificationEmailCcSettings', () => {
+    it('lets admins select tenant staff and add alternate addresses as CC recipients', async () => {
+      fetchApiMock.mockImplementation((url, options) => {
+        if (url === '/api/notifications/email-cc-recipients' && !options) {
+          return Promise.resolve({
+            staff: [
+              { id: 14, name: 'Jordan Staff', email: 'jordan@example.com' },
+              { id: 15, name: 'Morgan Team', email: 'morgan@example.com' },
+            ],
+            recipients: { staffUserIds: [], externalEmails: [] },
+            receiverEmail: 'admin@example.com',
+            defaultReceiverEmail: 'admin@example.com',
+          });
+        }
+        if (url === '/api/notifications/email-cc-recipients' && options?.method === 'PUT') {
+          return Promise.resolve({
+            recipients: { staffUserIds: [14], externalEmails: ['copy@example.com'] },
+            receiverEmail: 'alerts@example.com',
+            defaultReceiverEmail: 'admin@example.com',
+          });
+        }
+        return Promise.resolve({});
+      });
+      const user = userEvent.setup();
+      render(<NotificationEmailCcSettings isAdmin />);
+
+      const addPerson = await screen.findByRole('button', { name: 'Add person' });
+      expect(screen.queryByRole('textbox', { name: 'Search staff by name or email' })).toBeNull();
+      await user.click(addPerson);
+      const search = await screen.findByRole('textbox', { name: 'Search staff by name or email' });
+      await user.type(search, 'jordan@');
+      expect(await screen.findByRole('checkbox', {
+        name: 'Jordan Staff (jordan@example.com)',
+      })).toBeInTheDocument();
+      expect(screen.queryByRole('checkbox', { name: 'Morgan Team (morgan@example.com)' })).toBeNull();
+      await user.click(screen.getByRole('button', { name: 'Close staff picker' }));
+      await user.click(screen.getByRole('button', { name: 'Add person' }));
+      const searchByName = await screen.findByRole('textbox', { name: 'Search staff by name or email' });
+      await user.type(searchByName, 'Jordan Staff');
+      expect(screen.getByRole('checkbox', { name: 'Jordan Staff (jordan@example.com)' })).toBeInTheDocument();
+      await user.click(screen.getByRole('checkbox', { name: 'Jordan Staff (jordan@example.com)' }));
+      await user.click(screen.getByRole('button', { name: 'Close staff picker' }));
+      expect(screen.getByText('Jordan Staff')).toBeInTheDocument();
+      expect(screen.queryByRole('textbox', { name: 'Search staff by name or email' })).toBeNull();
+      const emailInput = screen.getByLabelText('Add an email address');
+      await user.type(emailInput, 'copy@example.com');
+      await user.click(screen.getByRole('button', { name: 'Add', exact: true }));
+      expect(screen.getByText('copy@example.com')).toBeInTheDocument();
+      expect(screen.queryByText(/No CC recipients added yet/)).toBeNull();
+      expect(screen.getByLabelText('Default notification receiver email')).toHaveValue('admin@example.com');
+      await user.click(screen.getByRole('button', { name: 'Use account email' }));
+      expect(screen.getByLabelText('Default notification receiver email')).toHaveValue('admin@example.com');
+      await user.clear(screen.getByLabelText('Default notification receiver email'));
+      await user.type(screen.getByLabelText('Default notification receiver email'), 'alerts@example.com');
+      await user.click(screen.getByRole('button', { name: 'Save email settings' }));
+
+      await waitFor(() => {
+        expect(fetchApiMock).toHaveBeenCalledWith('/api/notifications/email-cc-recipients', {
+          method: 'PUT',
+          body: JSON.stringify({
+            staffUserIds: [14],
+            externalEmails: ['copy@example.com'],
+            receiverEmail: 'alerts@example.com',
+          }),
+        });
+      });
+      expect(notifySuccess).toHaveBeenCalledWith('Email settings saved');
+    });
+
+    it('cancels unsaved recipient and receiver changes', async () => {
+      fetchApiMock.mockResolvedValue({
+        staff: [],
+        recipients: { staffUserIds: [], externalEmails: ['saved@example.com'] },
+        receiverEmail: 'admin@example.com',
+        defaultReceiverEmail: 'admin@example.com',
+      });
+      const user = userEvent.setup();
+      render(<NotificationEmailCcSettings isAdmin />);
+
+      const emailInput = await screen.findByLabelText('Add an email address');
+      await user.type(emailInput, 'draft@example.com');
+      await user.click(screen.getByRole('button', { name: 'Add', exact: true }));
+      await user.clear(screen.getByLabelText('Default notification receiver email'));
+      await user.type(screen.getByLabelText('Default notification receiver email'), 'changed@example.com');
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      expect(screen.getByText('saved@example.com')).toBeInTheDocument();
+      expect(screen.queryByText('draft@example.com')).toBeNull();
+      expect(screen.getByLabelText('Default notification receiver email')).toHaveValue('admin@example.com');
+      expect(fetchApiMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the default receiver unchanged when an additional CC email is added', async () => {
+      fetchApiMock.mockImplementation((url, options) => {
+        if (url === '/api/notifications/email-cc-recipients' && !options) {
+          return Promise.resolve({
+            staff: [],
+            recipients: { staffUserIds: [], externalEmails: [] },
+            receiverEmail: 'admin@example.com',
+            defaultReceiverEmail: 'admin@example.com',
+          });
+        }
+        if (url === '/api/notifications/email-cc-recipients' && options?.method === 'PUT') {
+          return Promise.resolve({
+            recipients: { staffUserIds: [], externalEmails: ['copy@example.com'] },
+            receiverEmail: 'admin@example.com',
+            defaultReceiverEmail: 'admin@example.com',
+          });
+        }
+        return Promise.resolve({});
+      });
+      const user = userEvent.setup();
+      render(<NotificationEmailCcSettings isAdmin />);
+
+      await user.type(await screen.findByLabelText('Add an email address'), 'copy@example.com');
+      await user.click(screen.getByRole('button', { name: 'Add', exact: true }));
+      expect(screen.getByLabelText('Default notification receiver email')).toHaveValue('admin@example.com');
+      await user.click(screen.getByRole('button', { name: 'Save email settings' }));
+
+      await waitFor(() => {
+        expect(fetchApiMock).toHaveBeenCalledWith('/api/notifications/email-cc-recipients', {
+          method: 'PUT',
+          body: JSON.stringify({
+            staffUserIds: [],
+            externalEmails: ['copy@example.com'],
+            receiverEmail: 'admin@example.com',
+          }),
+        });
+      });
+    });
+
+    it('does not render recipient management for non-admins', () => {
+      const { container } = render(<NotificationEmailCcSettings isAdmin={false} />);
+      expect(container).toBeEmptyDOMElement();
+      expect(fetchApiMock).not.toHaveBeenCalled();
+    });
   });
 
   it('fetches /api/notifications/preferences on mount', async () => {
@@ -341,7 +502,7 @@ describe('UserSettings (Notification Settings)', () => {
     expect(leadsCheckbox.checked).toBe(true);
   });
 
-  it('toggles a channel checkbox optimistically when clicked', async () => {
+  it('saves a delivery channel immediately when toggled', async () => {
     const user = userEvent.setup();
     setSuccessfulLoad();
     render(<UserSettings />);
@@ -350,9 +511,44 @@ describe('UserSettings (Notification Settings)', () => {
     });
     // "Browser Push" starts at false in SAMPLE_PREFS.
     const pushCheckbox = screen.getByText('Browser Push').closest('label').querySelector('input[type="checkbox"]');
+    const leadsCheckbox = screen.getByText('Leads').closest('label').querySelector('input[type="checkbox"]');
     expect(pushCheckbox.checked).toBe(false);
+    await user.click(leadsCheckbox);
+    expect(leadsCheckbox.checked).toBe(true);
     await user.click(pushCheckbox);
     expect(pushCheckbox.checked).toBe(true);
+
+    await waitFor(() => {
+      const put = fetchApiMock.mock.calls.find(([url, options]) =>
+        url === '/api/notifications/preferences' && options?.method === 'PUT'
+      );
+      expect(put).toBeDefined();
+      const body = JSON.parse(put[1].body);
+      expect(body.channels.push).toBe(true);
+      // Category edits remain drafts for the explicit Save Preferences action.
+      expect(body.categoryToggles.lead).toBe(false);
+    });
+    expect(screen.getByText(/Changes save automatically/i)).toBeInTheDocument();
+  });
+
+  it('restores a delivery channel when its automatic save fails', async () => {
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/notifications/preferences' && options?.method === 'PUT') {
+        return Promise.reject(new Error('500'));
+      }
+      if (url === '/api/notifications/preferences') return Promise.resolve(SAMPLE_PREFS);
+      if (url === '/api/pages/me') return Promise.resolve({ pages: ALL_CATEGORY_PATHS });
+      return Promise.resolve({});
+    });
+    const user = userEvent.setup();
+    render(<UserSettings />);
+
+    const pushCheckbox = await screen.findByRole('checkbox', { name: 'Browser Push' });
+    expect(pushCheckbox).not.toBeChecked();
+    await user.click(pushCheckbox);
+
+    await waitFor(() => expect(pushCheckbox).not.toBeChecked());
+    expect(notifyError).toHaveBeenCalledWith('Failed to update delivery channel');
   });
 
   it('Save sends PUT /api/notifications/preferences and shows success notify', async () => {

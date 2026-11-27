@@ -393,6 +393,7 @@ describe('filterSidebarPages', () => {
       '/settings',
       '/settings/roles',
       '/audit-log',
+      '/notifications',
       '/developer',
       '/privacy',
       '/admin/brand-kits',

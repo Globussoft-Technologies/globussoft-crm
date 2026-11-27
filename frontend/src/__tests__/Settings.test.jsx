@@ -1446,6 +1446,23 @@ describe("<Settings /> — extended card coverage", () => {
     expect(screen.getAllByText("Email").length).toBeGreaterThanOrEqual(1);
   });
 
+  it("saves a delivery channel immediately without Save Preferences", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    const pushCheckbox = await screen.findByRole("checkbox", { name: "Browser Push" });
+
+    await user.click(pushCheckbox);
+
+    await waitFor(() => {
+      const put = fetchApiMock.mock.calls.find(
+        ([url, opts]) => url === "/api/notifications/preferences" && opts?.method === "PUT",
+      );
+      expect(put).toBeDefined();
+      expect(JSON.parse(put[1].body).channels.push).toBe(true);
+    });
+    expect(screen.getByText(/Changes save automatically/i)).toBeInTheDocument();
+  });
+
   // 22 — Notification Preferences: Save PUTs /api/notifications/preferences with state
   it("Save Preferences PUTs /api/notifications/preferences with the toggled state", async () => {
     const user = userEvent.setup();

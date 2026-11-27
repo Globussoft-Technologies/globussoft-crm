@@ -6,7 +6,7 @@
 // user only sees TMC counts; admins see everything.
 //
 // Tiles (each is a small card):
-//   - Active trips      total + by-status row + upcoming-30d highlight
+//   - TMC trips         total + by-status row + upcoming-30d highlight
 //   - Diagnostics 30d   total + classification breakdown
 //   - Itineraries       total + by-status row
 //   - Landing pages     total + published
@@ -51,6 +51,7 @@ export default function TravelDashboard() {
   const [readiness, setReadiness] = useState(null);
   const [showReadiness, setShowReadiness] = useState(false);
   const hasDataRef = useRef(false);
+  const upcomingTripsHref = buildUpcomingTripsHref();
 
   const loadReadiness = () => {
     fetchApi("/api/travel/dashboard/readiness")
@@ -154,15 +155,27 @@ export default function TravelDashboard() {
       ) : (
         <>
           <div className="travel-dashboard-kpi-grid" style={gridStyle}>
-            <Tile
-              icon={Luggage}
-              label="Active trips"
-              value={data.trips.total}
-              footer={byKeyFooter(data.trips.byStatus)}
-              accent={`${data.trips.upcoming30d} departing in 30 days`}
-              link="/travel/trips"
-              statusLinks={statusLinksFor("/travel/trips", ["confirmed", "in-trip", "completed", "cancelled"])}
-            />
+            {(!activeSubBrand || activeSubBrand === "tmc") && (
+              <Tile
+                icon={Luggage}
+                label="TMC trips"
+                value={data.trips.total}
+                footer={byKeyFooter(data.trips.byStatus)}
+                accent={(
+                  <Link
+                    to={upcomingTripsHref}
+                    state={dashboardNavigationState("travel")}
+                    onClick={(event) => event.stopPropagation()}
+                    aria-label={`Show ${data.trips.upcoming30d} TMC trips departing in the next 30 days`}
+                    style={{ color: "var(--text-secondary)", textDecoration: "none", fontWeight: "inherit" }}
+                  >
+                    {data.trips.upcoming30d} departing in 30 days
+                  </Link>
+                )}
+                link="/travel/trips"
+                statusLinks={statusLinksFor("/travel/trips", ["confirmed", "in-trip", "completed", "cancelled"])}
+              />
+            )}
             <Tile
               icon={ClipboardCheck}
               label="Diagnostics (last 30 days)"
@@ -362,6 +375,21 @@ export default function TravelDashboard() {
 }
 
 // ─── Building blocks ────────────────────────────────────────────────
+
+function localDateParam(date) {
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 10);
+}
+
+function buildUpcomingTripsHref(now = new Date()) {
+  const through = new Date(now);
+  through.setDate(through.getDate() + 30);
+  const params = new URLSearchParams({
+    departFrom: localDateParam(now),
+    departTo: localDateParam(through),
+  });
+  return `/travel/trips?${params.toString()}`;
+}
 
 function Tile({ icon: Icon, label, value, footer, accent, link, statusLinks, onClick, style }) {
   const [isHovered, setIsHovered] = useState(false);

@@ -108,7 +108,7 @@ describe("generic product tours", () => {
   });
 
   it("registers every generic sidebar destination, including hard-coded omissions", () => {
-    expect(GENERIC_FEATURE_TOURS).toHaveLength(97);
+    expect(GENERIC_FEATURE_TOURS).toHaveLength(98);
     const tourIds = GENERIC_FEATURE_TOURS.map((tour) => tour.id);
     expect(tourIds).toEqual(
       expect.arrayContaining([
@@ -124,7 +124,7 @@ describe("generic product tours", () => {
   });
 
   it("has a detailed capability profile for every module beyond the four hand-authored tours", () => {
-    expect(GENERIC_TOUR_PROFILE_IDS).toHaveLength(82);
+    expect(GENERIC_TOUR_PROFILE_IDS).toHaveLength(83);
     expect(GENERIC_TOUR_PROFILE_IDS).toContain("field-config");
     expect(GENERIC_TOUR_PROFILE_IDS).toContain("commissions");
     const detailedTours = GENERIC_FEATURE_TOURS.filter(

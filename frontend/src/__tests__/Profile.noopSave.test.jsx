@@ -8,15 +8,12 @@
  * the audit log with no-op rows.
  *
  * Fix: handleUpdateProfile compares the form state (name, email) against
- * the baseline loaded from /api/auth/me. If nothing changed, return early
- * without firing the network call and surface a neutral "No changes to
- * save" message instead of the success toast. If something changed, send
- * ONLY the changed fields.
+ * the baseline loaded from /api/auth/me. Save stays disabled until the form
+ * has valid changes. If something changed, send ONLY the changed fields.
  *
  * Contracts pinned here:
  *   1. Save with no field changes does NOT call fetchApi('/api/auth/me', PUT).
- *   2. Save with no changes shows a neutral "No changes to save" message,
- *      not the success toast.
+ *   2. Save with no changes remains disabled and does not show success.
  *   3. Save with only `name` changed sends PUT with body {name} only —
  *      `email` is omitted from the body.
  *   4. Save with both fields changed sends PUT with both fields.
@@ -93,11 +90,55 @@ describe('<Profile /> — empty PATCH skip (#606)', () => {
     setupApi();
   });
 
+  it('starts in read-only view mode with edit controls hidden', async () => {
+    renderProfile();
+    await waitFor(() => expect(screen.getByRole('heading', { name: /profile details/i })).toBeInTheDocument());
+
+    expect(screen.getByDisplayValue('Rishu Sharma')).toHaveAttribute('readonly');
+    expect(screen.getByDisplayValue('rishu@enhancedwellness.in')).toHaveAttribute('readonly');
+    expect(screen.getByLabelText('Role')).toHaveAttribute('readonly');
+    expect(screen.getByRole('button', { name: /edit profile details/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /save changes/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument();
+  });
+
+  it('Cancel discards unsaved values and returns to view mode', async () => {
+    renderProfile();
+    await waitFor(() => expect(screen.getByDisplayValue('Rishu Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /edit profile details/i }));
+    const nameInput = screen.getByDisplayValue('Rishu Sharma');
+    fireEvent.change(nameInput, { target: { value: 'Unsaved Name' } });
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+
+    expect(screen.getByDisplayValue('Rishu Sharma')).toHaveAttribute('readonly');
+    expect(screen.queryByDisplayValue('Unsaved Name')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /save changes/i })).not.toBeInTheDocument();
+    expect(getPutCalls()).toHaveLength(0);
+  });
+
+  it('enables Save only for valid changes', async () => {
+    renderProfile();
+    await waitFor(() => expect(screen.getByDisplayValue('Rishu Sharma')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /edit profile details/i }));
+    const emailInput = screen.getByDisplayValue('rishu@enhancedwellness.in');
+    fireEvent.change(emailInput, { target: { value: 'invalid-email' } });
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeDisabled();
+
+    fireEvent.change(emailInput, { target: { value: 'rishu.updated@example.com' } });
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeEnabled();
+  });
+
   it('does NOT call fetchApi PUT /api/auth/me when no fields changed', async () => {
     renderProfile();
     await waitFor(() => expect(screen.getByDisplayValue('Rishu Sharma')).toBeInTheDocument());
 
+    fireEvent.click(screen.getByRole('button', { name: /edit profile details/i }));
     const saveBtn = screen.getByRole('button', { name: /Save Changes/i });
+    expect(saveBtn).toBeDisabled();
     fireEvent.click(saveBtn);
 
     // Wait a tick to make sure no async PUT slips through.
@@ -105,17 +146,15 @@ describe('<Profile /> — empty PATCH skip (#606)', () => {
     expect(getPutCalls()).toHaveLength(0);
   });
 
-  it('shows the neutral "No changes to save" message when Save fires with no changes', async () => {
+  it('does not show a result message when Save is disabled with no changes', async () => {
     renderProfile();
     await waitFor(() => expect(screen.getByDisplayValue('Rishu Sharma')).toBeInTheDocument());
 
+    fireEvent.click(screen.getByRole('button', { name: /edit profile details/i }));
     const saveBtn = screen.getByRole('button', { name: /Save Changes/i });
     fireEvent.click(saveBtn);
 
-    await waitFor(() => {
-      expect(screen.getByText(/No changes to save/i)).toBeInTheDocument();
-    });
-    // The misleading success toast must NOT appear.
+    expect(screen.queryByText(/No changes to save/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Profile updated successfully/i)).not.toBeInTheDocument();
   });
 
@@ -124,6 +163,7 @@ describe('<Profile /> — empty PATCH skip (#606)', () => {
     renderProfile();
     await waitFor(() => expect(screen.getByDisplayValue('Rishu Sharma')).toBeInTheDocument());
 
+    fireEvent.click(screen.getByRole('button', { name: /edit profile details/i }));
     const nameInput = screen.getByDisplayValue('Rishu Sharma');
     fireEvent.change(nameInput, { target: { value: 'Rishu S.' } });
 
@@ -141,6 +181,7 @@ describe('<Profile /> — empty PATCH skip (#606)', () => {
     renderProfile();
     await waitFor(() => expect(screen.getByDisplayValue('Rishu Sharma')).toBeInTheDocument());
 
+    fireEvent.click(screen.getByRole('button', { name: /edit profile details/i }));
     fireEvent.change(screen.getByDisplayValue('Rishu Sharma'), { target: { value: 'Rishu S.' } });
     fireEvent.change(screen.getByDisplayValue('rishu@enhancedwellness.in'), { target: { value: 'rs@enhancedwellness.in' } });
 

@@ -244,6 +244,7 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     expect(within(picker).getByRole('checkbox', { name: 'Service Type' })).toBeEnabled();
     expect(within(picker).queryByRole('checkbox', { name: 'UTM Source' })).toBeNull();
     expect(within(picker).getByRole('button', { name: 'Select all fields' })).toBeVisible();
+    expect(within(picker).getByRole('button', { name: 'Deselect selected fields' })).toBeVisible();
 
     fireEvent.click(within(picker).getByRole('checkbox', { name: 'Service Type' }));
     fireEvent.click(within(picker).getByRole('button', { name: 'Apply' }));
@@ -266,7 +267,7 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     });
   });
 
-  it('toggles between selecting and deselecting all optional Generic Create Lead fields', async () => {
+  it('keeps deselect selected available when some optional Generic fields are selected', async () => {
     renderLeads({
       user: { userId: 1, role: 'ADMIN' },
       tenant: { id: 1, vertical: 'generic' },
@@ -284,11 +285,17 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     });
 
     fireEvent.click(within(picker).getByRole('button', { name: 'Select all fields' }));
-    expect(within(picker).getByRole('button', { name: 'Deselect all fields' })).toBeVisible();
+    expect(within(picker).getByRole('button', { name: 'Select all fields' })).toBeVisible();
+    expect(within(picker).getByRole('button', { name: 'Deselect selected fields' })).toBeVisible();
     expect(within(picker).getByRole('checkbox', { name: 'Company' })).toBeChecked();
 
-    fireEvent.click(within(picker).getByRole('button', { name: 'Deselect all fields' }));
+    fireEvent.click(within(picker).getByRole('checkbox', { name: 'Company' }));
     expect(within(picker).getByRole('button', { name: 'Select all fields' })).toBeVisible();
+    expect(within(picker).getByRole('button', { name: 'Deselect selected fields' })).toBeVisible();
+
+    fireEvent.click(within(picker).getByRole('button', { name: 'Deselect selected fields' }));
+    expect(within(picker).getByRole('button', { name: 'Select all fields' })).toBeVisible();
+    expect(within(picker).queryByRole('button', { name: 'Deselect selected fields' })).toBeNull();
     expect(within(picker).getByRole('checkbox', { name: 'Company' })).not.toBeChecked();
     expect(within(picker).getByRole('checkbox', { name: 'Full Name' })).toBeChecked();
     expect(within(picker).getByRole('checkbox', { name: 'Full Name' })).toBeDisabled();
@@ -335,6 +342,37 @@ describe('Leads  Create Lead form client-side hardening (#557)', () => {
     const picker = await screen.findByRole('dialog', { name: 'Customize Create Lead fields' });
     expect(within(picker).getByRole('checkbox', { name: 'Require Email Address' })).toBeChecked();
     expect(within(picker).getByRole('checkbox', { name: 'Require Email Address' })).toBeDisabled();
+  });
+
+  it('syncs tenant-required Job Title and allows Customize fields to clear it', async () => {
+    window.localStorage.setItem('globuscrm.leads.createFields.v3.1.1', JSON.stringify({
+      visible: ['name', 'email', 'title'], required: ['name'],
+    }));
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/tenant-settings/generic.fieldConfig') {
+        return Promise.resolve({ value: JSON.stringify({ fieldOverrides: { title: { required: true } } }) });
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderLeads({ user: { userId: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'generic' }, loading: false });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/tenant-settings/generic.fieldConfig', { silent: true }));
+    openDrawer();
+    const dialog = screen.getByRole('dialog', { name: 'Create Lead' });
+    expect(within(dialog).getByPlaceholderText('Job Title')).toBeRequired();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Customize Create Lead fields' }));
+    const picker = await screen.findByRole('dialog', { name: 'Customize Create Lead fields' });
+    expect(within(picker).getByRole('checkbox', { name: 'Require Job Title' })).toBeChecked();
+    expect(within(picker).getByRole('checkbox', { name: 'Require Job Title' })).toBeEnabled();
+    fireEvent.click(within(picker).getByRole('checkbox', { name: 'Require Job Title' }));
+    fireEvent.click(within(picker).getByRole('button', { name: 'Apply' }));
+    expect(within(dialog).getByPlaceholderText('Job Title')).not.toBeRequired();
+    await waitFor(() => {
+      const settingsPut = fetchApiMock.mock.calls.find(([url, options]) =>
+        url === '/api/tenant-settings/generic.fieldConfig' && options?.method === 'PUT');
+      expect(settingsPut).toBeDefined();
+      const request = JSON.parse(settingsPut[1].body);
+      expect(JSON.parse(request.value).fieldOverrides.title.required).toBe(false);
+    });
   });
 
   it('rejects <script> tags in the name and never POSTs', async () => {
@@ -936,13 +974,17 @@ describe('Leads Freshsales-style list UI affordances', () => {
       if (url === '/api/pickup-plot-inventory/customer-pickups/101/plots' && opts?.method === 'POST') {
         return Promise.resolve({ bookingsCreated: 2, assignedPlotIds: [30, 31, 32] });
       }
-      if (typeof url === 'string' && url.startsWith('/api/contacts/filter-values/tags')) {
+      if (url === '/api/contacts/tags' && !opts?.method) {
         return Promise.resolve({
-          values: [
-            { value: 'Strategic', label: 'Strategic' },
-            { value: 'Returning', label: 'Returning' },
+          tags: [
+            { name: 'Strategic', color: '#2563eb' },
+            { name: 'Returning', color: '#059669' },
           ],
         });
+      }
+      if (url === '/api/contacts/tags' && opts?.method === 'POST') {
+        const body = JSON.parse(opts.body);
+        return Promise.resolve({ ...body, color: body.color.toLowerCase() });
       }
       if (url === '/api/staff' && !opts) {
         return Promise.resolve([{ id: 7, name: 'Maya Rao', email: 'maya@example.com', role: 'USER' }]);
@@ -1513,6 +1555,12 @@ describe('Leads Freshsales-style list UI affordances', () => {
     const aliceLink = await screen.findByRole('link', { name: 'Alice Lead' });
     expect(aliceLink).toHaveAttribute('href', '/leads/101?page=1&limit=10');
 
+    navigateMock.mockClear();
+    const pathBeforeRowClick = screen.getByTestId('router-location').getAttribute('data-pathname');
+    fireEvent.click(aliceLink.closest('tr'));
+    expect(screen.getByTestId('router-location')).toHaveAttribute('data-pathname', pathBeforeRowClick);
+    expect(navigateMock).not.toHaveBeenCalled();
+
     fireEvent.click(aliceLink);
     const location = screen.getByTestId('router-location');
     expect(location).toHaveAttribute('data-pathname', '/leads/101');
@@ -1600,16 +1648,133 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(notifySuccess).toHaveBeenCalledWith('Lead updated');
   });
 
+  it('rejects an invalid inline email in Generic CRM without sending an update', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('alice@example.com');
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByLabelText('Edit Email for Alice Lead'));
+    const emailInput = screen.getByLabelText('Edit Email for Alice Lead');
+    fireEvent.change(emailInput, { target: { value: 'testcase@gmail-.com' } });
+    fireEvent.blur(emailInput);
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        'The character "-" is not allowed after @. Use only letters, numbers, and dots in the domain (e.g. name@gmail.com).',
+      );
+    });
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      '/api/contacts/101',
+      expect.objectContaining({ method: 'PUT' }),
+    );
+    expect(emailInput).toHaveValue('testcase@gmail-.com');
+  });
+
+  it('rejects a plus character in a Generic CRM email', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('alice@example.com');
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByLabelText('Edit Email for Alice Lead'));
+    const emailInput = screen.getByLabelText('Edit Email for Alice Lead');
+    fireEvent.change(emailInput, { target: { value: 'alice+@gmail.com' } });
+    fireEvent.blur(emailInput);
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        'The character "+" is not allowed before @. Only letters, numbers, dots, and underscores are allowed (e.g. first_name@gmail.com).',
+      );
+    });
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      '/api/contacts/101',
+      expect.objectContaining({ method: 'PUT' }),
+    );
+    expect(emailInput).toHaveValue('alice+@gmail.com');
+  });
+
+  it('rejects a hyphen anywhere before @ in a Generic CRM email', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('alice@example.com');
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByLabelText('Edit Email for Alice Lead'));
+    const emailInput = screen.getByLabelText('Edit Email for Alice Lead');
+    fireEvent.change(emailInput, { target: { value: 'testc-ase@gmail.com' } });
+    fireEvent.blur(emailInput);
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        'The character "-" is not allowed before @. Only letters, numbers, dots, and underscores are allowed (e.g. first_name@gmail.com).',
+      );
+    });
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      '/api/contacts/101',
+      expect.objectContaining({ method: 'PUT' }),
+    );
+    expect(emailInput).toHaveValue('testc-ase@gmail.com');
+  });
+
+  it('rejects unsupported special characters in a Generic CRM email', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('alice@example.com');
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByLabelText('Edit Email for Alice Lead'));
+    const emailInput = screen.getByLabelText('Edit Email for Alice Lead');
+    fireEvent.change(emailInput, { target: { value: 'ali\\#$%^&*()ce@gmail.com' } });
+    fireEvent.blur(emailInput);
+
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        'The character "\\" is not allowed before @. Only letters, numbers, dots, and underscores are allowed (e.g. first_name@gmail.com).',
+      );
+    });
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      '/api/contacts/101',
+      expect.objectContaining({ method: 'PUT' }),
+    );
+    expect(emailInput).toHaveValue('ali\\#$%^&*()ce@gmail.com');
+  });
+
+  it('allows dots and underscores in the username of a Generic CRM email', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('alice@example.com');
+    fetchApiMock.mockClear();
+
+    fireEvent.click(screen.getByLabelText('Edit Email for Alice Lead'));
+    const emailInput = screen.getByLabelText('Edit Email for Alice Lead');
+    fireEvent.change(emailInput, { target: { value: 'first_name.sales@gmail.com' } });
+    fireEvent.blur(emailInput);
+
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith(
+        '/api/contacts/101',
+        expect.objectContaining({
+          method: 'PUT',
+          body: JSON.stringify({ email: 'first_name.sales@gmail.com' }),
+        }),
+      );
+    });
+    expect(notifyError).not.toHaveBeenCalled();
+  });
+
   it('renders Tags as a default column and saves multiple selected tags', async () => {
     renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
     expect(screen.getByText('Tags')).toBeInTheDocument();
 
-    const tagCell = screen.getByText('Warm').closest('.lead-tags-cell');
+    const tagCell = screen.getByText('VIP').closest('.lead-tags-cell');
     const aliceTags = within(tagCell);
-    expect(aliceTags.getByText('Warm')).toBeInTheDocument();
     expect(aliceTags.getByText('VIP')).toBeInTheDocument();
+    expect(aliceTags.getByText('VIP')).toHaveStyle({ background: '#0891b2' });
+    expect(aliceTags.queryByText('Warm')).toBeNull();
+    expect(aliceTags.getByRole('button', { name: 'View all tags for Alice Lead' })).toHaveTextContent('+1 More');
     const editButton = screen.getByLabelText('Edit Tags for Alice Lead');
     expect(editButton).toHaveStyle({ opacity: '0' });
     fireEvent.mouseEnter(tagCell);
@@ -1619,6 +1784,10 @@ describe('Leads Freshsales-style list UI affordances', () => {
     fireEvent.click(editButton);
 
     const dialog = await screen.findByRole('dialog', { name: 'Edit Tags for Alice Lead' });
+    const selectedTags = within(dialog).getByLabelText('Selected tags');
+    expect(within(selectedTags).getByText('VIP').closest('.lead-tag-chip')).toHaveStyle({
+      background: '#0891b2',
+    });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Search existing' }));
 
     const searchInput = within(dialog).getByPlaceholderText('Search saved tags');
@@ -1628,7 +1797,16 @@ describe('Leads Freshsales-style list UI affordances', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add new' }));
     const newTagInput = within(dialog).getByPlaceholderText('Type a new tag');
     fireEvent.change(newTagInput, { target: { value: 'Enterprise' } });
+    fireEvent.change(within(dialog).getByLabelText('New tag color'), {
+      target: { value: '#db2777' },
+    });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Add new tag' }));
+    await waitFor(() => {
+      expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/tags', expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ name: 'Enterprise', color: '#db2777' }),
+      }));
+    });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
@@ -1639,11 +1817,12 @@ describe('Leads Freshsales-style list UI affordances', () => {
     });
 
     await waitFor(() => {
-      expect(aliceTags.getByText('Warm')).toBeInTheDocument();
-      expect(aliceTags.getByText('VIP')).toBeInTheDocument();
-      expect(aliceTags.getByText('Strategic')).toBeInTheDocument();
       expect(aliceTags.getByText('Enterprise')).toBeInTheDocument();
-      expect(aliceTags.queryByText('+2')).toBeNull();
+      expect(aliceTags.getByText('Enterprise')).toHaveStyle({ background: '#db2777' });
+      expect(aliceTags.queryByText('Warm')).toBeNull();
+      expect(aliceTags.queryByText('VIP')).toBeNull();
+      expect(aliceTags.queryByText('Strategic')).toBeNull();
+      expect(aliceTags.getByRole('button', { name: 'View all tags for Alice Lead' })).toHaveTextContent('+3 More');
     });
 
     fireEvent.click(screen.getByLabelText('Edit Tags for Alice Lead'));
@@ -1653,11 +1832,27 @@ describe('Leads Freshsales-style list UI affordances', () => {
     expect(within(reopenedDialog).getByRole('button', { name: 'Warm' })).toBeInTheDocument();
   });
 
+  it('opens the Generic lead profile from More and requests tag focus', async () => {
+    renderLeads(authValue);
+
+    await screen.findByText('Alice Lead');
+    navigateMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'View all tags for Alice Lead' }));
+
+    expect(navigateMock).toHaveBeenCalledWith('/leads/101?page=1&limit=10', {
+      state: expect.objectContaining({
+        focusTags: true,
+        returnTo: '/leads?page=1&limit=10',
+        leadsListState: { pageIndex: 0, pageSize: 10 },
+      }),
+    });
+  });
+
   it('deletes a saved tag from the catalog without disturbing the lead tag editor', async () => {
     renderLeads(authValue);
 
     await screen.findByText('Alice Lead');
-    const tagCell = screen.getByText('Warm').closest('.lead-tags-cell');
+    const tagCell = screen.getByText('VIP').closest('.lead-tags-cell');
     fireEvent.mouseEnter(tagCell);
     fireEvent.click(screen.getByLabelText('Edit Tags for Alice Lead'));
 
@@ -1723,7 +1918,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
     try {
       renderLeads(authValue);
       await screen.findByText('Alice Lead');
-      fireEvent.click(screen.getByText('Warm').closest('.lead-tags-cell'));
+      fireEvent.click(screen.getByText('VIP').closest('.lead-tags-cell'));
 
       const dialog = await screen.findByRole('dialog', {
         name: 'Edit Tags for Alice Lead',
@@ -1741,7 +1936,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
   });
 
   it('opens the contact profile from the Generic eye action', async () => {
-    renderLeads(authValue);
+    renderLeads(authValue, [{ pathname: '/', state: { focusTags: true } }]);
 
     await screen.findByText('Alice Lead');
     navigateMock.mockClear();
@@ -1755,6 +1950,7 @@ describe('Leads Freshsales-style list UI affordances', () => {
       }),
     });
     expect(navigateMock.mock.calls[0][1].state).not.toHaveProperty('openFullPage');
+    expect(navigateMock.mock.calls[0][1].state).not.toHaveProperty('focusTags');
   });
 
   it('keeps the Travel Convert to Prospect row action unchanged', async () => {
@@ -2451,7 +2647,7 @@ describe('Leads  vertical-aware form schema (#600)', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('generic tenant ?? ? Phone field is hidden and WhatsApp is NOT in Source dropdown', async () => {
+  it('shows the complete searchable country-code catalog for Generic Create Lead', async () => {
     renderLeads(genericAuth);
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalled());
     openDrawer();
@@ -2476,24 +2672,21 @@ describe('Leads  vertical-aware form schema (#600)', () => {
     const countryCode = screen.getByRole('combobox', { name: 'Country code' });
     fireEvent.mouseDown(countryCode);
     const countryOptions = within(await screen.findByRole('listbox', { name: 'Country code' })).getAllByRole('option');
-    expect(countryOptions).toHaveLength(15);
-    fireEvent.click(screen.getByRole('option', { name: '+91' }));
-    expect(countryCode).toHaveValue('+91');
+    expect(countryOptions.length).toBeGreaterThan(200);
+    expect(countryOptions.some((option) => option.textContent.includes('+234'))).toBe(true);
+    expect(countryOptions.some((option) => option.textContent.includes('+998'))).toBe(true);
+    fireEvent.click(screen.getByRole('option', { name: /\+91\s*India/ }));
+    expect(countryCode.value).toContain('+91');
 
     fireEvent.mouseDown(countryCode);
     const countryList = await screen.findByRole('listbox', { name: 'Country code' });
-    expect(within(countryList).getAllByRole('option')).toHaveLength(15);
-    fireEvent.change(countryCode, { target: { value: '+9abc' } });
-    expect(countryCode).toHaveValue('+9');
-    expect(within(countryList).getAllByRole('option').map(option => option.textContent)).toEqual(['+91', '+971']);
-    fireEvent.change(countryCode, { target: { value: '91' } });
-    expect(countryCode).toHaveValue('91');
-    expect(within(countryList).getAllByRole('option').map(option => option.textContent)).toEqual(['+91']);
-    fireEvent.change(countryCode, { target: { value: '+91' } });
-    expect(countryCode).toHaveValue('+91');
-    expect(within(countryList).getAllByRole('option').map(option => option.textContent)).toEqual(['+91']);
-    fireEvent.change(countryCode, { target: { value: '+6' } });
-    expect(within(countryList).getAllByRole('option').map(option => option.textContent)).toEqual(['+61', '+65', '+60']);
+    expect(within(countryList).getAllByRole('option').length).toBeGreaterThan(200);
+    fireEvent.change(countryCode, { target: { value: 'Nigeria' } });
+    expect(within(countryList).getAllByRole('option')).toHaveLength(1);
+    expect(within(countryList).getByRole('option', { name: /\+234\s*Nigeria/ })).toBeVisible();
+    fireEvent.change(countryCode, { target: { value: '+971' } });
+    expect(within(countryList).getAllByRole('option')).toHaveLength(1);
+    expect(within(countryList).getByRole('option', { name: /\+971\s*United Arab Emirates/ })).toBeVisible();
   });
 });
 
@@ -2632,6 +2825,163 @@ describe('Leads  table, search, bulk operations, row actions, drawer dismiss', (
         && url.startsWith('/api/contacts?status=Lead')
         && url.includes('limit=10'),
     )).toBe(true);
+  });
+
+  it('shows only populated, table-editable fields in the Generic row edit modal', async () => {
+    const lead = {
+      ...SAMPLE_LEADS[0],
+      id: 91,
+      name: 'Populated Lead',
+      email: '',
+      company: 'Acme Corp',
+      phone: '+14155550123',
+      tags: ['VIP'],
+      aiScore: 88,
+      browser: 'Chrome',
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        return Promise.resolve({ data: [lead], total: 1, page: 1, limit: 10, totalPages: 1 });
+      }
+      if (url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: ['name', 'email', 'company', 'aiScore', 'browser', 'tags'],
+          availableColumns: [
+            { key: 'name', label: 'Name' },
+            { key: 'email', label: 'Email' },
+            { key: 'company', label: 'Company' },
+            { key: 'aiScore', label: 'Lead Score' },
+            { key: 'browser', label: 'Browser' },
+            { key: 'tags', label: 'Tags' },
+            { key: 'actions', label: 'Actions', lockedVisible: true },
+          ],
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH);
+    await screen.findByText('Populated Lead');
+    fireEvent.click(screen.getByTitle('Edit lead'));
+
+    const dialog = screen.getByRole('dialog', { name: 'Edit Lead' });
+    const modalCard = dialog.querySelector('.card');
+    const editForm = within(dialog).getByRole('button', { name: 'Save Changes' }).closest('form');
+    const fieldsScroll = within(dialog).getByTestId('generic-edit-fields-scroll');
+    const modalHeader = within(dialog).getByText('Edit Lead').parentElement;
+    expect(modalCard).toHaveClass('generic-lead-edit-modal');
+    expect(modalCard).toHaveStyle({ display: 'flex', flexDirection: 'column', overflow: 'hidden' });
+    expect(modalHeader).toHaveStyle({ flexShrink: '0' });
+    expect(editForm).toHaveStyle({ minHeight: '0', overflow: 'hidden' });
+    expect(fieldsScroll).toHaveStyle({ overflowY: 'auto', overflowX: 'hidden' });
+    expect(within(dialog).getByRole('button', { name: 'Save Changes' }).parentElement).toHaveStyle({ flexShrink: '0' });
+    expect(within(dialog).getByLabelText('Name')).toHaveValue('Populated Lead');
+    expect(within(dialog).getByLabelText('Company')).toHaveValue('Acme Corp');
+    expect(within(dialog).getByLabelText('Phone')).toHaveValue('+14155550123');
+    expect(within(dialog).getByLabelText('Tags')).toHaveValue('VIP');
+    expect(within(dialog).queryByLabelText('Email')).toBeNull();
+    expect(within(dialog).queryByLabelText('Lead Score')).toBeNull();
+    expect(within(dialog).queryByLabelText('Browser')).toBeNull();
+
+    fireEvent.change(within(dialog).getByLabelText('Company'), {
+      target: { value: 'Updated Acme' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => {
+      const updateCall = fetchApiMock.mock.calls.find(
+        ([url, options]) => url === '/api/contacts/91' && options?.method === 'PUT',
+      );
+      expect(updateCall).toBeDefined();
+      const body = JSON.parse(updateCall[1].body);
+      expect(body).toMatchObject({
+        name: 'Populated Lead',
+        company: 'Updated Acme',
+        phone: '+14155550123',
+        tags: ['VIP'],
+      });
+      expect(body).not.toHaveProperty('email');
+      expect(body).not.toHaveProperty('aiScore');
+      expect(body).not.toHaveProperty('browser');
+    });
+  });
+
+  it('shows Generic Edit Lead phone and email errors below each field on blur and not as popups', async () => {
+    const lead = {
+      ...SAMPLE_LEADS[0],
+      id: 92,
+      name: 'Phone Validation Lead',
+      email: 'validation@example.com',
+      company: 'Acme Corp',
+      phone: '+201234567890',
+      gst: '29ABCDE1234F1Z5',
+    };
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
+        return Promise.resolve({ data: [lead], total: 1, page: 1, limit: 10, totalPages: 1 });
+      }
+      if (url === '/api/table-column-prefs/leads' && !opts) {
+        return Promise.resolve({
+          visible: ['name', 'email', 'company', 'phone', 'gst'],
+          availableColumns: [
+            { key: 'name', label: 'Name' },
+            { key: 'email', label: 'Email' },
+            { key: 'company', label: 'Company' },
+            { key: 'phone', label: 'Phone' },
+            { key: 'gst', label: 'GSTIN' },
+            { key: 'actions', label: 'Actions', lockedVisible: true },
+          ],
+        });
+      }
+      return leadsFetchMock(url, opts);
+    });
+
+    renderLeads(ADMIN_AUTH);
+    await screen.findByText('Phone Validation Lead');
+    fireEvent.click(screen.getByTitle('Edit lead'));
+
+    const dialog = screen.getByRole('dialog', { name: 'Edit Lead' });
+    const phoneInput = within(dialog).getByLabelText('Phone');
+    fireEvent.change(phoneInput, { target: { value: '+201234567890-' } });
+    expect(notifyError).not.toHaveBeenCalled();
+
+    fireEvent.blur(phoneInput);
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(
+      'A hyphen (-) is not allowed in phone numbers. Enter digits only, with an optional + at the beginning.',
+    );
+    expect(phoneInput).toHaveAttribute('aria-invalid', 'true');
+    expect(notifyError).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(notifyError).not.toHaveBeenCalled());
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      '/api/contacts/92',
+      expect.objectContaining({ method: 'PUT' }),
+    );
+
+    fireEvent.change(phoneInput, { target: { value: '+201234567890' } });
+    expect(within(dialog).queryByRole('alert')).toBeNull();
+    expect(phoneInput).toHaveAttribute('aria-invalid', 'false');
+
+    const emailInput = within(dialog).getByLabelText('Email');
+    fireEvent.change(emailInput, { target: { value: 'validation-@example.com' } });
+    expect(within(dialog).queryByRole('alert')).toBeNull();
+    fireEvent.blur(emailInput);
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(
+      'The character "-" is not allowed before @. Only letters, numbers, dots, and underscores are allowed',
+    );
+    expect(emailInput).toHaveAttribute('aria-invalid', 'true');
+    expect(notifyError).not.toHaveBeenCalled();
+
+    fireEvent.change(emailInput, { target: { value: 'validation@example.com' } });
+    const gstInput = within(dialog).getByLabelText('GSTIN');
+    fireEvent.change(gstInput, { target: { value: 'wrong-gst' } });
+    fireEvent.blur(gstInput);
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(
+      'GSTIN must be a valid 15-character GSTIN (e.g. 29ABCDE1234F1Z5)',
+    );
+    expect(gstInput).toHaveAttribute('aria-invalid', 'true');
+    expect(notifyError).not.toHaveBeenCalled();
   });
 
   it('loads converted Wellness customer contacts in the Leads list', async () => {
@@ -5442,7 +5792,7 @@ describe('Leads Web Form column (generic CRM only)', () => {
     await screen.findByText('Form Lead');
 
     fireEvent.click(screen.getByRole('button', { name: 'View' }));
-    const btn = screen.getByRole('button', { name: 'Manage lead fields' });
+    const btn = screen.getByRole('button', { name: 'Add lead field' });
     expect(btn).toBeInTheDocument();
     fireEvent.click(btn);
 
@@ -5467,7 +5817,7 @@ describe('Leads Web Form column (generic CRM only)', () => {
     await screen.findByText('Form Lead');
 
     fireEvent.click(screen.getByRole('button', { name: 'View' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Manage lead fields' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add lead field' }));
     const dialog = await screen.findByRole('dialog', { name: /Add Lead Field/i });
     const labelInput = within(dialog).getByPlaceholderText('e.g. Referral Source');
     fireEvent.change(labelInput, { target: { value: 'Phone' } });
@@ -5549,9 +5899,22 @@ describe('Leads extended Freshsales-parity columns', () => {
         type: 'Note',
         description: '<span>16th - Nov | IA * Dialled | Not answered, sent VM, sent an email</span>',
         createdAt: '2026-11-16T09:00:00.000Z',
+      }, {
+        id: 2,
+        type: 'Note',
+        description: 'Older note should not be shown',
+        createdAt: '2026-10-01T09:00:00.000Z',
       }],
     };
     fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/202/activities' && opts?.method === 'POST') {
+        return Promise.resolve({
+          id: 909,
+          type: 'Note',
+          description: 'Added from the Leads table',
+          createdAt: '2026-11-27T05:30:00.000Z',
+        });
+      }
       if (typeof url === 'string' && url.startsWith('/api/contacts?status=Lead') && !opts) {
         return Promise.resolve([noteLead]);
       }
@@ -5572,7 +5935,46 @@ describe('Leads extended Freshsales-parity columns', () => {
     await screen.findByText('Note Lead');
 
     expect(screen.getByText('16th - Nov | IA * Dialled | Not answered, sent VM, sent an email')).toBeInTheDocument();
+    expect(screen.queryByText('Older note should not be shown')).toBeNull();
     expect(screen.queryByText('<span>16th - Nov | IA * Dialled | Not answered, sent VM, sent an email</span>')).toBeNull();
+
+    navigateMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'View all notes for Note Lead' }));
+    expect(navigateMock).toHaveBeenCalledWith(
+      '/leads/202?page=1&limit=10',
+      expect.objectContaining({
+        state: expect.objectContaining({ highlightNoteId: 1 }),
+      }),
+    );
+
+    navigateMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Note for Note Lead' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add note' });
+    expect(within(dialog).getByText('Note Lead')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Bulleted list' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Numbered list' })).toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'Align right' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Insert image' })).toBeInTheDocument();
+    const editor = within(dialog).getByRole('textbox', { name: 'Note content' });
+    editor.textContent = 'Added from the Leads table';
+    fireEvent.input(editor);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Done' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/contacts/202/activities',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'Note',
+          description: 'Added from the Leads table',
+          richDescriptionBase64: 'QWRkZWQgZnJvbSB0aGUgTGVhZHMgdGFibGU=',
+        }),
+      },
+    ));
+    expect(await screen.findByText('Added from the Leads table')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Add note' })).toBeNull();
+    expect(navigateMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('textbox', { name: 'Edit Note for Note Lead' })).toBeNull();
   });
 
   it('renders the extended headers + data-backed cells when the picker enables them', async () => {
@@ -5633,6 +6035,22 @@ describe('Leads extended Freshsales-parity columns', () => {
     const websiteLink = screen.getByRole('link', { name: 'acme.test' });
     expect(websiteLink.getAttribute('href')).toBe('https://acme.test');
 
+    fetchApiMock.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit First Name for Aarav Sharma' }));
+    const firstNameInput = screen.getByRole('textbox', { name: 'Edit First Name for Aarav Sharma' });
+    fireEvent.change(firstNameInput, { target: { value: 'Aarav Dev' } });
+    fireEvent.blur(firstNameInput);
+    await waitFor(() => {
+      expect(notifyError).toHaveBeenCalledWith(
+        'First Name must contain one name only. Enter additional names in Last Name.',
+      );
+    });
+    expect(fetchApiMock).not.toHaveBeenCalledWith(
+      '/api/contacts/201',
+      expect.objectContaining({ method: 'PUT' }),
+    );
+
+    notifyError.mockClear();
     fetchApiMock.mockClear();
     fireEvent.click(screen.getByRole('button', { name: 'Edit No Of Employee for Aarav Sharma' }));
     const employeeInput = screen.getByRole('textbox', { name: 'Edit No Of Employee for Aarav Sharma' });

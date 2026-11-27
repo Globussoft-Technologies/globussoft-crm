@@ -5,17 +5,18 @@ import {
   Video, TrendingUp, Plus, MoreHorizontal, ChevronDown, ChevronUp, ChevronLeft, ChevronRight,
   Calendar, FileText, Handshake, Pencil, Settings, Tag, X, Zap, Image as ImageIcon,
   Copy, Trash2, ListPlus, Download, BellOff, UserX, EyeOff, Eye, ListChecks, XCircle, Search, History, ArrowRight, Maximize2,
+  AlignRight,
 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import { formatMoney } from '../utils/money';
 import { generatedDealName } from '../utils/dealDisplay';
-import { formatDate, formatDateTime } from '../utils/date';
+import { formatDate, formatDateTime, formatTimestamp } from '../utils/date';
 import { AuthContext } from '../appContexts';
 import { usePermissions } from '../hooks/usePermissions';
 import { PROFILE_TABS, SOCIAL_NETWORKS, buildOverviewSections, normalizeSocialUrl } from '../components/contact/contactProfileConfig';
 import CustomizeFieldsDrawer, { ALL_OVERVIEW_FIELDS, DEFAULT_VISIBLE_FIELD_KEYS, normalizeVisibleKeys } from '../components/contact/CustomizeFieldsDrawer';
-import { assignOwner, fetchActivities, fetchScore, fetchStaff, patchActivity, patchContact, postActivity } from '../components/contact/contactActions';
+import { assignOwner, deleteActivity, fetchActivities, fetchScore, fetchStaff, patchActivity, patchContact, postActivity } from '../components/contact/contactActions';
 import { InlineField, Stars, Modal } from '../components/contact/ProfileWidgets';
 import {
   ActivityModal, CallModal, DealModal, EmailModal, MeetingModal, SmsModal, TaskModal, WhatsappModal,
@@ -24,7 +25,7 @@ import {
   AccountsTab, ActivitiesTab, ConversationsTab, DealsTab, FilesTab, InsightsTab,
 } from '../components/contact/ProfileTabs';
 import ContactDetailsDrawer, { GENERIC_TAG_COLORS, dedupeTags, fallbackTagColor, normalizeTagRecords, tagKey, tagTextColor } from '../components/contact/ContactDetailsDrawer';
-import { sanitizeRichTextHtml } from '../utils/richText';
+import { encodeRichTextHtml, richTextToPlainText, sanitizeRichTextHtml } from '../utils/richText';
 import CallifiedCallDialog from '../components/CallifiedCallDialog';
 import CallifiedLeadCallDialog from '../components/CallifiedLeadCallDialog';
 import Contacts from './Contacts';
@@ -467,7 +468,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     ? (location.state.returnLabel || location.state.backLabel)
     : `Back to ${defaultListPath === '/leads' ? 'Leads' : 'Contacts'}`;
   const closeNavigationState = useMemo(() => {
-    const { openFullPage: _openFullPage, ...rest } = location.state && typeof location.state === 'object'
+    const { openFullPage: _openFullPage, focusTags: _focusTags, ...rest } = location.state && typeof location.state === 'object'
       ? location.state
       : {};
     if (!isGenericLeadsDetail || !returnListPage) {
@@ -522,11 +523,15 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
   const [staff, setStaff] = useState([]);
   const [noteDraft, setNoteDraft] = useState('');
   const [noteSaving, setNoteSaving] = useState(false);
+  const [deletingNoteId, setDeletingNoteId] = useState(null);
+  const [noteImageUploading, setNoteImageUploading] = useState(false);
   const [noteComposerOpen, setNoteComposerOpen] = useState(false);
+  const [highlightedNoteId, setHighlightedNoteId] = useState(null);
   const [editingNote, setEditingNote] = useState(null);
   const [noteFormatting, setNoteFormatting] = useState({});
   const noteComposerRef = useRef(null);
   const noteImageInputRef = useRef(null);
+  const noteSelectionRef = useRef(null);
   const genericNoteInitialValueRef = useRef('');
   const [tagDraft, setTagDraft] = useState('');
   const [tagSaving, setTagSaving] = useState(false);
@@ -541,6 +546,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
   const [newTagColor, setNewTagColor] = useState(GENERIC_TAG_COLORS[0]);
   const [tagCreating, setTagCreating] = useState(false);
   const [tagColorSaving, setTagColorSaving] = useState('');
+  const [tagDeleting, setTagDeleting] = useState('');
   const [modal, setModal] = useState(null);
   const [genericCallLead, setGenericCallLead] = useState(null);
   const [activitiesRefreshKey, setActivitiesRefreshKey] = useState(0);
@@ -574,9 +580,31 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
   const [socDraft, setSocDraft] = useState('');
   const notesRef = useRef(null);
   const noteInputRef = useRef(null);
+  const tagsRowRef = useRef(null);
   const moreRef = useRef(null);
   const statusPipelineRef = useRef(null);
   const contactTagManagerEnabled = isGeneric;
+  const tagFocusRequested = isGenericLeadsDetail && location.state?.focusTags === true;
+  const [tagFocusActive, setTagFocusActive] = useState(false);
+
+  useEffect(() => {
+    if (!tagFocusRequested || !contact?.id) {
+      setTagFocusActive(false);
+      return undefined;
+    }
+
+    setSummaryOpen(true);
+    setActiveTab('overview');
+    setTagFocusActive(true);
+    const frame = requestAnimationFrame(() => {
+      tagsRowRef.current?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    });
+    const timer = window.setTimeout(() => setTagFocusActive(false), 3000);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, [contact?.id, tagFocusRequested]);
 
   useEffect(() => {
     if (!isGeneric) return undefined;
@@ -750,6 +778,15 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
   const overviewContactId = contact?.id;
   const overviewActivityRefreshId = contact?.activities?.[0]?.id;
   const overviewNoteActivities = overviewActivities.filter((activity) => activity.type === 'Note');
+  const latestGenericNoteActivity = isGeneric
+    ? [...overviewNoteActivities, ...(contact?.activities || [])]
+      .filter((activity) => activity.type === 'Note' && activity.description)
+      .reduce((latest, activity) => (
+        !latest || new Date(activity.createdAt) > new Date(latest.createdAt)
+          ? activity
+          : latest
+      ), null)
+    : null;
 
   useEffect(() => {
     if (!overviewContactId) return undefined;
@@ -1287,6 +1324,36 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     }, 60);
   };
 
+  const highlightedNotesForContactRef = useRef(null);
+  useEffect(() => {
+    const requestedNoteId = location.state?.highlightNoteId;
+    if (
+      !isGeneric ||
+      !contact?.id ||
+      requestedNoteId == null ||
+      highlightedNotesForContactRef.current === `${contact.id}:${requestedNoteId}`
+    ) return;
+    highlightedNotesForContactRef.current = `${contact.id}:${requestedNoteId}`;
+    setActiveTab('overview');
+    setSummaryOpen(true);
+    setPrefs((current) => ({ ...current, timeline: true }));
+    setHighlightedNoteId(String(requestedNoteId));
+    const { highlightNoteId: _highlightNoteId, ...remainingState } = location.state;
+    navigate(`${location.pathname}${location.search}`, {
+      replace: true,
+      state: remainingState,
+    });
+  }, [contact?.id, isGeneric, location.pathname, location.search, location.state, navigate]);
+
+  useEffect(() => {
+    if (!highlightedNoteId || overviewActivitiesLoading || !notesRef.current) return undefined;
+    const note = Array.from(notesRef.current.querySelectorAll('[data-note-activity-id]'))
+      .find((item) => item.getAttribute('data-note-activity-id') === String(highlightedNoteId));
+    (note || notesRef.current).scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    const timeoutId = window.setTimeout(() => setHighlightedNoteId(null), 2000);
+    return () => window.clearTimeout(timeoutId);
+  }, [highlightedNoteId, overviewActivities, overviewActivitiesLoading]);
+
   const openNoteEditor = (activity) => {
     setEditingNote(activity);
     if (isGeneric) {
@@ -1300,6 +1367,31 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
       noteComposerRef.current.innerHTML = sanitizeRichTextHtml(activity.description || '');
       noteComposerRef.current.focus();
     }, 60);
+  };
+
+  const deleteGenericNote = async (activity) => {
+    if (!isGeneric || deletingNoteId !== null) return;
+    const confirmed = await notify.confirm({
+      message: 'Delete this note?',
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    if (!confirmed) return;
+    setDeletingNoteId(activity.id);
+    try {
+      await deleteActivity(id, activity.id);
+      setOverviewActivities((current) => current.filter((item) => item.id !== activity.id));
+      setOverviewActivityTotal((current) => Math.max(0, current - 1));
+      setContact((current) => current ? {
+        ...current,
+        activities: (current.activities || []).filter((item) => item.id !== activity.id),
+      } : current);
+      notify.success('Note deleted.');
+    } catch (error) {
+      notify.error(error?.body?.error || error?.message || 'Failed to delete note.');
+    } finally {
+      setDeletingNoteId(null);
+    }
   };
 
   useEffect(() => {
@@ -1347,20 +1439,56 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     setNoteFormatting((current) => ({ ...current, [command]: isActive }));
   };
 
-  const insertNoteImage = () => {
+  const insertNoteImage = (event) => {
+    event.preventDefault();
+    const selection = window.getSelection?.();
+    if (selection?.rangeCount && noteComposerRef.current) {
+      const range = selection.getRangeAt(0);
+      const container = range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+        ? range.commonAncestorContainer.parentNode
+        : range.commonAncestorContainer;
+      if (container && noteComposerRef.current.contains(container)) {
+        noteSelectionRef.current = range.cloneRange();
+      }
+    }
     noteImageInputRef.current?.click();
   };
 
-  const handleNoteImageFile = (event) => {
+  const handleNoteImageFile = async (event) => {
     const image = event.target.files?.[0];
     event.target.value = '';
     if (!image || !image.type.startsWith('image/')) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      noteComposerRef.current?.focus();
-      document.execCommand('insertImage', false, String(reader.result || ''));
-    };
-    reader.readAsDataURL(image);
+    setNoteImageUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', image, image.name);
+      formData.append('purpose', 'generic-crm-note');
+      const uploaded = await fetchApi('/api/uploads/image', { method: 'POST', body: formData });
+      if (!uploaded?.url) throw new Error('Image upload returned no URL');
+      const editor = noteComposerRef.current;
+      if (!editor) return;
+      editor.focus();
+      const selection = window.getSelection?.();
+      if (selection && noteSelectionRef.current) {
+        selection.removeAllRanges();
+        selection.addRange(noteSelectionRef.current);
+      }
+      const imageCount = editor.querySelectorAll('img').length;
+      if (typeof document.execCommand === 'function') {
+        document.execCommand('insertImage', false, uploaded.url);
+      }
+      if (editor.querySelectorAll('img').length === imageCount) {
+        const element = document.createElement('img');
+        element.src = uploaded.url;
+        element.alt = image.name || 'Selected image';
+        editor.appendChild(element);
+      }
+      noteSelectionRef.current = null;
+    } catch (error) {
+      notify.error(error?.body?.error || error?.message || 'Failed to upload image');
+    } finally {
+      setNoteImageUploading(false);
+    }
   };
 
   const handleNotePaste = (event) => {
@@ -1405,9 +1533,12 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     if (!body && !html.includes('<img')) return;
     setNoteSaving(true);
     try {
+      const richPayload = isGeneric
+        ? { description: html, richDescriptionBase64: encodeRichTextHtml(html) }
+        : { description: html };
       const activity = editingNote
-        ? await patchActivity(id, editingNote.id, { description: html })
-        : await postActivity(id, { type: 'Note', description: html });
+        ? await patchActivity(id, editingNote.id, richPayload)
+        : await postActivity(id, { type: 'Note', ...richPayload });
       notify.success(editingNote ? 'Note updated.' : 'Note added.');
       setNoteComposerOpen(false);
       setEditingNote(null);
@@ -1527,10 +1658,42 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
     }
   };
 
+  const deleteGenericOverviewTag = async (nameValue) => {
+    const key = tagKey(nameValue);
+    if (!isGeneric || !key || tagDeleting) return;
+    const confirmed = await notify.confirm({
+      title: 'Delete saved tag?',
+      message: `Delete "${nameValue}" from every lead in this pipeline? This cannot be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      destructive: true,
+    });
+    if (!confirmed) return;
+
+    setTagDeleting(key);
+    setTagMutationError('');
+    try {
+      const result = await fetchApi('/api/contacts/tags', {
+        method: 'DELETE',
+        body: JSON.stringify({ tag: nameValue, status: 'Lead' }),
+      });
+      setTagCatalog((current) => current.filter((record) => tagKey(record.name) !== key));
+      setPendingTags((current) => current.filter((tag) => tagKey(tag) !== key));
+      setContact((current) => current
+        ? { ...current, tags: dedupeTags(current.tags).filter((tag) => tagKey(tag) !== key) }
+        : current);
+      notify.success(`Deleted "${nameValue}" from ${result?.updatedContacts ?? 0} lead${(result?.updatedContacts ?? 0) === 1 ? '' : 's'}`);
+    } catch {
+      setTagMutationError('Could not delete tag.');
+    } finally {
+      setTagDeleting('');
+    }
+  };
+
   const shell = (content) => {
     if (renderStandaloneLeadPage) {
       return (
-        <section className="cp-full-page" aria-label="Contact profile">
+        <section className={`cp-full-page${isGenericLeadsDetail ? ' cp-profile-fixed--generic cp-profile-fixed--standalone' : ''}`} aria-label="Contact profile">
           <div className="cp-full-page-toolbar">
             <button type="button" className="cp-back" onClick={closeProfile} aria-label={closeLabel}>
               <ChevronLeft size={16} />
@@ -1556,7 +1719,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
           </div>
         )}
         <div className="cp-backdrop" onClick={closeProfile} aria-hidden="true" />
-        <aside className="cp-slide-panel" aria-label="Contact profile">
+        <aside className={`cp-slide-panel${isGenericLeadsDetail ? ' cp-profile-fixed--generic' : ''}`} aria-label="Contact profile">
           <button type="button" className="cp-slide-close" onClick={closeProfile} aria-label="Close profile" title={closeLabel}>
             <X size={15} />
           </button>
@@ -1853,7 +2016,9 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
       );
     }
     if (key === 'createdAt') {
-      return cell(timeAgo(contact.createdAt) || formatDate(contact.createdAt));
+      return cell(isGeneric
+        ? formatDateTime(contact.createdAt)
+        : (timeAgo(contact.createdAt) || formatDate(contact.createdAt)));
     }
     if (key === 'leadId') {
       return cell(contact.id);
@@ -1865,10 +2030,18 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
       jobTitle: contact.title,
       workPhone: contact.workPhone,
       keyword: contact.keyword,
-      note: contact.note,
+      note: latestGenericNoteActivity
+        ? richTextToPlainText(latestGenericNoteActivity.description)
+        : contact.note,
       medium: contact.medium ?? contact.source,
       monthlyBudget: contact.monthlyBudget,
     };
+    if (isGeneric && key === 'note') {
+      const noteValue = latestGenericNoteActivity?.description || contact.note;
+      return cell(isEmpty(noteValue)
+        ? <span style={{ color: 'var(--text-secondary)' }}>Not available</span>
+        : <RichTextNotePreview value={noteValue} />);
+    }
     if (key === 'website') {
       const raw = contact.website;
       return cell(isEmpty(raw) ? <span style={{ color: 'var(--text-secondary)' }}>Not available</span> : <span>{linkDisplay(raw, 'url')}</span>);
@@ -2387,10 +2560,14 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                     <span className="cp-summary-title"><Tag size={13} /> Summary</span>
                     <ChevronDown size={15} className={summaryOpen ? 'cp-flip' : ''} />
                   </button>
-                  {prefs.showSummary && summaryOpen && (
+                  {(prefs.showSummary || tagFocusRequested) && summaryOpen && (
                     <>
-                      {prefs.showTags && (
-                      <div className={`cp-tags-row${tagPickerOpen ? ' cp-tags-row-picker-open' : ''}`} onClick={(event) => { if (contactTagManagerEnabled && !event.target.closest('button, input')) openWellnessTagPicker(); }}>
+                      {(prefs.showTags || tagFocusRequested) && (
+                      <div
+                        ref={tagsRowRef}
+                        className={`cp-tags-row${tagPickerOpen ? ' cp-tags-row-picker-open' : ''}${tagFocusActive ? ' cp-tags-row-focused' : ''}`}
+                        onClick={(event) => { if (contactTagManagerEnabled && !event.target.closest('button, input')) openWellnessTagPicker(); }}
+                      >
                         <Tag size={13} />
                         {tags.length === 0 && <button type="button" className="cp-link-btn" onClick={openWellnessTagPicker}>Click to add tags</button>}
                         {tags.map((t) => { const record = wellnessTagRecords.find((item) => tagKey(item.name) === tagKey(t)); const color = record?.color || fallbackTagColor(t); return <span key={String(t)} className="cp-chip" style={{ background: color, color: tagTextColor(color), borderColor: color }}>{String(t)}<button type="button" aria-label={`Remove tag ${String(t)}`} onClick={() => removeWellnessTag(t)} disabled={tagSaving}>×</button></span>; })}
@@ -2414,7 +2591,20 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                             <div className="cd-tag-picker-list" role="listbox" aria-multiselectable="true">
                               {tagCatalogLoading ? <div className="cd-tag-picker-message">Loading tags...</div> : filteredWellnessTags.length ? filteredWellnessTags.map((record) => { const selected = pendingTags.some((tag) => tagKey(tag) === tagKey(record.name)); return <div className={`cd-tag-option${selected ? ' is-selected' : ''}`} key={record.name}>
                                 <button type="button" role="option" aria-selected={selected} onClick={() => toggleWellnessTag(record.name)}><span className="cd-tag-option-check">{selected ? '✓' : ''}</span><span className="cd-tag-chip" style={{ background: record.color, borderColor: record.color, color: tagTextColor(record.color) }}>{record.name}</span></button>
-                                <label className="cd-tag-color"><input type="color" value={record.color} onChange={(e) => changeWellnessTagColor(record.name, e.target.value)} disabled={tagColorSaving === tagKey(record.name)} aria-label={`Change color for ${record.name}`} /></label>
+                                {isGeneric ? (
+                                  <button
+                                    type="button"
+                                    className="cd-tag-option-delete"
+                                    onClick={() => deleteGenericOverviewTag(record.name)}
+                                    disabled={Boolean(tagDeleting)}
+                                    aria-label={`Delete saved tag ${record.name}`}
+                                    title={`Delete ${record.name}`}
+                                  >
+                                    <Trash2 size={13} />
+                                  </button>
+                                ) : (
+                                  <label className="cd-tag-color"><input type="color" value={record.color} onChange={(e) => changeWellnessTagColor(record.name, e.target.value)} disabled={tagColorSaving === tagKey(record.name)} aria-label={`Change color for ${record.name}`} /></label>
+                                )}
                               </div>; }) : <div className="cd-tag-picker-message">No tags available.</div>}
                             </div>
                             <form className="cd-create-tag" onSubmit={(e) => { e.preventDefault(); createWellnessTag(); }}><strong>Create new tag</strong><div className="cd-create-tag-row"><input value={newTagName} onChange={(e) => setNewTagName(e.target.value)} placeholder="Tag name" aria-label="Add tag" /><input type="color" value={newTagColor} onChange={(e) => setNewTagColor(e.target.value)} aria-label="New tag color" /><button type="submit" disabled={tagCreating}>{tagCreating ? 'Creating...' : 'Create'}</button></div></form>
@@ -2441,7 +2631,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                       <button type="button" className="cp-link-btn cp-overview-show-all" onClick={() => setActiveTab('details')}>Show all</button>
                     </>
                   )}
-                  {prefs.blocks && (
+                  {(isGeneric || prefs.blocks) && (
                     <div className="cp-blocks">
                       <div className="cp-block">
                         <span className="cp-block-icon teal"><Handshake size={16} /></span>
@@ -2512,7 +2702,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                   )}
                 </div>
                 {!isCustomizing && prefs.timeline && (
-                  <aside className="cp-ov-side" ref={notesRef}>
+                  <aside className={`cp-ov-side${highlightedNoteId ? ' cp-note-area-highlight' : ''}`} ref={notesRef}>
                     <form className="cp-note-yellow" onSubmit={(e) => { e.preventDefault(); focusNotes(); }}>
                       <textarea
                         ref={noteInputRef}
@@ -2532,17 +2722,35 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                       {overviewActivitiesLoading ? (
                         <div className="cp-empty">Loading activity...</div>
                       ) : overviewNoteActivities.map((a) => (
-                        <div key={a.id} className="cp-timeline-entry">
+                        <div
+                          key={a.id}
+                          data-note-activity-id={String(a.id)}
+                          className="cp-timeline-entry"
+                        >
                           <div className="cp-timeline-title" style={!isWellness && !isTravel ? { whiteSpace: 'pre-wrap' } : undefined}>
-                            {a.type}{a.description ? ' / ' : ''}
-                            {a.description && isGeneric && ['Email', 'Note'].includes(a.type) ? <RichTextNotePreview value={a.description} /> : a.description || null}
-                          </div>
-                          <div className="cp-timeline-meta">
                             {isGeneric && a.type === 'Note' ? (
-                              <button type="button" className="cp-note-edit" onClick={() => openNoteEditor(a)} aria-label={`Edit note ${a.description || a.id}`} title="Edit note"><Pencil size={11} /></button>
-                            ) : <Pencil size={11} />}
-                            {isGeneric && a.type === 'Note' ? timeAgo(a.createdAt) : <>{authorOf(a)} <span>•</span> {timeAgo(a.createdAt)}</>}
+                              <div className="cp-generic-note-list-item">
+                                <span className="cp-generic-note-bullet" aria-hidden="true">•</span>
+                                <RichTextNotePreview value={a.description || ''} />
+                                <button type="button" className="cp-note-edit" onClick={() => openNoteEditor(a)} aria-label={`Edit note ${a.description || a.id}`} title="Edit note"><Pencil size={11} /></button>
+                                <button type="button" className="cp-note-edit cp-note-delete" onClick={() => deleteGenericNote(a)} aria-label={`Delete note ${a.description || a.id}`} title="Delete note" disabled={deletingNoteId === a.id}><Trash2 size={11} /></button>
+                                <time dateTime={a.createdAt} title={formatDateTime(a.createdAt)}>
+                                  {formatTimestamp(a.createdAt, { hour: 'numeric', minute: '2-digit' })}
+                                </time>
+                              </div>
+                            ) : (
+                              <>
+                                {a.type}{a.description ? ' / ' : ''}
+                                {a.description && isGeneric && a.type === 'Email' ? <RichTextNotePreview value={a.description} /> : a.description || null}
+                              </>
+                            )}
                           </div>
+                          {!(isGeneric && a.type === 'Note') && (
+                            <div className="cp-timeline-meta">
+                              <Pencil size={11} />
+                              {authorOf(a)} <span>•</span> {timeAgo(a.createdAt)}
+                            </div>
+                          )}
                         </div>
                       ))}
                       {!overviewActivitiesLoading && overviewNoteActivities.length === 0 && (
@@ -2566,7 +2774,7 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
             </div>
           )}
 
-          {activeTab === 'details' && <ContactDetailsDrawer inline contact={contact} staff={staff} hideSms={isTravel || isWellness} genericTagsEnabled={isGeneric} onOwnerChange={canAssignOwner ? changeOwner : undefined} onFieldSave={saveContactDetailsField} onAction={handleContactDetailsAction} />}
+          {activeTab === 'details' && <ContactDetailsDrawer inline contact={contact} latestNote={isGeneric ? latestGenericNoteActivity?.description : undefined} staff={staff} hideSms={isTravel || isWellness} genericTagsEnabled={isGeneric} onOwnerChange={canAssignOwner ? changeOwner : undefined} onFieldSave={saveContactDetailsField} onAction={handleContactDetailsAction} />}
           {activeTab === 'conversations' && <ConversationsTab key={`conversation-${conversationRefreshKey}`} contact={contact} contactId={id} hideSms={isTravel || isWellness} showWhatsapp={isGeneric} onOpenAction={openAction} richText={!isWellness && !isTravel} />}
           {activeTab === 'activities' && <ActivitiesTab contact={contact} staff={staff} onAddActivity={() => { setActivityPreset('Note'); setModal('activity'); }} richText={!isWellness && !isTravel} refreshKey={activitiesRefreshKey} />}
           {activeTab === 'accounts' && <AccountsTab contact={contact} refresh={refresh} patchField={patchField} isTravel={isTravel} />}
@@ -2618,14 +2826,14 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
         <div className="cp-overlay" onClick={() => setLifecycleHistoryOpen(false)}>
           <div className="cp-modal cp-lifecycle-history-modal" role="dialog" aria-modal="true" aria-label={isGeneric ? 'Status history' : 'Lifecycle history'} onClick={(event) => event.stopPropagation()}>
             <div className="cp-modal-head">
-              <div className="cp-lifecycle-history-title"><span><History size={17} /></span><div><h3>{isGeneric ? 'Status history' : 'Lifecycle history'}</h3><p>Every recorded stage and status change for {contact.name}.</p></div></div>
+              <div className="cp-lifecycle-history-title"><span><History size={17} /></span><div><h3>{isGeneric ? 'Status history' : 'Lifecycle history'}</h3><p>Every recorded {isGeneric ? 'status' : 'stage and status'} change for {contact.name}.</p></div></div>
               <button type="button" className="cp-icon-btn" onClick={() => setLifecycleHistoryOpen(false)} aria-label={`Close ${isGeneric ? 'status' : 'lifecycle'} history`}><X size={16} /></button>
             </div>
             <div className="cp-modal-body cp-lifecycle-history-body">
               {lifecycleHistoryLoading ? (
                 <div className="cp-lifecycle-history-empty">Loading history…</div>
               ) : lifecycleHistory.length === 0 ? (
-                <div className="cp-lifecycle-history-empty"><History size={24} /><strong>No {isGeneric ? 'status' : 'lifecycle'} changes yet</strong><span>Changes will appear here after a stage or status is updated.</span></div>
+                <div className="cp-lifecycle-history-empty"><History size={24} /><strong>No {isGeneric ? 'status' : 'lifecycle'} changes yet</strong><span>Changes will appear here after {isGeneric ? 'a status' : 'a stage or status'} is updated.</span></div>
               ) : (
                 <div className="cp-lifecycle-history-list">
                   {lifecycleHistory.map((entry) => (
@@ -2636,9 +2844,9 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
                         <time dateTime={entry.changedAt}>{formatDateTime(entry.changedAt)}</time>
                       </div>
                       <div className="cp-lifecycle-history-change">
-                        <div><span>From</span><strong>{entry.from?.stage || '(not set)'}</strong>{entry.from?.status && <small>CRM status: {entry.from.status}</small>}</div>
+                        <div><span>From</span><strong>{(isGeneric ? entry.from?.status : entry.from?.stage) || '(not set)'}</strong>{!isGeneric && entry.from?.status && <small>CRM status: {entry.from.status}</small>}</div>
                         <ArrowRight size={18} aria-hidden="true" />
-                        <div><span>To</span><strong>{entry.to?.stage || '(not set)'}</strong>{entry.to?.status && <small>CRM status: {entry.to.status}</small>}</div>
+                        <div><span>To</span><strong>{(isGeneric ? entry.to?.status : entry.to?.stage) || '(not set)'}</strong>{!isGeneric && entry.to?.status && <small>CRM status: {entry.to.status}</small>}</div>
                       </div>
                       {entry.reason && <div className="cp-lifecycle-history-reason"><strong>Reason:</strong> {entry.reason}</div>}
                       {entry.changedBy?.email && <div className="cp-lifecycle-history-email">{entry.changedBy.email}</div>}
@@ -2676,15 +2884,16 @@ export default function ContactDetail({ renderBackdrop = true } = {}) {
               <button type="button" className={noteFormatting.bold ? 'active' : ''} onClick={() => formatNote('bold')} aria-label="Bold" aria-pressed={Boolean(noteFormatting.bold)}><strong>B</strong></button>
               <button type="button" className={noteFormatting.italic ? 'active' : ''} onClick={() => formatNote('italic')} aria-label="Italic" aria-pressed={Boolean(noteFormatting.italic)}><em>I</em></button>
               <button type="button" className={noteFormatting.underline ? 'active' : ''} onClick={() => formatNote('underline')} aria-label="Underline" aria-pressed={Boolean(noteFormatting.underline)}><u>U</u></button>
-              <button type="button" className={noteFormatting.insertUnorderedList ? 'active' : ''} onClick={() => formatNote('insertUnorderedList')} aria-label="Bulleted list" aria-pressed={Boolean(noteFormatting.insertUnorderedList)}>•≡</button>
-              <button type="button" className={noteFormatting.insertOrderedList ? 'active' : ''} onClick={() => formatNote('insertOrderedList')} aria-label="Numbered list" aria-pressed={Boolean(noteFormatting.insertOrderedList)}>1≡</button>
+              {!isGeneric && <button type="button" className={noteFormatting.insertUnorderedList ? 'active' : ''} onClick={() => formatNote('insertUnorderedList')} aria-label="Bulleted list" aria-pressed={Boolean(noteFormatting.insertUnorderedList)}>•≡</button>}
+              {!isGeneric && <button type="button" className={noteFormatting.insertOrderedList ? 'active' : ''} onClick={() => formatNote('insertOrderedList')} aria-label="Numbered list" aria-pressed={Boolean(noteFormatting.insertOrderedList)}>1≡</button>}
               <button type="button" className={noteFormatting.justifyLeft ? 'active' : ''} onClick={() => formatNote('justifyLeft')} aria-label="Align left" aria-pressed={Boolean(noteFormatting.justifyLeft)}>≡</button>
               <button type="button" className={noteFormatting.justifyCenter ? 'active' : ''} onClick={() => formatNote('justifyCenter')} aria-label="Align center" aria-pressed={Boolean(noteFormatting.justifyCenter)}>☰</button>
-              <button type="button" onClick={insertNoteImage} aria-label="Insert image" title="Insert image"><ImageIcon size={14} /></button>
+              {isGeneric && <button type="button" onClick={() => formatNote('justifyRight')} aria-label="Align right"><AlignRight size={14} /></button>}
+              <button type="button" onMouseDown={insertNoteImage} aria-label="Insert image" title={noteImageUploading ? 'Uploading image...' : 'Insert image'} disabled={noteImageUploading}><ImageIcon size={14} /></button>
             </div>
             <div className="cp-btn-row">
               <button type="button" className="cp-action-btn" onClick={() => { setNoteComposerOpen(false); setEditingNote(null); }}>Cancel</button>
-              <button type="button" className="cp-action-btn cp-action-primary" onClick={handleRichNoteSave} disabled={noteSaving}>{noteSaving ? 'Saving…' : 'Done'}</button>
+              <button type="button" className="cp-action-btn cp-action-primary" onClick={handleRichNoteSave} disabled={noteSaving || noteImageUploading}>{noteImageUploading ? 'Uploading…' : noteSaving ? 'Saving…' : 'Done'}</button>
             </div>
           </div>
         </div>

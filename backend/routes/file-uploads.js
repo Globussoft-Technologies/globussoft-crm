@@ -42,13 +42,26 @@ const {
 router.post("/image", verifyToken, uploadImageSingle, validateImage, async (req, res) => {
   try {
     const file = req.file;
+    const isGenericNoteImage = req.body?.purpose === "generic-crm-note";
 
-    // Upload to S3
+    if (isGenericNoteImage && (req.user?.vertical || "generic") !== "generic") {
+      return res.status(400).json({
+        error: "Generic CRM note image upload is unavailable for this tenant.",
+        code: "GENERIC_NOTE_IMAGE_TENANT_REQUIRED",
+      });
+    }
+
+    // Reuse the same shared OCI-first uploader used by Travel. Only the object
+    // folder differs, keeping Generic CRM note images tenant-scoped without
+    // changing any Travel upload path or behaviour.
+    const subfolder = isGenericNoteImage
+      ? `generic-crm/tenant-${req.user.tenantId}/notes`
+      : "images";
     const fileUrl = await uploadImage(
       file.buffer,
       file.originalname,
       file.mimetype,
-      "images"
+      subfolder,
     );
 
     res.json({

@@ -1,6 +1,6 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeft, BriefcaseBusiness, ChevronLeft, ChevronRight, FileText, Pencil, Settings2, NotebookPen, Search, Users, X, Phone } from 'lucide-react';
+import { AlignRight, ArrowLeft, BriefcaseBusiness, ChevronLeft, ChevronRight, FileText, Image as ImageIcon, Pencil, Settings2, NotebookPen, Search, Users, X, Phone } from 'lucide-react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { fetchApi } from '../utils/api';
 import { formatMoney } from '../utils/money';
@@ -12,7 +12,7 @@ import { AuthContext } from '../appContexts';
 import { EmailModal, MeetingModal } from '../components/contact/ActionModals';
 import { patchContact } from '../components/contact/contactActions';
 import { dedupeTags, fallbackTagColor, GENERIC_TAG_COLORS, normalizeTagRecords, tagKey, tagTextColor } from '../components/contact/ContactDetailsDrawer';
-import { RichText, sanitizeRichTextHtml, truncateRichTextHtml } from '../utils/richText';
+import { encodeRichTextHtml, RichText, sanitizeRichTextHtml, truncateRichTextHtml } from '../utils/richText';
 import RichTextNotePreview from '../components/contact/RichTextNotePreview';
 import '../components/contact/ContactProfile.css';
 import '../components/contact/ContactDetailsDrawer.css';
@@ -347,13 +347,106 @@ function DealTagEditor({ deal, onSaved, onCatalogChange, open, setOpen }) {
   </div>, target);
 }
 
-function DealNoteModal({ contact, onSaved }) {
-  const [open, setOpen] = useState(false); const [saving, setSaving] = useState(false); const editorRef = useRef(null);
+function DealNoteModal({ contact, isGeneric, onSaved }) {
+  const notify = useNotify();
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [imageUploading, setImageUploading] = useState(false);
+  const [formatting, setFormatting] = useState({});
+  const editorRef = useRef(null);
+  const imageInputRef = useRef(null);
+  const selectionRef = useRef(null);
   useEffect(() => { const show = () => setOpen(true); window.addEventListener('deal-note-open', show); return () => window.removeEventListener('deal-note-open', show); }, []);
-  const formatNote = (command, value) => { editorRef.current?.focus(); document.execCommand(command, false, value); };
-  const save = async () => { const description = editorRef.current?.innerHTML?.trim() || ''; if (!description || !contact?.id) return; setSaving(true); try { const activity = await fetchApi(`/api/contacts/${contact.id}/activities`, { method: 'POST', body: JSON.stringify({ type: 'Note', description }) }); onSaved?.(activity); setOpen(false); if (editorRef.current) editorRef.current.innerHTML = ''; } finally { setSaving(false); } };
+  useEffect(() => {
+    if (!open || !isGeneric) return undefined;
+    const updateFormatting = () => {
+      if (!editorRef.current?.contains(document.activeElement)) return;
+      const commands = ['bold', 'italic', 'underline', 'justifyLeft', 'justifyCenter'];
+      const queryCommandState = (command) => (
+        typeof document.queryCommandState === 'function' ? document.queryCommandState(command) : false
+      );
+      setFormatting(Object.fromEntries(commands.map((command) => [command, queryCommandState(command)])));
+    };
+    document.addEventListener('selectionchange', updateFormatting);
+    return () => document.removeEventListener('selectionchange', updateFormatting);
+  }, [isGeneric, open]);
+  const formatNote = (command, value = null) => {
+    editorRef.current?.focus();
+    if (typeof document.execCommand === 'function') document.execCommand(command, false, value);
+    const isActive = typeof document.queryCommandState === 'function'
+      ? document.queryCommandState(command)
+      : false;
+    setFormatting((current) => ({ ...current, [command]: isActive }));
+  };
+  const insertImage = (event) => {
+    event.preventDefault();
+    const selection = window.getSelection?.();
+    if (selection?.rangeCount && editorRef.current) {
+      const range = selection.getRangeAt(0);
+      const container = range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+        ? range.commonAncestorContainer.parentNode
+        : range.commonAncestorContainer;
+      if (container && editorRef.current.contains(container)) selectionRef.current = range.cloneRange();
+    }
+    imageInputRef.current?.click();
+  };
+  const handleImageFile = async (event) => {
+    const image = event.target.files?.[0];
+    event.target.value = '';
+    if (!image || !image.type.startsWith('image/')) return;
+    setImageUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('image', image, image.name);
+      formData.append('purpose', 'generic-crm-note');
+      const uploaded = await fetchApi('/api/uploads/image', { method: 'POST', body: formData });
+      if (!uploaded?.url) throw new Error('Image upload returned no URL');
+      const editor = editorRef.current;
+      if (!editor) return;
+      editor.focus();
+      const selection = window.getSelection?.();
+      if (selection && selectionRef.current) {
+        selection.removeAllRanges();
+        selection.addRange(selectionRef.current);
+      }
+      const imageCount = editor.querySelectorAll('img').length;
+      if (typeof document.execCommand === 'function') document.execCommand('insertImage', false, uploaded.url);
+      if (editor.querySelectorAll('img').length === imageCount) {
+        const element = document.createElement('img');
+        element.src = uploaded.url;
+        element.alt = image.name || 'Selected image';
+        editor.appendChild(element);
+      }
+      selectionRef.current = null;
+    } catch (error) {
+      notify.error(error?.body?.error || error?.message || 'Failed to upload image');
+    } finally {
+      setImageUploading(false);
+    }
+  };
+  const save = async () => {
+    const rawDescription = editorRef.current?.innerHTML?.trim() || '';
+    const description = isGeneric ? sanitizeRichTextHtml(rawDescription) : rawDescription;
+    const plainTextDescription = editorRef.current?.innerText?.trim() || editorRef.current?.textContent?.trim() || '';
+    const isEmpty = isGeneric
+      ? !plainTextDescription && !description.includes('<img')
+      : !description;
+    if (isEmpty || !contact?.id) return;
+    setSaving(true);
+    try {
+      const payload = isGeneric
+        ? { type: 'Note', description, richDescriptionBase64: encodeRichTextHtml(description) }
+        : { type: 'Note', description };
+      const activity = await fetchApi(`/api/contacts/${contact.id}/activities`, { method: 'POST', body: JSON.stringify(payload) });
+      onSaved?.(activity);
+      setOpen(false);
+      if (editorRef.current) editorRef.current.innerHTML = '';
+    } finally {
+      setSaving(false);
+    }
+  };
   if (!open || !contact) return null;
-  return <div className="cp-overlay cp-note-overlay" onClick={() => setOpen(false)} role="dialog" aria-modal="true" aria-label="Add note"><div className="cp-note-composer" onClick={(event) => event.stopPropagation()}><div className="cp-modal-head"><h3>Add note</h3><button type="button" className="cp-icon-btn" onClick={() => setOpen(false)} aria-label="Close"><X size={16} /></button></div><div className="cp-note-related">Contact: <strong>{contact.name}</strong></div><div ref={editorRef} className="cp-note-editor" contentEditable suppressContentEditableWarning data-placeholder="Start typing your note..." role="textbox" aria-label="Note content" /><div className="cp-note-toolbar" aria-label="Note formatting"><select aria-label="Font size" defaultValue="3" onChange={(event) => formatNote('fontSize', event.target.value)}><option value="2">12</option><option value="3">14</option><option value="4">16</option><option value="5">18</option></select><button type="button" onClick={() => formatNote('bold')} aria-label="Bold"><strong>B</strong></button><button type="button" onClick={() => formatNote('italic')} aria-label="Italic"><em>I</em></button><button type="button" onClick={() => formatNote('underline')} aria-label="Underline"><u>U</u></button><button type="button" onClick={() => formatNote('insertUnorderedList')} aria-label="Bulleted list">•≡</button><button type="button" onClick={() => formatNote('insertOrderedList')} aria-label="Numbered list">1≡</button><button type="button" onClick={() => formatNote('justifyLeft')} aria-label="Align left">≡</button><button type="button" onClick={() => formatNote('justifyCenter')} aria-label="Align center">☰</button></div><div className="cp-btn-row"><button type="button" className="cp-action-btn" onClick={() => setOpen(false)}>Cancel</button><button type="button" className="cp-action-btn cp-action-primary" onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Done'}</button></div></div></div>;
+  return <div className="cp-overlay cp-note-overlay" onClick={() => setOpen(false)} role="dialog" aria-modal="true" aria-label="Add note"><div className="cp-note-composer" onClick={(event) => event.stopPropagation()}><div className="cp-modal-head"><h3>Add note</h3><button type="button" className="cp-icon-btn" onClick={() => setOpen(false)} aria-label="Close"><X size={16} /></button></div><div className="cp-note-related">{isGeneric ? 'Lead' : 'Contact'}: <strong>{contact.name}</strong></div>{isGeneric && <input ref={imageInputRef} type="file" accept="image/*" onChange={handleImageFile} hidden aria-hidden="true" />}<div ref={editorRef} className={`cp-note-editor${isGeneric ? ' cp-note-editor--generic' : ''}`} contentEditable suppressContentEditableWarning data-placeholder="Start typing your note..." role="textbox" aria-label="Note content" /><div className="cp-note-toolbar" aria-label="Note formatting"><select aria-label="Font size" defaultValue="3" onChange={(event) => formatNote('fontSize', event.target.value)}><option value="2">12</option><option value="3">14</option><option value="4">16</option><option value="5">18</option></select><button type="button" className={formatting.bold ? 'active' : ''} onClick={() => formatNote('bold')} aria-label="Bold" aria-pressed={Boolean(formatting.bold)}><strong>B</strong></button><button type="button" className={formatting.italic ? 'active' : ''} onClick={() => formatNote('italic')} aria-label="Italic" aria-pressed={Boolean(formatting.italic)}><em>I</em></button><button type="button" className={formatting.underline ? 'active' : ''} onClick={() => formatNote('underline')} aria-label="Underline" aria-pressed={Boolean(formatting.underline)}><u>U</u></button>{!isGeneric && <button type="button" onClick={() => formatNote('insertUnorderedList')} aria-label="Bulleted list">•≡</button>}{!isGeneric && <button type="button" onClick={() => formatNote('insertOrderedList')} aria-label="Numbered list">1≡</button>}<button type="button" className={formatting.justifyLeft ? 'active' : ''} onClick={() => formatNote('justifyLeft')} aria-label="Align left" aria-pressed={Boolean(formatting.justifyLeft)}>≡</button><button type="button" className={formatting.justifyCenter ? 'active' : ''} onClick={() => formatNote('justifyCenter')} aria-label="Align center" aria-pressed={Boolean(formatting.justifyCenter)}>☰</button>{isGeneric && <button type="button" onClick={() => formatNote('justifyRight')} aria-label="Align right"><AlignRight size={14} /></button>}{isGeneric && <button type="button" onMouseDown={insertImage} aria-label="Insert image" title={imageUploading ? 'Uploading image...' : 'Insert image'} disabled={imageUploading}><ImageIcon size={14} /></button>}</div><div className="cp-btn-row"><button type="button" className="cp-action-btn" onClick={() => setOpen(false)}>Cancel</button><button type="button" className="cp-action-btn cp-action-primary" onClick={save} disabled={saving || imageUploading}>{imageUploading ? 'Uploading...' : saving ? 'Saving...' : 'Done'}</button></div></div></div>;
 }
 
 function DealActivityOverviewModal({ deal }) {
@@ -1069,7 +1162,7 @@ export default function DealDetails() {
   if (loading) return <div className="deal-details-page"><div className="deal-loading"><div className="deal-skeleton" /><div className="deal-skeleton short" /><p>Loading deal details...</p></div></div>;
   if (error || !deal) return <div className="deal-details-page"><div className="deal-error"><h1>Deal not found</h1><p>{error || 'This deal is no longer available.'}</p><button type="button" className="deal-primary" onClick={() => navigate('/pipeline')}><ArrowLeft size={15} /> Back to Deals and Pipelines</button><button type="button" className="deal-link" onClick={load}>Try again</button></div></div>;
   const current = slug(deal.stage); const stageAliases = { lead: ['lead', 'new-lead'], contacted: ['contacted', 'contracted'], contracted: ['contracted', 'contacted'], proposal: ['proposal', 'proposal-sent'], 'proposal-sent': ['proposal-sent', 'proposal'], won: ['won', 'closed-won'], lost: ['lost', 'closed-lost'] }; const currentVariants = stageAliases[current] || [current]; const activeIndex = stageRows.findIndex((stage) => (deal.stageId != null && String(stage.id) === String(deal.stageId)) || currentVariants.includes(slug(stage.name)) || currentVariants.includes(String(stage.id || '').toLowerCase())); const notes = deal.activities || [];
-  return <><ScreenshotLayout deal={deal} pipeline={pipeline} stageRows={stageRows} activeIndex={activeIndex} latestNote={latestNote} products={products} onStageSelect={updateStage} stageError={stageError} dealTagCatalog={dealTagCatalog} onCall={openDealCall} isGeneric={isGeneric} onOpenTags={() => setTagEditorOpen(true)} onDealUpdated={applyUpdatedDeal} /><InlineDealEditor deal={deal} contacts={contacts} stages={stages} pipelines={pipelines} genericDealTypes={genericDealTypes} isGeneric={isGeneric} onClose={() => window.dispatchEvent(new Event('deal-details-edit-close'))} onSaved={applyUpdatedDeal} /><DealContactWorkspace /><DealProductsWorkspace products={products} /><DealTeamWorkspace /><DealConversationsWorkspace dealId={deal.id} contact={deal.contact} /><DealMeetingModal contact={deal.contact} onDone={load} /><DealTagEditor deal={deal} open={tagEditorOpen} setOpen={setTagEditorOpen} onCatalogChange={handleDealTagCatalogChange} onSaved={(updated) => setDeal((current) => ({ ...current, contact: { ...current.contact, ...updated } }))} /><DealNoteModal contact={deal.contact} onSaved={(activity) => setDeal((current) => ({ ...current, activities: activity ? [activity, ...(current.activities || [])] : current.activities }))} /><DealActivityOverviewModal deal={deal} />{isGeneric && genericCallLead && <CallifiedLeadCallDialog lead={genericCallLead} onClose={() => setGenericCallLead(null)} onCalled={() => notify.success('Call initiated successfully.')} />}</>;
+  return <><ScreenshotLayout deal={deal} pipeline={pipeline} stageRows={stageRows} activeIndex={activeIndex} latestNote={latestNote} products={products} onStageSelect={updateStage} stageError={stageError} dealTagCatalog={dealTagCatalog} onCall={openDealCall} isGeneric={isGeneric} onOpenTags={() => setTagEditorOpen(true)} onDealUpdated={applyUpdatedDeal} /><InlineDealEditor deal={deal} contacts={contacts} stages={stages} pipelines={pipelines} genericDealTypes={genericDealTypes} isGeneric={isGeneric} onClose={() => window.dispatchEvent(new Event('deal-details-edit-close'))} onSaved={applyUpdatedDeal} /><DealContactWorkspace /><DealProductsWorkspace products={products} /><DealTeamWorkspace /><DealConversationsWorkspace dealId={deal.id} contact={deal.contact} /><DealMeetingModal contact={deal.contact} onDone={load} /><DealTagEditor deal={deal} open={tagEditorOpen} setOpen={setTagEditorOpen} onCatalogChange={handleDealTagCatalogChange} onSaved={(updated) => setDeal((current) => ({ ...current, contact: { ...current.contact, ...updated } }))} /><DealNoteModal contact={deal.contact} isGeneric={isGeneric} onSaved={(activity) => setDeal((current) => ({ ...current, activities: activity ? [activity, ...(current.activities || [])] : current.activities }))} /><DealActivityOverviewModal deal={deal} />{isGeneric && genericCallLead && <CallifiedLeadCallDialog lead={genericCallLead} onClose={() => setGenericCallLead(null)} onCalled={() => notify.success('Call initiated successfully.')} />}</>;
   // return <div className="deal-details-page"><style>{styles}</style><div className="deal-breadcrumb"><button type="button" className="deal-link" onClick={() => navigate('/pipeline')}><ArrowLeft size={15} /> Deals and Pipelines</button><span>/</span><span>{deal.title || 'Untitled deal'}</span></div><header className="deal-header"><div><div className="deal-title-row"><BriefcaseBusiness size={22} color="var(--accent-color)" /><h1>{deal.title || 'Untitled deal'}</h1></div><div className="deal-meta"><strong>{formatMoney(deal.amount || 0, { currency: deal.currency })}</strong><span>{deal.forecastCategory || deal.paymentStatus || EMPTY}</span><span>{Array.isArray(deal.tags) && deal.tags.length ? deal.tags.join(', ') : 'Click to add tags'}</span></div></div><button type="button" className="deal-secondary" onClick={() => navigate('/pipeline')}><ArrowLeft size={14} /> Back</button></header><div className="deal-top-grid"><InfoCard title="Overview"><Pair label="Related account" value={deal.contact?.company} deal={deal} /><Pair label="Sales owner" value={personName(deal.owner)} deal={deal} /><Pair label="Expected close date" value={deal.expectedClose} type="date" deal={deal} /><Pair label="Deal value" value={deal.amount} type="currency" deal={deal} /><Pair label="Forecast category" value={deal.forecastCategory} deal={deal} /><Pair label="Pipeline" value={pipeline?.name} deal={deal} /></InfoCard><InfoCard title="Status and assignment"><Pair label="Related contact" value={personName(deal.contact)} deal={deal} /><Pair label="Deal type" value={deal.dealType} deal={deal} /><Pair label="Lost reason" value={deal.lostReason} deal={deal} /><Pair label="Closed date" value={deal.closedAt} type="date" deal={deal} /><Pair label="Payment status" value={deal.paymentStatus} deal={deal} /></InfoCard><div className="deal-side-cards"><InfoCard title="Contacts by sales owner"><div className="deal-related"><Users size={16} /><span>{personName(deal.owner) || 'Unassigned'} ({deal.contact ? 1 : 0})</span></div></InfoCard><InfoCard title={`Products (${products.length})`}>{products.length ? products.map((p, i) => <div className="deal-product" key={`${p.name}-${i}`}><span>{p.name}</span><strong>{p.quantity}</strong></div>) : <span className="deal-empty">No products linked</span>}</InfoCard><InfoCard title="Upcoming meeting"><span className="deal-empty">{deal.upcomingMeeting?.title || 'No upcoming meeting'}</span>{deal.upcomingMeeting && <small>{formatDateTime(deal.upcomingMeeting.startAt)}</small>}</InfoCard></div></div><InfoCard title="Notes"><textarea aria-label="Deal note" placeholder="Type your note here..." readOnly /><div className="deal-note"><NotebookPen size={16} /><div><strong>{latestNote?.description || 'No notes available'}</strong>{latestNote && <small>Posted by {personName(latestNote.user) || 'CRM user'}, {relative(latestNote.createdAt)}</small>}</div></div><button type="button" className="deal-link">View all notes</button></InfoCard><section className="deal-tracker"><div className="deal-section-heading"><strong>Pipeline progress</strong><span>{pipeline?.name || 'Pipeline'}</span></div><div className="deal-stages">{stageRows.map((stage, index) => <div className={`deal-stage ${index <= activeIndex ? 'done' : ''} ${index === activeIndex ? 'current' : ''}`} key={stage.id || stage.name}><span style={{ background: stage.color || 'var(--accent-color)' }} />{stage.name}</div>)}</div><div className="deal-age">Created {relative(deal.createdAt)} · Expected close {deal.expectedClose ? formatDateMedium(deal.expectedClose) : EMPTY}</div></section><nav className="deal-tabs" aria-label="Deal workspace tabs">{tabs.map((item) => <button type="button" key={item} className={tab === item ? 'active' : ''} onClick={() => setTab(item)}>{item}</button>)}</nav>{tab === 'Overview' && <div className="deal-overview-grid"><InfoCard title="Deal summary"><Pair label="Stage" value={deal.stage} deal={deal} /><Pair label="Probability" value={deal.probability} type="percent" deal={deal} /><Pair label="Created" value={deal.createdAt} type="date" deal={deal} /></InfoCard><InfoCard title="Latest activity">{notes.length ? <div className="deal-activity-list">{notes.slice(0, 5).map((item) => <div key={`${item.type}-${item.id}`}><FileText size={15} /><span><strong>{item.type || 'Activity'}</strong>{item.description}<small>{formatDate(item.createdAt)}</small></span></div>)}</div> : <span className="deal-empty">No activities available</span>}</InfoCard></div>}{tab === 'Deal details' && <div className="deal-details-content"><div className="deal-details-toolbar"><div><h2>Deal details</h2><button type="button" className="deal-link"><Settings2 size={14} /> Manage fields</button></div><label><Search size={15} /><input aria-label="Search fields" placeholder="Search fields" value={query} onChange={(e) => setQuery(e.target.value)} /></label><label className="deal-switch"><input type="checkbox" checked={showEmpty} onChange={(e) => setShowEmpty(e.target.checked)} /> Show empty fields</label></div>{visibleSections.map((section) => <Section key={section.key} section={section} deal={deal} pipeline={pipeline} latestNote={latestNote} showEmpty={showEmpty} />)}</div>}{!['Overview', 'Deal details'].includes(tab) && <div className="deal-placeholder"><FileText size={25} /><h2>{tab}</h2><p>This workspace is ready for {tab.toLowerCase()} data when that module is enabled.</p></div>}</div>;
 }
 

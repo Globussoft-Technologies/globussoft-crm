@@ -173,7 +173,46 @@ describe('<DealDetails />', () => {
     renderPage();
     await screen.findByRole('heading', { name: 'Acme Expansion' });
     fireEvent.focus(screen.getByPlaceholderText('Type your note here...'));
-    expect(screen.getByRole('dialog', { name: 'Add note' })).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog', { name: 'Add note' });
+    expect(within(dialog).getByText('Lead:')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Contact:')).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Bulleted list' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Numbered list' })).toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'Align right' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Insert image' })).toBeInTheDocument();
+  });
+
+  it('saves a Generic CRM deal note with the same rich-note payload as the lead page', async () => {
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/deals/42') return Promise.resolve(deal);
+      if (url === '/api/pipeline_stages') return Promise.resolve([{ id: 1, name: 'Lead' }]);
+      if (url.startsWith('/api/pipelines')) return Promise.resolve([]);
+      if (url === '/api/contacts/7/activities' && options?.method === 'POST') {
+        return Promise.resolve({ id: 2, type: 'Note', description: 'Deal follow-up note' });
+      }
+      return Promise.resolve([]);
+    });
+
+    renderPage();
+    await screen.findByRole('heading', { name: 'Acme Expansion' });
+    fireEvent.focus(screen.getByPlaceholderText('Type your note here...'));
+    const dialog = screen.getByRole('dialog', { name: 'Add note' });
+    const editor = within(dialog).getByRole('textbox', { name: 'Note content' });
+    editor.textContent = 'Deal follow-up note';
+    fireEvent.input(editor);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Done' }));
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/contacts/7/activities',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'Note',
+          description: 'Deal follow-up note',
+          richDescriptionBase64: 'RGVhbCBmb2xsb3ctdXAgbm90ZQ==',
+        }),
+      },
+    ));
   });
 
   it('keeps many notes in an independently scrollable list', async () => {

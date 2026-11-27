@@ -1703,8 +1703,36 @@
           if (/Safari/i.test(ua)) return "Safari";
           return "Other";
         }
-        function normalizeOs(ua) {
+        function desktopPlatform(platform) {
+          platform = String(platform || "");
+          if (/^Win/i.test(platform)) return "windows";
+          if (/^Mac/i.test(platform)) return "macos";
+          if (/Linux (?:x86_64|i[3-6]86)/i.test(platform)) return "linux";
+          return "";
+        }
+        function normalizeOs(ua, platform) {
           var match;
+          // DevTools' responsive/device toolbar can replace the user-agent
+          // with Android while the form is still being submitted from a
+          // Windows/macOS desktop. Prefer an unambiguous desktop platform so
+          // merely inspecting a generic form does not corrupt lead metadata.
+          var hostDesktop = desktopPlatform(platform);
+          if (hostDesktop === "windows") {
+            if ((match = ua.match(/Windows NT ([\d.]+)/i))) {
+              var hostWin =
+                { "10.0": "10/11", 6.3: "8.1", 6.2: "8", 6.1: "7" }[
+                  match[1]
+                ] || match[1];
+              return "Windows " + hostWin;
+            }
+            return "Windows 10/11";
+          }
+          if (hostDesktop === "macos") {
+            if ((match = ua.match(/Mac OS X ([\d_\.]+)/i)))
+              return "macOS " + match[1].replace(/_/g, ".");
+            return "macOS";
+          }
+          if (hostDesktop === "linux") return "Linux";
           if ((match = ua.match(/Windows NT ([\d.]+)/i))) {
             var win =
               { "10.0": "10/11", 6.3: "8.1", 6.2: "8", 6.1: "7" }[match[1]] ||
@@ -1719,6 +1747,10 @@
             return "macOS " + match[1].replace(/_/g, ".");
           if (/Linux/i.test(ua)) return "Linux";
           return "Other";
+        }
+        function normalizeDeviceType(ua, platform) {
+          if (desktopPlatform(platform)) return "desktop";
+          return /Mobi|Android|iPhone|iPad/i.test(ua) ? "mobile" : "desktop";
         }
         var phoneRules = {
           "+1": [10, 10],
@@ -5157,10 +5189,16 @@
               fbp: resolvedAttribution.fbp || "",
               submittedAt: new Date().toISOString(),
               browser: normalizeBrowser(navigator.userAgent),
-              operatingSystem: normalizeOs(navigator.userAgent),
-              deviceType: /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)
-                ? "mobile"
-                : "desktop",
+              operatingSystem:
+                scope === "generic"
+                  ? normalizeOs(navigator.userAgent, navigator.platform)
+                  : normalizeOs(navigator.userAgent),
+              deviceType:
+                scope === "generic"
+                  ? normalizeDeviceType(navigator.userAgent, navigator.platform)
+                  : /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)
+                    ? "mobile"
+                    : "desktop",
             };
             TRACKING_QUERY_KEYS.forEach(function (key) {
               var value = resolvedAttribution[key];

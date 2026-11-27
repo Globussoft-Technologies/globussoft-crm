@@ -13,13 +13,18 @@ export const patchContact = (id, data) =>
 export const assignOwner = (id, assignedToId) =>
   fetchApi(`/api/contacts/${id}/assign`, { method: 'PUT', body: JSON.stringify({ assignedToId }) });
 
-export const postActivity = (id, { type, description }) =>
-  fetchApi(`/api/contacts/${id}/activities`, { method: 'POST', body: JSON.stringify({ type, description }) });
+export const postActivity = (id, data) =>
+  fetchApi(`/api/contacts/${id}/activities`, { method: 'POST', body: JSON.stringify(data) });
 
-export const patchActivity = (contactId, activityId, { description }) =>
+export const patchActivity = (contactId, activityId, data) =>
   fetchApi(`/api/contacts/${contactId}/activities/${activityId}`, {
     method: 'PATCH',
-    body: JSON.stringify({ description }),
+    body: JSON.stringify(data),
+  });
+
+export const deleteActivity = (contactId, activityId) =>
+  fetchApi(`/api/contacts/${contactId}/activities/${activityId}`, {
+    method: 'DELETE',
   });
 
 export const createTask = (data) =>
@@ -39,8 +44,8 @@ export async function fetchActivities(contactId, page = 1, limit = 10) {
 export const sendEmail = (data) =>
   fetchApi('/api/communications/send-email', { method: 'POST', body: JSON.stringify(data) });
 
-export const sendSms = (data) =>
-  fetchApi('/api/sms/send', { method: 'POST', body: JSON.stringify(data) });
+export const sendSms = (data, options = {}) =>
+  fetchApi('/api/sms/send', { method: 'POST', body: JSON.stringify(data), ...options });
 
 export const sendWhatsapp = (data) =>
   fetchApi('/api/whatsapp/send', { method: 'POST', body: JSON.stringify(data) });

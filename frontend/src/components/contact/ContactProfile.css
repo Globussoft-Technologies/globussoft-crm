@@ -87,6 +87,7 @@ body[data-vertical="generic"] .cp-slide-panel { width: 90vw; }
 .cp-note-composer { background: #fff; border-radius: 10px; width: min(640px, 100%); min-height: 470px; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.3); }
 .cp-note-overlay .cp-note-composer { height: min(470px, calc(100dvh - 2rem)); min-height: 0; max-height: calc(100dvh - 2rem); box-sizing: border-box; }
 .cp-note-overlay { align-items: center; justify-content: center; padding: 1rem; }
+.cp-note-area-highlight { border-radius: 8px; box-shadow: 0 0 0 2px var(--primary-color, var(--accent-color)); transition: box-shadow 0.2s ease; }
 .cp-note-related { margin: 0.75rem 1rem 0; padding: 0.55rem 0.7rem; background: #f4f7fa; border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-secondary); font-size: 0.8rem; }
 .cp-note-related strong { color: var(--primary-color, var(--accent-color)); }
 .cp-note-editor { flex: 1 1 auto; min-height: 0; margin: 0 1rem; padding: 0.75rem 0; outline: none; font-size: 0.9rem; line-height: 1.5; overflow-y: auto; overflow-x: hidden; }
@@ -174,6 +175,118 @@ body[data-vertical="generic"] .cp-slide-panel { width: 90vw; }
 .cp-nav-btns { display: flex; gap: 0.25rem; }
 .cp-actions-bar { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.85rem; }
 .cp-ov-card { background: #fff; border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; }
+
+/* Generic lead profiles keep their identity and action controls fixed. Only
+   the highlighted tab content scrolls beside the stationary section rail. */
+.cp-profile-fixed--generic {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* The drawer close button intentionally sits just outside the panel's left
+   edge. Keep that edge visible; inner containers still own all scrolling. */
+.cp-slide-panel.cp-profile-fixed--generic {
+  overflow: visible;
+}
+
+.cp-profile-fixed--generic .cp-full-page-toolbar {
+  flex: 0 0 auto;
+}
+
+.cp-profile-fixed--generic .cp-slide-scroll,
+.cp-profile-fixed--generic .cp-full-page-scroll {
+  flex: 1 1 auto;
+  height: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cp-profile-fixed--generic .cp-wrap {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.cp-profile-fixed--generic .cp-header,
+.cp-profile-fixed--generic .cp-actions-bar {
+  flex: 0 0 auto;
+}
+
+.cp-profile-fixed--generic .cp-layout {
+  flex: 1 1 auto;
+  grid-template-rows: minmax(0, 1fr);
+  height: 0;
+  min-height: 0;
+  align-items: stretch;
+  overflow: hidden;
+}
+
+.cp-profile-fixed--generic .cp-side {
+  align-self: start;
+  position: static;
+}
+
+.cp-profile-fixed--generic .cp-main {
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  overscroll-behavior: contain;
+  padding-right: 0.25rem;
+  scrollbar-gutter: stable;
+  scrollbar-width: auto;
+  scrollbar-color: #8b93a1 #eef1f5;
+}
+
+/* Cards inside the bounded scroller must retain their natural content height.
+   Otherwise flex-shrink compresses the Overview card and its overflow rule
+   clips the lower Deal/Meeting/Sequence blocks before the parent can scroll. */
+.cp-profile-fixed--generic .cp-main > * {
+  flex-shrink: 0;
+}
+
+.cp-profile-fixed--generic .cd-inline .cd-content-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  margin: -1rem -1.25rem 1rem;
+  padding: 1rem 1.25rem 0.01rem;
+  background: var(--bg-color, #f3f5f9);
+}
+
+.cp-profile-fixed--generic .cp-main::-webkit-scrollbar {
+  width: 12px;
+}
+
+.cp-profile-fixed--generic .cp-main::-webkit-scrollbar-track {
+  background: #eef1f5;
+  border-radius: 999px;
+}
+
+.cp-profile-fixed--generic .cp-main::-webkit-scrollbar-thumb {
+  min-height: 44px;
+  background: #8b93a1;
+  border: 2px solid #eef1f5;
+  border-radius: 999px;
+}
+
+.cp-profile-fixed--generic .cp-main::-webkit-scrollbar-thumb:hover {
+  background: #626b79;
+}
+
+.cp-full-page.cp-profile-fixed--standalone {
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+}
+
 body[data-vertical="generic"] .cp-ov-card:has(.cp-chev-menu) { overflow: visible; }
 .cp-ov-head { display: flex; align-items: center; justify-content: space-between; padding: 0.9rem 1.25rem; }
 .cp-ov-head h2 { margin: 0; font-size: 0.95rem; font-weight: 700; }
@@ -275,6 +388,25 @@ body[data-vertical="generic"] .cp-ov-side .cp-timeline { flex: 0 1 auto; height:
 .cp-summary-title { display: inline-flex; align-items: center; gap: 0.5rem; }
 .cp-flip { transform: rotate(180deg); }
 .cp-tags-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; font-size: 0.8rem; padding-bottom: 0.9rem; border-bottom: 1px solid var(--border-color); }
+[data-vertical="generic"] .cp-tags-row-focused {
+  border-radius: 8px;
+  outline: 2px solid var(--primary-color, var(--accent-color));
+  outline-offset: 5px;
+  box-shadow: 0 0 0 7px color-mix(in srgb, var(--primary-color, var(--accent-color)) 14%, transparent);
+  animation: cp-tags-focus-pulse 0.75s ease-in-out 2;
+}
+
+@keyframes cp-tags-focus-pulse {
+  50% {
+    box-shadow: 0 0 0 11px color-mix(in srgb, var(--primary-color, var(--accent-color)) 22%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-vertical="generic"] .cp-tags-row-focused {
+    animation: none;
+  }
+}
 .cp-tag-form { display: inline-flex; align-items: center; gap: 0.4rem; }
 .cp-tag-input { border: 1px solid var(--border-color); border-radius: 6px; padding: 0.25rem 0.5rem; font-size: 0.78rem; width: 110px; font-family: inherit; }
 .cp-info-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem 1.25rem; align-items: start; }
@@ -297,6 +429,8 @@ body[data-vertical="generic"] .cp-ov-side .cp-timeline { flex: 0 1 auto; height:
 .cp-timeline-meta { color: var(--text-secondary); display: flex; align-items: center; gap: 0.3rem; }
 .cp-note-edit { display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; }
 .cp-note-edit:hover { color: var(--primary-color, var(--accent-color)); }
+.cp-note-delete:hover { color: var(--danger-color, #dc2626); }
+.cp-note-delete:disabled { cursor: wait; opacity: 0.5; }
 .cp-check-row { display: flex; align-items: center; gap: 0.6rem; font-size: 0.85rem; cursor: pointer; }
 .cp-form-label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); font-weight: 600; }
 .cp-input, .cp-textarea { border: 1px solid var(--border-color); border-radius: 8px; padding: 0.5rem 0.65rem; font-size: 0.85rem; font-family: inherit; width: 100%; box-sizing: border-box; background: var(--input-bg, var(--surface-color)); color: var(--text-primary); }
@@ -476,6 +610,7 @@ a.cp-soc:hover { border-color: currentColor; }
 .cp-filter.active { background: var(--primary-color, var(--accent-color)); border-color: transparent; color: #fff; font-weight: 600; }
 .cp-composer { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem; background: var(--subtle-bg); border-radius: 8px; margin-bottom: 0.85rem; }
 .cp-msg-list { display: flex; flex-direction: column; gap: 0.6rem; max-height: 480px; overflow-y: auto; }
+.cp-profile-fixed--generic .cp-msg-list { max-height: none; overflow-y: visible; }
 .cp-msg { border: 1px solid var(--border-color); border-radius: 10px; padding: 0.6rem 0.8rem; font-size: 0.82rem; max-width: 85%; }
 .cp-msg.in { align-self: flex-start; background: #f8fafc; }
 .cp-msg.out { align-self: flex-end; background: rgba(59,130,246,0.07); border-color: rgba(59,130,246,0.25); }
@@ -498,7 +633,20 @@ a.cp-soc:hover { border-color: currentColor; }
 .cp-timeline-item { display: flex; gap: 0.7rem; font-size: 0.83rem; }
 .cp-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 0.3rem; flex-shrink: 0; }
 .cp-timeline-meta { font-size: 0.7rem; color: var(--text-secondary); margin-bottom: 0.15rem; }
+.cp-generic-note-list-item { display: flex; align-items: center; gap: 0.45rem; min-width: 0; }
+.cp-generic-note-bullet { color: var(--primary-color, var(--accent-color)); font-size: 1rem; line-height: 1.25; }
 .cp-generic-note-preview { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.cp-generic-note-list-item .cp-generic-note-preview { display: flex; flex: 1 1 auto; align-items: center; gap: 0.35rem; min-width: 0; }
+.cp-generic-note-list-item .cp-generic-note-content:not(.cp-generic-note-content--image) { display: block; flex: 1 1 0; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-generic-note-list-item .cp-generic-note-content:not(.cp-generic-note-content--image) > * { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-generic-note-list-item .cp-note-extend,
+.cp-generic-note-list-item .cp-note-edit,
+.cp-generic-note-list-item time { flex: 0 0 auto; white-space: nowrap; }
+.cp-generic-note-list-item time { color: var(--text-secondary); font-size: 0.7rem; font-weight: 400; }
+.cp-generic-note-content:not(.cp-generic-note-content--image) { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; white-space: normal; }
+body[data-vertical="generic"] .cd-basic-field .cp-generic-note-content { color: var(--primary-color, var(--accent-color)); font-size: 0.78rem; line-height: 1.45; }
+.cp-generic-note-content--image img { display: block; width: auto; max-width: 100%; max-height: 140px; object-fit: contain; border-radius: 6px; }
+.cp-generic-note-content img { max-width: 100%; height: auto; }
 .cp-note-extend { border: 0; background: transparent; color: var(--primary-color, var(--accent-color)); padding: 0.2rem 0; font-size: 0.72rem; font-weight: 600; cursor: pointer; }
 .cp-note-extend:hover { text-decoration: underline; }
 .cp-generic-note-overlay .cp-modal { width: min(640px, calc(100vw - 2rem)); min-height: 0; max-height: calc(100dvh - 2rem); }

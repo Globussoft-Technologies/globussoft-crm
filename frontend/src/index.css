@@ -1032,6 +1032,13 @@ body[data-vertical="generic"] main.generic-page-content .reports-page__table-she
   overflow-y: auto !important;
 }
 
+/* The standalone Generic lead profile owns its bounded content viewport.
+   Keep the application main pane fixed so it does not create a second page
+   scrollbar around the profile shell. */
+.app-main > main.generic-page-content:has(.cp-profile-fixed--standalone) {
+  overflow: hidden !important;
+}
+
 /* Pickup & Plot module (Generic CRM): keep the workspace stable while its
    background refresh completes. Transport and Site Visits already use this
    non-remounting presentation; apply the same shell rule to every sibling
@@ -5640,6 +5647,8 @@ table.leads-table--scrollable td:first-child {
   color: var(--text-secondary);
   background: var(--surface-hover);
   border-color: var(--border-color);
+  cursor: pointer;
+  font-family: inherit;
 }
 
 .lead-tags-popover {
@@ -5668,6 +5677,38 @@ table.leads-table--scrollable td:first-child {
   min-width: 0;
   width: 100%;
   border-color: var(--accent-color);
+}
+
+.lead-tags-color-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 2.25rem;
+  width: 2.25rem;
+  height: 2.25rem;
+  cursor: pointer;
+}
+
+.lead-tags-color-picker input[type="color"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.lead-tags-color-picker span {
+  width: 1.75rem;
+  height: 1.75rem;
+  box-sizing: border-box;
+  border: 1px solid rgba(15, 23, 42, 0.16);
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 3px var(--surface-color, #fff), 0 1px 2px rgba(15, 23, 42, 0.12);
+  pointer-events: none;
 }
 
 .lead-tags-add-button {
@@ -5857,6 +5898,14 @@ table.leads-table--scrollable td:first-child {
   padding: 0.45rem 0.6rem;
   text-align: left;
   width: auto;
+}
+
+.lead-tags-option-color {
+  flex: 0 0 auto;
+  width: 0.7rem;
+  height: 0.7rem;
+  margin-right: 0.4rem;
+  border-radius: 50%;
 }
 
 .lead-tags-option:hover {

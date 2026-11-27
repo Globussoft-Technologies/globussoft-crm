@@ -1626,6 +1626,49 @@ describe('POST /api/contacts — create', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
+describe('POST /api/contacts/:id/activities — Generic rich notes', () => {
+  test('decodes a sanitized uploaded-image note for Generic CRM', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
+    prisma.activity.create.mockResolvedValueOnce({ id: 99, type: 'Note' });
+    const richHtml = '<div style="text-align:right">Hello</div><img src="/api/uploads/images/note.png" alt="note.png">';
+
+    const res = await request(makeApp())
+      .post('/api/contacts/9001/activities')
+      .send({
+        type: 'Note',
+        description: 'Hello',
+        richDescriptionBase64: Buffer.from(richHtml, 'utf8').toString('base64'),
+      });
+
+    expect(res.status).toBe(201);
+    expect(prisma.activity.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        type: 'Note',
+        description: expect.stringContaining('src="/api/uploads/images/note.png"'),
+        contactId: SAMPLE_CONTACT.id,
+        tenantId: TENANT_ID,
+      }),
+    });
+  });
+
+  test('does not decode the Generic-only transport for another vertical', async () => {
+    prisma.contact.findFirst.mockResolvedValueOnce(SAMPLE_CONTACT);
+
+    const res = await request(makeApp({ vertical: 'travel' }))
+      .post('/api/contacts/9001/activities')
+      .send({
+        type: 'Note',
+        description: 'Travel note',
+        richDescriptionBase64: Buffer.from('<img src="/api/uploads/images/note.png">').toString('base64'),
+      });
+
+    expect(res.status).toBe(201);
+    expect(prisma.activity.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ description: 'Travel note' }),
+    });
+  });
+});
+
 describe('POST /api/contacts/import-csv — bulk import', () => {
   test('accepts phone_number aliases and normalizes scientific-notation phone values', async () => {
     prisma.contact.findFirst.mockResolvedValueOnce(null);
@@ -2253,7 +2296,7 @@ describe('Auth gate — verifyToken (CLAUDE.md standing rule)', () => {
 });
 
 describe('DELETE /api/contacts/tags', () => {
-  test('removes a saved tag across tenant Lead contacts and keeps unrelated tags intact', async () => {
+  test('removes a saved tag across every Generic Leads-page status and keeps unrelated tags intact', async () => {
     prisma.contact.findMany.mockResolvedValueOnce([
       { id: 101, tagsJson: JSON.stringify(['Warm', 'Strategic']) },
       { id: 102, tagsJson: JSON.stringify(['strategic']) },
@@ -2281,7 +2324,6 @@ describe('DELETE /api/contacts/tags', () => {
       where: {
         tenantId: TENANT_ID,
         deletedAt: null,
-        status: 'Lead',
         tagsJson: { not: null },
       },
       select: { id: true, tagsJson: true },

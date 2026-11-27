@@ -23,7 +23,12 @@ router.get("/", verifyToken, async (req, res) => {
     const config = await genericSendGrid.readTenantConfig(req.user.tenantId);
     const status = genericSendGrid.publicStatus(config);
     if (String(req.user.role || "").toUpperCase() !== "ADMIN") {
-      return res.json({ configured: status.configured, source: status.source });
+      return res.json({
+        configured: status.configured,
+        source: status.source,
+        fromEmail: status.fromEmail || status.fallback.fromEmail,
+        fromName: status.fromName || status.fallback.fromName,
+      });
     }
     return res.json(status);
   } catch (error) {

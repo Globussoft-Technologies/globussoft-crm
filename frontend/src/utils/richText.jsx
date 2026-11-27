@@ -115,6 +115,13 @@ export function sanitizeRichTextHtml(value) {
   return output.innerHTML;
 }
 
+export function encodeRichTextHtml(value) {
+  const bytes = new TextEncoder().encode(String(value ?? ''));
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
 export function isRichTextMarkup(value) {
   const input = String(value ?? '');
   return FORMATTING_TAG_PATTERN.test(input) || ESCAPED_FORMATTING_TAG_PATTERN.test(input);

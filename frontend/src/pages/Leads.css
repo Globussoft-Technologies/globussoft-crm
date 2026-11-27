@@ -531,6 +531,76 @@ body:has(.leads-page-root--generic) .crm-select-popover [aria-selected="true"] {
 .leads-page-root--generic .leads-mobile-actions-toggle {
   display: none;
 }
+
+.lead-note-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.lead-note-composer {
+  width: min(640px, 100%);
+  height: min(470px, calc(100dvh - 2rem));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text-primary);
+  opacity: 1;
+  isolation: isolate;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+[data-theme="dark"] .lead-note-composer {
+  background: #111827;
+}
+
+.lead-note-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.lead-note-header h2 { margin: 0; font-size: 1rem; }
+.lead-note-icon-button { border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.lead-note-related { margin: 0.75rem 1rem 0; padding: 0.55rem 0.7rem; border: 1px solid var(--border-color); border-radius: 4px; background: var(--subtle-bg, #f4f7fa); color: var(--text-secondary); font-size: 0.8rem; }
+.lead-note-related strong { color: var(--primary-color, var(--accent-color)); }
+.lead-note-editor { flex: 1 1 auto; min-height: 0; margin: 0 1rem; padding: 0.75rem 0; overflow: auto; outline: none; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.9rem; line-height: 1.5; }
+.lead-note-editor img { display: block; max-width: 100%; height: auto; margin: 0.5rem 0; border-radius: 6px; }
+.lead-note-editor:empty::before { content: attr(data-placeholder); color: var(--text-secondary); pointer-events: none; }
+.lead-note-toolbar { display: flex; align-items: center; gap: 0.15rem; padding: 0.45rem 1rem; border-top: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color); color: var(--text-secondary); }
+.lead-note-toolbar select, .lead-note-toolbar button { min-width: 28px; height: 28px; border: 0; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
+.lead-note-toolbar select { width: 48px; }
+.lead-note-toolbar button:hover, .lead-note-toolbar select:hover { background: var(--subtle-bg); color: var(--text-primary); }
+.lead-note-actions { display: flex; justify-content: flex-end; gap: 0.5rem; padding: 0.75rem 1rem; }
+
+.lead-note-cell-preview { display: inline-flex; align-items: center; gap: 0.4rem; min-width: 0; max-width: 100%; }
+.lead-note-cell-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lead-note-more { flex: 0 0 auto; border: 0; padding: 0; background: transparent; color: var(--primary-color, var(--accent-color)); font: inherit; font-weight: 700; cursor: pointer; }
+.lead-note-more:hover { text-decoration: underline; }
+
+/* Generic Edit Lead is a stationary dialog, not an interactive dashboard card. */
+.generic-lead-edit-modal.card,
+.generic-lead-edit-modal.card:hover {
+  transform: none;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+  border-color: var(--border-color);
+  transition: none;
+}
+
+.generic-lead-edit-modal.card::before,
+.generic-lead-edit-modal.card:hover::before {
+  display: none;
+}
+
 @media (max-width: 600px) {
   .leads-page-root--generic .leads-mobile-actions-toggle {
     display: inline-flex;

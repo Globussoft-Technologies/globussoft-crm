@@ -66,43 +66,23 @@ describe("ColumnPicker reorder", () => {
     expect(screen.getByRole('button', { name: 'Comfortable' })).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Compact' }));
     expect(density).toHaveBeenCalledWith('compact');
-    fireEvent.click(screen.getByRole('button', { name: 'Manage lead fields' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add lead field' }));
     expect(manage).toHaveBeenCalledOnce();
   });
 
-  it('selects the complete dynamic Generic field catalog for the table', async () => {
-    const onColumnsChange = vi.fn();
+  it('does not offer the removed select-all action in the Generic table view', async () => {
     render(
       <ColumnPicker
         tableKey="leads"
         triggerLabel="View"
         density="comfortable"
-        onColumnsChange={onColumnsChange}
       />,
     );
     await waitFor(() => expect(screen.getByRole('button', { name: 'View' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'View' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Select all fields' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
-
-    await waitFor(() => {
-      expect(fetchApiMock).toHaveBeenCalledWith(
-        '/api/table-column-prefs/leads',
-        expect.objectContaining({
-          method: 'PUT',
-          body: JSON.stringify({
-            visible: [
-              'name', 'email', 'phone', 'company', 'aiScore', 'source',
-              'assignedTo', 'createdAt', 'cf_priority',
-            ],
-          }),
-        }),
-      );
-    });
-    expect(onColumnsChange).toHaveBeenLastCalledWith([
-      'name', 'email', 'phone', 'company', 'aiScore', 'source',
-      'assignedTo', 'createdAt', 'cf_priority',
-    ]);
+    expect(screen.queryByRole('button', { name: 'Select all fields' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Reset' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeVisible();
   });
   it("publishes the exact live catalog used by Customize table", async () => {
     const onAvailableColumnsChange = vi.fn();

@@ -308,6 +308,91 @@ describe('POST /send — validation', () => {
     const createArgs = prisma.smsMessage.create.mock.calls[0][0];
     expect(createArgs.data.to).toBe('919876543210');
   });
+
+  test('rejects an international recipient only for the Generic contact-profile action on an India-only provider', async () => {
+    prisma.smsConfig.findFirst.mockResolvedValue({
+      id: 1,
+      provider: 'fast2sms',
+      apiKey: 'k',
+      authToken: null,
+      senderId: 'TESTID',
+      isActive: true,
+      tenantId: 1,
+    });
+
+    const res = await request(makeApp())
+      .post('/api/sms/send')
+      .send({
+        to: '+201234567890',
+        body: 'hello',
+        sendContext: 'generic-contact-profile',
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('SMS_PROVIDER_COUNTRY_UNSUPPORTED');
+    expect(res.body.error).toMatch(/Indian numbers only/i);
+    expect(prisma.smsMessage.create).not.toHaveBeenCalled();
+    expect(mockSendSms).not.toHaveBeenCalled();
+  });
+
+  test('does not apply the Generic contact-profile country guard to existing direct-send callers', async () => {
+    prisma.smsConfig.findFirst.mockResolvedValue({
+      id: 1,
+      provider: 'fast2sms',
+      apiKey: 'k',
+      authToken: null,
+      senderId: 'TESTID',
+      isActive: true,
+      tenantId: 1,
+    });
+    prisma.smsMessage.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 5004, ...data })
+    );
+    prisma.smsMessage.update.mockResolvedValue({ id: 5004 });
+
+    const res = await request(makeApp())
+      .post('/api/sms/send')
+      .send({ to: '+201234567890', body: 'existing caller' });
+
+    expect(res.status).toBe(200);
+    expect(mockSendSms).toHaveBeenCalledTimes(1);
+  });
+
+  test('returns an actionable Twilio trial error only to the Generic contact-profile action', async () => {
+    prisma.smsConfig.findFirst.mockResolvedValue({
+      id: 1,
+      provider: 'twilio',
+      apiKey: 'AC_test',
+      authToken: 'token',
+      senderId: '+17372508034',
+      isActive: true,
+      tenantId: 1,
+    });
+    prisma.smsMessage.create.mockImplementation(({ data }) =>
+      Promise.resolve({ id: 5005, ...data })
+    );
+    prisma.smsMessage.update.mockResolvedValue({ id: 5005 });
+    mockSendSms.mockResolvedValue({
+      success: false,
+      error: '21608: The number is unverified. Trial accounts cannot send to it.',
+    });
+
+    const res = await request(makeApp())
+      .post('/api/sms/send')
+      .send({
+        to: '+919876543526',
+        body: 'hello',
+        sendContext: 'generic-contact-profile',
+      });
+
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('SMS_PROVIDER_SEND_FAILED');
+    expect(res.body.error).toMatch(/trial accounts.*verified recipient/i);
+    expect(prisma.smsMessage.update).toHaveBeenCalledWith({
+      where: { id: 5005 },
+      data: expect.objectContaining({ status: 'FAILED' }),
+    });
+  });
 });
 
 // ─── POST /send-bulk — multi-recipient envelope (#516) ──────────────

@@ -175,6 +175,7 @@ describe('<BrokerCustomerWorkspace />', () => {
           subject: 'Site visit follow-up',
           body: 'Your selected plot is ready.',
         }),
+        silent: true,
       },
     ));
     expect(window.location.pathname).toBe('/inbox');

@@ -10,11 +10,12 @@ vi.mock("../utils/api", () => ({
 }));
 
 const notifyError = vi.fn();
+const notifyInfo = vi.fn();
 const notifySuccess = vi.fn();
 vi.mock("../utils/notify", () => ({
   useNotify: () => ({
     error: notifyError,
-    info: vi.fn(),
+    info: notifyInfo,
     success: notifySuccess,
     confirm: () => Promise.resolve(true),
     prompt: () => Promise.resolve(""),
@@ -200,6 +201,7 @@ describe("<Inbox />", () => {
     previousTheme = document.documentElement.getAttribute("data-theme");
     fetchApiMock.mockReset();
     notifyError.mockReset();
+    notifyInfo.mockReset();
     notifySuccess.mockReset();
     fetchApiMock.mockImplementation(defaultFetch);
   });
@@ -416,8 +418,9 @@ describe("<Inbox />", () => {
     await user.click(screen.getByRole("button", { name: /send email/i }));
 
     await waitFor(() => {
-      expect(notifyError).toHaveBeenCalledWith(
+      expect(notifyInfo).toHaveBeenCalledWith(
         "Email was not sent because the configured sender address is not verified in SendGrid.",
+        expect.objectContaining({ onClick: expect.any(Function) }),
       );
     });
     expect(notifySuccess).not.toHaveBeenCalledWith("Email sent successfully.");

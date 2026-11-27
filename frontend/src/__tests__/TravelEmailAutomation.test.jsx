@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 
 const fetchApiMock = vi.fn();
 vi.mock('../utils/api', () => ({
@@ -11,6 +12,8 @@ const notifyObj = { error: vi.fn(), success: vi.fn(), confirm: notifyConfirm };
 vi.mock('../utils/notify', () => ({ useNotify: () => notifyObj }));
 
 import TravelEmailAutomation from '../pages/travel/EmailAutomation';
+
+const renderAutomation = () => render(<MemoryRouter><TravelEmailAutomation /></MemoryRouter>);
 
 const template = {
   id: 1,
@@ -80,7 +83,7 @@ beforeEach(() => {
 
 describe('TravelEmailAutomation template triggers', () => {
   it('writes a Travel email message with AI', async () => {
-    render(<TravelEmailAutomation />);
+    renderAutomation();
 
     expect(await screen.findByRole('heading', { name: 'Registration approved' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /create new template/i }));
@@ -119,7 +122,7 @@ describe('TravelEmailAutomation template triggers', () => {
   });
 
   it('offers delete for default templates', async () => {
-    render(<TravelEmailAutomation />);
+    renderAutomation();
 
     expect(await screen.findByRole('heading', { name: 'TMC registration approved' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete Registration approved' })).toBeInTheDocument();
@@ -142,7 +145,7 @@ describe('TravelEmailAutomation template triggers', () => {
   });
 
   it('filters template cards by subbrand', async () => {
-    render(<TravelEmailAutomation />);
+    renderAutomation();
 
     expect(await screen.findByRole('heading', { name: 'Registration approved' })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Filter templates by subbrand'), { target: { value: 'tmc' } });
@@ -154,7 +157,7 @@ describe('TravelEmailAutomation template triggers', () => {
   });
 
   it('shows running templates before paused templates', async () => {
-    render(<TravelEmailAutomation />);
+    renderAutomation();
 
     expect(await screen.findByRole('heading', { name: 'Active first template' })).toBeInTheDocument();
     const headings = screen.getAllByRole('heading', { level: 3 }).map(item => item.textContent);
@@ -162,7 +165,7 @@ describe('TravelEmailAutomation template triggers', () => {
   });
 
   it('shows status-aware action styling and badges', async () => {
-    render(<TravelEmailAutomation />);
+    renderAutomation();
 
     expect(await screen.findByRole('heading', { name: 'Registration approved' })).toBeInTheDocument();
     expect(screen.getAllByText('Running')).toHaveLength(1);
@@ -172,7 +175,7 @@ describe('TravelEmailAutomation template triggers', () => {
   });
 
   it('paginates delivery history and opens the exact sent message', async () => {
-    render(<TravelEmailAutomation />);
+    renderAutomation();
 
     await screen.findByRole('heading', { name: 'Registration approved' });
     fireEvent.click(screen.getByRole('button', { name: 'Delivery history' }));
@@ -188,7 +191,7 @@ describe('TravelEmailAutomation template triggers', () => {
   });
 
   it('bulk deletes selected delivery records', async () => {
-    render(<TravelEmailAutomation />);
+    renderAutomation();
 
     await screen.findByRole('heading', { name: 'Registration approved' });
     fireEvent.click(screen.getByRole('button', { name: 'Delivery history' }));
@@ -208,7 +211,7 @@ describe('TravelEmailAutomation template triggers', () => {
   });
 
   it('places delivery selection and deletion inside the Bulk actions menu', async () => {
-    render(<TravelEmailAutomation />);
+    renderAutomation();
 
     await screen.findByRole('heading', { name: 'Registration approved' });
     fireEvent.click(screen.getByRole('button', { name: 'Delivery history' }));
@@ -221,7 +224,7 @@ describe('TravelEmailAutomation template triggers', () => {
 
   it('selects all present delivery records for bulk deletion', async () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
-    render(<TravelEmailAutomation />);
+    renderAutomation();
 
     await screen.findByRole('heading', { name: 'Registration approved' });
     fireEvent.click(screen.getByRole('button', { name: 'Delivery history' }));
@@ -238,7 +241,7 @@ describe('TravelEmailAutomation template triggers', () => {
   });
 
   it('fills the default name, subject, and message when an optional trigger is selected', async () => {
-    render(<TravelEmailAutomation />);
+    renderAutomation();
 
     expect(await screen.findByRole('heading', { name: 'Registration approved' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /create new template/i }));

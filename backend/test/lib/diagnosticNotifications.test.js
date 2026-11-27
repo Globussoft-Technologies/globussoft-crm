@@ -9,7 +9,7 @@
  */
 // @ts-check
 
-import { describe, test, expect, beforeEach, vi } from "vitest";
+import { describe, test, expect, afterAll, beforeEach, vi } from "vitest";
 import prisma from "../../lib/prisma.js";
 import { createRequire } from "node:module";
 
@@ -47,6 +47,14 @@ prisma.travelDiagnostic = {
 };
 
 const diagnosticNotifications = requireCJS("../../lib/diagnosticNotifications");
+
+const savedFrontendUrl = process.env.FRONTEND_URL;
+process.env.FRONTEND_URL = "http://localhost:5173";
+
+afterAll(() => {
+  if (savedFrontendUrl === undefined) delete process.env.FRONTEND_URL;
+  else process.env.FRONTEND_URL = savedFrontendUrl;
+});
 
 beforeEach(() => {
   vi.clearAllMocks();

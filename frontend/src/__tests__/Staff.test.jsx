@@ -606,6 +606,7 @@ describe('<Staff /> — Save edit (PUT /api/staff/:id)', () => {
       expect(body.rbacRoleId).toBe(102);
     });
   });
+
 });
 
 describe('<Staff /> - Travel sub-brand access in edit modal', () => {

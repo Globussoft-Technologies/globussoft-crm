@@ -272,7 +272,7 @@ export default function Contracts() {
                 className="input-field"
                 value={form.contactId}
                 onChange={e => setForm({ ...form, contactId: e.target.value })}
-                style={{ background: 'var(--input-bg)' }}
+                style={{ width: '100%', background: 'var(--input-bg)' }}
               >
                 <option value="">-- Select Contact --</option>
                 {contacts.map(c => (
@@ -287,7 +287,7 @@ export default function Contracts() {
                 className="input-field"
                 value={form.dealId}
                 onChange={e => setForm({ ...form, dealId: e.target.value })}
-                style={{ background: 'var(--input-bg)' }}
+                style={{ width: '100%', background: 'var(--input-bg)' }}
               >
                 <option value="">-- No Deal --</option>
                 {deals.map(d => (

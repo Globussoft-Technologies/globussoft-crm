@@ -474,6 +474,7 @@ function RoleSelect({
   onChange,
   options,
   testId,
+  required = false,
   placeholder = "— Select a role —",
 }) {
   const [open, setOpen] = useState(false);
@@ -507,6 +508,7 @@ function RoleSelect({
         data-testid={testId}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-required={required}
         className="input-field"
         style={{
           width: "100%",
@@ -885,7 +887,36 @@ export default function Staff() {
       setAvailLoading(true);
       const dateStr = availDate.toISOString().split("T")[0];
       const data = await fetchApi(`/api/leave/availability?date=${dateStr}`);
-      setAvailability(Array.isArray(data) ? data : []);
+      if (!isGeneric) {
+        setAvailability(Array.isArray(data) ? data : []);
+        return;
+      }
+
+      // Generic CRM should show the same complete staff directory as the
+      // Staff page. The availability endpoint intentionally omits deactivated
+      // rows, so merge those directory rows back in without changing the
+      // shared Travel/Wellness availability behavior.
+      const directory = await fetchApi("/api/staff");
+      const availabilityById = new Map(
+        (Array.isArray(data) ? data : []).map((member) => [String(member.id), member]),
+      );
+      const merged = (Array.isArray(directory) ? directory : []).map((member) => {
+        const current = availabilityById.get(String(member.id));
+        if (current) {
+          return { ...current, inactive: Boolean(member.deactivatedAt) };
+        }
+        return {
+          id: member.id,
+          name: member.name,
+          email: member.email,
+          role: member.role,
+          primaryRole: member.primaryRole || null,
+          available: false,
+          inactive: true,
+          leave: null,
+        };
+      });
+      setAvailability(merged);
     } catch (err) {
       console.error("Failed to load availability:", err);
     } finally {
@@ -907,6 +938,7 @@ export default function Staff() {
       mobileNumber: member.phone || "",
       reportingTo: member.reportingToId ? String(member.reportingToId) : "",
       teams: member.teamMemberships?.[0]?.team?.id ? String(member.teamMemberships[0].team.id) : "",
+      teamIds: (member.teamMemberships || []).map((membership) => membership.team?.id).filter(Boolean).map(String),
       pipeline: member.defaultPipelineId ? String(member.defaultPipelineId) : "Default Pipeline",
       // PRD Gap §1.5 — current commission-profile assignment (null = unassigned).
       commissionProfileId:
@@ -1020,9 +1052,19 @@ export default function Staff() {
           ...(manualPassword ? { password: manualPassword } : {}),
         }),
       });
-      if (!isTravel && !isWellness && editing.teams) {
-        const team = salesTeams.find((item) => String(item.id) === String(editing.teams));
-        if (team) await fetchApi(`/api/sales-teams/${team.id}`, { method: "PUT", body: JSON.stringify({ name: team.name, memberIds: [...new Set([...(team.members || []).map((member) => member.userId), editing.id])] }) });
+      if (!isTravel && !isWellness) {
+        const previousTeamIds = Array.isArray(editing.teamIds) ? editing.teamIds.map(String) : [];
+        const nextTeamId = editing.teams ? String(editing.teams) : "";
+        const affectedTeamIds = [...new Set([...previousTeamIds, ...(nextTeamId ? [nextTeamId] : [])])];
+        for (const teamId of affectedTeamIds) {
+          const team = salesTeams.find((item) => String(item.id) === teamId);
+          if (!team) continue;
+          const existingMemberIds = (team.members || []).map((member) => member.userId || member.user?.id).filter(Boolean).map(Number);
+          const memberIds = nextTeamId === teamId
+            ? [...new Set([...existingMemberIds, Number(editing.id)])]
+            : existingMemberIds.filter((memberId) => memberId !== Number(editing.id));
+          await fetchApi(`/api/sales-teams/${team.id}`, { method: "PUT", body: JSON.stringify({ name: team.name, memberIds }) });
+        }
       }
       notify.success("Staff member updated.");
       setEditing(null);
@@ -1083,6 +1125,10 @@ export default function Staff() {
       return;
     }
     if (isGeneric) {
+      if (!String(creating.mobileNumber || "").trim()) {
+        notify.error("Mobile number is required.");
+        return;
+      }
       const workNumberError = validateGenericCrmPhone(creating.workNumber, "Work number");
       if (workNumberError) {
         notify.error(workNumberError);
@@ -1696,28 +1742,85 @@ export default function Staff() {
       {/* Availability Panel - Only for ADMIN users */}
       {showAvailability && canManageStaff && (
         <div
-          className="card staff-availability-panel"
+          className="staff-availability-modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Staff Availability"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setShowAvailability(false);
+          }}
           style={{
-            padding: "1.5rem",
-            marginBottom: "2rem",
-            background: "var(--subtle-bg-1)",
+            position: isGeneric ? "fixed" : "static",
+            inset: isGeneric ? 0 : undefined,
+            zIndex: 1100,
+            display: isGeneric ? "flex" : "block",
+            alignItems: isGeneric ? "center" : undefined,
+            justifyContent: isGeneric ? "center" : undefined,
+            padding: isGeneric ? "1rem" : 0,
+            marginBottom: isGeneric ? 0 : "2rem",
+            background: isGeneric ? "var(--overlay-bg, rgba(0, 0, 0, 0.6))" : "transparent",
+            backdropFilter: isGeneric ? "blur(3px)" : undefined,
           }}
         >
+          <div
+            className="card staff-availability-panel"
+            style={{
+              width: isGeneric ? "min(1100px, 100%)" : undefined,
+              maxHeight: isGeneric ? "85vh" : undefined,
+              overflowY: isGeneric ? "auto" : undefined,
+              boxSizing: "border-box",
+              padding: "1.5rem",
+              margin: isGeneric ? 0 : undefined,
+              marginBottom: isGeneric ? 0 : "2rem",
+              position: isGeneric ? "relative" : undefined,
+              background: isGeneric ? "var(--modal-bg, var(--surface-color))" : "var(--subtle-bg-1)",
+              color: isGeneric ? "var(--text-primary)" : undefined,
+              border: isGeneric ? "1px solid var(--border-color)" : undefined,
+              boxShadow: isGeneric ? "0 20px 60px rgba(0, 0, 0, 0.28)" : undefined,
+            }}
+          >
           <div
             className="staff-availability-header"
             style={{
               display: "flex",
+              flexDirection: isGeneric ? "column" : undefined,
               justifyContent: "space-between",
-              alignItems: "center",
+              alignItems: isGeneric ? "stretch" : "center",
+              gap: isGeneric ? "0.75rem" : undefined,
               marginBottom: "1rem",
             }}
           >
             <h3 style={{ fontSize: "1rem", fontWeight: "600" }}>
               Staff Availability
             </h3>
-            <div
+            {isGeneric && <button
+              type="button"
+              aria-label="Close staff availability"
+              onClick={() => setShowAvailability(false)}
+              style={{
+                position: "absolute",
+                top: "1rem",
+                right: "1rem",
+                padding: "0.2rem 0.55rem",
+                borderRadius: "6px",
+                border: "1px solid var(--border-color)",
+                background: "var(--subtle-bg-2)",
+                cursor: "pointer",
+                fontSize: "1.1rem",
+                lineHeight: 1.2,
+              }}
+            >
+              ×
+            </button>}
+            {!isGeneric && <div
               className="staff-availability-date-controls"
-              style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: "0.5rem",
+                alignItems: "center",
+                flexWrap: isGeneric ? "wrap" : undefined,
+              }}
             >
               <button
                 className="staff-availability-prev"
@@ -1780,7 +1883,7 @@ export default function Staff() {
               >
                 Today
               </button>
-            </div>
+            </div>}
           </div>
 
           {/* Summary bar */}
@@ -1811,6 +1914,16 @@ export default function Staff() {
                   {availability.filter((a) => !a.available).length}
                 </span>
               </div>
+              {isGeneric && (
+                <div style={{ fontSize: "0.85rem" }}>
+                  <span style={{ color: "var(--text-secondary)" }}>
+                    Total Staff:{" "}
+                  </span>
+                  <span style={{ fontWeight: "600", color: "var(--text-primary)" }}>
+                    {availability.length}
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
@@ -1925,6 +2038,7 @@ export default function Staff() {
               ))}
             </div>
           )}
+        </div>
         </div>
       )}
 
@@ -2708,9 +2822,10 @@ export default function Staff() {
               <label
                 style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}
               >
-                Working name
+                Working name{isGeneric && <span style={{ color: '#ef4444' }}> *</span>}
                 <input
                   type="text"
+                  required={isGeneric}
                   className="input-field"
                   value={creating.name}
                   onChange={(e) =>
@@ -2731,7 +2846,7 @@ export default function Staff() {
               <label
                 style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}
               >
-                Work email{" "}
+                Work email{isGeneric && <span style={{ color: '#ef4444' }}> *</span>}{" "}
                 <span
                   style={{ color: "var(--text-secondary)", fontWeight: 400 }}
                 >
@@ -2739,6 +2854,7 @@ export default function Staff() {
                 </span>
                 <input
                   type="email"
+                  required={isGeneric}
                   className="input-field"
                   value={creating.email}
                   onChange={(e) =>
@@ -2758,7 +2874,7 @@ export default function Staff() {
               <label
                 style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}
               >
-                Temporary password{" "}
+                Temporary password{isGeneric && <span style={{ color: '#ef4444' }}> *</span>}{" "}
                 <span
                   style={{ color: "var(--text-secondary)", fontWeight: 400 }}
                 >
@@ -2767,6 +2883,7 @@ export default function Staff() {
                 <div style={{ position: "relative", marginTop: "0.25rem" }}>
                   <input
                     type={showCreatePassword ? "text" : "password"}
+                    required={isGeneric}
                     className="input-field"
                     value={creating.password}
                     onChange={(e) =>
@@ -2815,7 +2932,7 @@ export default function Staff() {
                   </button>
                 </div>
               </label>
-              {!isTravel && !isWellness && (<> <label>Job title<input className="input-field" value={creating.jobTitle} onChange={(e) => setCreating({ ...creating, jobTitle: e.target.value })} placeholder="e.g. SDR" /></label><label>Work number<input className="input-field" inputMode="tel" pattern="[+0-9\s().-]+" aria-label="Work number" value={creating.workNumber} onChange={(e) => setCreating({ ...creating, workNumber: sanitizeGenericCrmPhoneInput(e.target.value) })} onBlur={() => { const error = validateGenericCrmPhone(creating.workNumber, "Work number"); if (error) notify.error(error); }} placeholder="Staff official contact number" /></label><label>Mobile number<input className="input-field" inputMode="tel" pattern="[+0-9\s().-]+" aria-label="Mobile number" value={creating.mobileNumber} onChange={(e) => setCreating({ ...creating, mobileNumber: sanitizeGenericCrmPhoneInput(e.target.value) })} onBlur={() => { const error = validateGenericCrmPhone(creating.mobileNumber, "Mobile number"); if (error) notify.error(error); }} placeholder="Staff personal mobile number" /></label><label>Reporting to<select className="input-field" value={creating.reportingTo} onChange={(e) => setCreating({ ...creating, reportingTo: e.target.value })}><option value="">Click to select</option>{staff.filter((member) => member.role === "MANAGER" || member.role === "ADMIN").map((member) => <option key={member.id} value={member.id}>{member.name || member.email}</option>)}</select></label><label>Teams<select className="input-field" value={creating.teams} onChange={(e) => setCreating({ ...creating, teams: e.target.value })}><option value="">Click to select</option>{salesTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label></>)}
+              {!isTravel && !isWellness && (<> <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Job title<input className="input-field" value={creating.jobTitle} onChange={(e) => setCreating({ ...creating, jobTitle: e.target.value })} placeholder="e.g. SDR" /></label><label style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Work number<input className="input-field" inputMode="tel" pattern="[+0-9\s().-]+" aria-label="Work number" value={creating.workNumber} onChange={(e) => setCreating({ ...creating, workNumber: sanitizeGenericCrmPhoneInput(e.target.value) })} onBlur={() => { const error = validateGenericCrmPhone(creating.workNumber, "Work number"); if (error) notify.error(error); }} placeholder="Staff official contact number" /></label><label style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Mobile number{isGeneric && <span style={{ color: '#ef4444' }}> *</span>}<input className="input-field" required={isGeneric} inputMode="tel" pattern="[+0-9\s().-]+" aria-label="Mobile number" value={creating.mobileNumber} onChange={(e) => setCreating({ ...creating, mobileNumber: sanitizeGenericCrmPhoneInput(e.target.value) })} onBlur={() => { const error = validateGenericCrmPhone(creating.mobileNumber, "Mobile number"); if (error) notify.error(error); }} placeholder="Staff personal mobile number" /></label><label style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Reporting to<select className="input-field" value={creating.reportingTo} onChange={(e) => setCreating({ ...creating, reportingTo: e.target.value })}><option value="">Click to select</option>{staff.filter((member) => member.role === "MANAGER" || member.role === "ADMIN").map((member) => <option key={member.id} value={member.id}>{member.name || member.email}</option>)}</select></label><label style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}>Teams<select className="input-field" value={creating.teams} onChange={(e) => setCreating({ ...creating, teams: e.target.value })}><option value="">Click to select</option>{salesTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label></>)}
               {/* Single Role dropdown — replaces the prior 3-way split
                   (access tier + job role + wellness role). The picked RBAC
                   role's key drives all three values via saveCreate's
@@ -2825,11 +2942,12 @@ export default function Staff() {
               <label
                 style={{ fontSize: "0.8rem", color: "var(--text-secondary)" }}
               >
-                Role
+                Role{isGeneric && <span style={{ color: '#ef4444' }}> *</span>}
                 <RoleSelect
                   value={creating.rbacRoleId}
                   onChange={handleCreateRoleChange}
                   options={availableRoles}
+                  required={isGeneric}
                   testId="staff-create-role"
                 />
               </label>

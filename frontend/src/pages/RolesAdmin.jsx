@@ -870,7 +870,18 @@ export default function RolesAdmin() {
         }}
       >
         <div>
-          <h1 style={{ marginBottom: '0.25rem' }}>Roles &amp; permissions</h1>
+          <h1
+            style={{
+              fontSize: '2rem',
+              fontWeight: 'bold',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.75rem',
+              marginBottom: '0.25rem',
+            }}
+          >
+            <Shield size={26} color="var(--accent-color)" /> Roles &amp; permissions
+          </h1>
           <p
             style={{
               color: 'var(--text-secondary)',

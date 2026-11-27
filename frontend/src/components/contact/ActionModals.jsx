@@ -575,11 +575,11 @@ export function TaskModal({ contact, staff = [], onClose, onDone }) {
   const [saving, setSaving] = useState(false);
   const submit = async (e) => {
     e.preventDefault();
-    if (!title.trim() || !dueDate || saving) return;
+    if (!title.trim() || !dueDate || (isGeneric && !taskType) || (isGeneric && !time) || (isGeneric && (canAssignGenericTask || canCreateGenericTaskForSelf) && !assigneeId) || saving) return;
     setSaving(true);
     try {
       const type = isGeneric
-        ? (taskType === 'General task' ? 'Task' : (taskType || undefined))
+        ? (taskType || undefined)
         : (taskType === 'Follow up' ? 'Follow Up' : taskType === 'Call reminder' ? 'Call' : undefined);
       const outcomeValue = {
         Interested: 'interested',
@@ -619,7 +619,7 @@ export function TaskModal({ contact, staff = [], onClose, onDone }) {
             <div className="cp-task-main">
               <label className="cp-task-field"><span>Title <b>*</b></span><input className="cp-input" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Enter title of task" /></label>
               <label className="cp-task-field"><span>Description</span><textarea className="cp-textarea cp-task-description" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Start typing the details about the task..." /></label>
-              <label className="cp-task-field"><span>Task type {isGeneric && <b>*</b>}</span><select className="cp-input" value={taskType} onChange={(e) => setTaskType(e.target.value)}><option value="">Select a type</option>{isGeneric ? <><option value="General task">General task</option><option value="Task">Task</option><option value="Call">Call</option><option value="Meeting">Meeting</option><option value="Site Visit">Site Visit</option><option value="Follow Up">Follow Up</option></> : <><option>Follow up</option><option>Call reminder</option></>}</select></label>
+              <label className="cp-task-field"><span>Task type {isGeneric && <b>*</b>}</span><select className="cp-input" value={taskType} onChange={(e) => setTaskType(e.target.value)}><option value="">Select a type</option>{isGeneric ? <><option value="Task">Task</option><option value="Call">Call</option><option value="Follow Up">Follow Up</option><option value="Meeting">Meeting</option><option value="Site Visit">Site Visit</option></> : <><option>Follow up</option><option>Call reminder</option></>}</select></label>
               {isGeneric && <label className="cp-task-field"><span>Priority <b>*</b></span><select className="cp-input" value={priority} onChange={(e) => setPriority(e.target.value)}><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label>}
               <div className="cp-task-date-row">
                 <label className="cp-task-field"><span>Due date <b>*</b></span><input className="cp-input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></label>
@@ -628,7 +628,7 @@ export function TaskModal({ contact, staff = [], onClose, onDone }) {
               {!isGeneric && <label className="cp-task-field"><span>Outcome</span><select className="cp-input" value={outcome} onChange={(e) => setOutcome(e.target.value)}><option value="">Select an outcome</option><option>Interested</option><option>Left message</option><option>No response</option><option>Not interested</option><option>Not able to reach</option></select></label>}
             </div>
             <div className="cp-task-side">
-              {isGeneric && (canAssignGenericTask || canCreateGenericTaskForSelf) ? <label className="cp-task-field"><span>Assignee</span><select className="cp-input" value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)}><option value="">Select assignee</option>{genericAssignableStaff.map((member) => <option key={member.id} value={member.id}>{member.name || member.email}</option>)}</select></label> : !isGeneric ? <>
+              {isGeneric && (canAssignGenericTask || canCreateGenericTaskForSelf) ? <label className="cp-task-field"><span>Assignee <b>*</b></span><select className="cp-input" required value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)}><option value="">Select assignee</option>{genericAssignableStaff.map((member) => <option key={member.id} value={member.id}>{member.name || member.email}</option>)}</select></label> : !isGeneric ? <>
                 <label className="cp-task-field"><span>Owner</span><select className="cp-input" defaultValue=""><option value="">Select owner</option>{contact?.assignedTo?.name && <option value={contact.assignedTo.name}>{contact.assignedTo.name}</option>}</select></label>
                 <label className="cp-task-field"><span>Related to (1)</span><select className="cp-input" defaultValue="contact"><option value="contact">Click to select records</option></select><span className="cp-task-chip">{contact?.name} <X size={12} /></span></label>
                 <label className="cp-task-field"><span>Collaborators (0)</span><select className="cp-input" defaultValue=""><option value="">Select collaborators</option></select></label>
@@ -638,7 +638,7 @@ export function TaskModal({ contact, staff = [], onClose, onDone }) {
         </div>
         <div className={`cp-task-actions${isGeneric ? ' cp-task-actions--generic' : ''}`}>
           <button type="button" className="btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
-          <button type="submit" className="btn-primary" disabled={saving || !title.trim() || !dueDate}>{saving ? 'Saving…' : 'Add Task'}</button>
+          <button type="submit" className="btn-primary" disabled={saving || !title.trim() || !dueDate || (isGeneric && !taskType) || (isGeneric && !time) || (isGeneric && (canAssignGenericTask || canCreateGenericTaskForSelf) && !assigneeId)}>{saving ? 'Saving…' : 'Add Task'}</button>
         </div>
         </form>
       </aside>
@@ -1323,7 +1323,7 @@ export function DealModal({ contact, deal, onClose, onDone, defaultToWon = false
     let alive = true;
     (async () => {
       try {
-        const [c, s, p, u, dt] = await Promise.all([
+        const [c, s, p, u] = await Promise.all([
           isGeneric
             ? Promise.all([
               fetchApi('/api/contacts?status=Lead&includeCrmStatuses=true&limit=200', { silent: true }).catch(() => []),
@@ -1333,14 +1333,12 @@ export function DealModal({ contact, deal, onClose, onDone, defaultToWon = false
           fetchApi('/api/pipeline_stages', { silent: true }).catch(() => []),
           fetchApi('/api/pipelines?fields=summary', { silent: true }).catch(() => []),
           fetchApi('/api/staff?fields=summary', { silent: true }).catch(() => []),
-          isGeneric ? fetchApi(`/api/tenant-settings/${encodeURIComponent(GENERIC_DEAL_TYPES_SETTING_KEY)}`, { silent: true }).catch(() => null) : Promise.resolve(null),
         ]);
         if (!alive) return;
         setContacts(asList(c).filter((item, index, list) => list.findIndex((candidate) => String(candidate.id) === String(item.id)) === index));
         setStages(asList(s));
         setPipelines(asList(p));
         setStaff(asList(u));
-        if (isGeneric) setDealTypes(normalizeDealTypes(dt?.value));
       } finally {
         if (alive) setListsLoading(false);
       }
@@ -1376,15 +1374,6 @@ export function DealModal({ contact, deal, onClose, onDone, defaultToWon = false
     return () => { alive = false; };
   }, [isGeneric, pipelineId, stage]);
 
-  const selectedDealType = useMemo(() => dealTypes.find((type) => type.name === dealType || type.id === dealType) || dealTypes.find((type) => type.isDefault) || dealTypes[0], [dealTypes, dealType]);
-
-  useEffect(() => {
-    if (!isGeneric || !dealTypes.length) return;
-    if (!dealType || !dealTypes.some((type) => type.name === dealType || type.id === dealType)) {
-      setDealType(selectedDealType?.name || '');
-    }
-  }, [dealType, dealTypes, isGeneric, selectedDealType]);
-
   const stageOptions = useMemo(() => {
     if (requiresPipeline && !pipelineId) return [];
     if (isGeneric && pipelineId) {
@@ -1397,14 +1386,6 @@ export function DealModal({ contact, deal, onClose, onDone, defaultToWon = false
         ? [...fromPipeline, { value: currentStage, label: deal.stage }]
         : fromPipeline;
     }
-    if (isGeneric && selectedDealType?.stages?.length) {
-      const configured = selectedDealType.stages.map((item) => ({ value: slugifyStage(item.name), label: item.name }));
-      const known = new Set(configured.map((item) => item.value));
-      const currentStage = slugifyStage(deal?.stage);
-      return deal?.stage && currentStage && !known.has(currentStage)
-        ? [...configured, { value: currentStage, label: deal.stage }]
-        : configured;
-    }
     if (isGeneric) return [];
     const fromApi = stages
       .map((s) => ({ value: slugifyStage(s.name), label: s.name }))
@@ -1414,7 +1395,7 @@ export function DealModal({ contact, deal, onClose, onDone, defaultToWon = false
       return [...base, { value: deal.stage, label: deal.stage }];
     }
     return base;
-  }, [isGeneric, pipelineId, requiresPipeline, selectedDealType, stages, deal?.stage]);
+  }, [isGeneric, pipelineId, requiresPipeline, stages, deal?.stage]);
 
   useEffect(() => {
     if (stageOptions.length > 0 && (!stage || !stageOptions.some((option) => option.value === stage))) {
@@ -1532,7 +1513,7 @@ export function DealModal({ contact, deal, onClose, onDone, defaultToWon = false
       notify.error(isGeneric ? 'Enter a deal value greater than zero.' : 'Enter a deal value of 0 or more.');
       return;
     }
-    const activeStageConfigs = isGeneric && pipelineId ? stages : selectedDealType?.stages;
+    const activeStageConfigs = isGeneric ? stages : undefined;
     if (isGeneric && !editing && !pipelineId && !hasValidTerminalDealStages(activeStageConfigs)) {
       notify.error('This deal type must include Won and Lost terminal stages before creating a deal.');
       return;
@@ -1567,7 +1548,7 @@ export function DealModal({ contact, deal, onClose, onDone, defaultToWon = false
         notes: isGeneric ? notes.trim() : undefined,
       };
       if (!editing && isGeneric) payload.autoName = true;
-      if (dealType) payload.dealType = dealType;
+      if (dealType && !isGeneric) payload.dealType = dealType;
       if (contactId) payload.contactId = contactId;
       if (pipelineId) payload.pipelineId = Number(pipelineId);
       if (expectedClose) payload.expectedClose = expectedClose;

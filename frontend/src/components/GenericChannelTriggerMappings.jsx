@@ -449,7 +449,7 @@ export default function GenericChannelTriggerMappings({ channel, campaigns, edit
         <button type="button" onClick={save} disabled={saving || loading} style={saveButtonStyle}><Save size={15} /> {saving ? 'Saving…' : 'Save & activate'}</button>
       </div>
     </header>
-    <div ref={canvasRef} role="region" aria-label={`${channelLabel} sequence steps`} className="generic-sequence-canvas" style={canvasStyle}>
+    <div className="generic-sequence-canvas" ref={canvasRef} role="region" aria-label={`${channelLabel} sequence steps`} style={canvasStyle}>
       {!loading && templates.length === 0 && <div style={emptyMessageStyle}>Create {isSms ? 'an SMS' : 'an email'} template before adding an automation action.</div>}
       <div style={flowListStyle}>
         <article style={automationBlockStyle} aria-label={`${channelLabel} sequence trigger`}>

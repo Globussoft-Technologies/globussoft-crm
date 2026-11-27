@@ -102,7 +102,11 @@ describe('DealModal — add deal drawer', () => {
     expect(await screen.findByText('Add deal')).toBeTruthy();
     expect(screen.getByLabelText('Deal name')).toBeTruthy();
     expect(screen.getByLabelText('Contact type')).toBeTruthy();
-    expect(screen.getByLabelText('Deal type')).toBeTruthy();
+    const dealKind = screen.getByLabelText('Deal type');
+    expect(dealKind).toBeTruthy();
+    expect(within(dealKind).getByRole('option', { name: 'One-Time Deal' })).toBeTruthy();
+    expect(within(dealKind).getByRole('option', { name: 'Recurring Deal' })).toBeTruthy();
+    expect(within(dealKind).queryByRole('option', { name: 'New Business' })).toBeNull();
     expect(screen.getByLabelText('Payment')).toBeTruthy();
     expect(screen.getByLabelText('Notes')).toBeTruthy();
     expect(screen.queryByText('Related account')).toBeNull();

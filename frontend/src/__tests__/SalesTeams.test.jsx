@@ -72,15 +72,14 @@ describe("<SalesTeams />", () => {
 
   it("uses the simplified Generic CRM team columns", async () => {
     document.body.dataset.vertical = "generic";
-    fetchApiMock.mockResolvedValue([{ ...TEAM, scope: "Support", isActive: false }]);
+    fetchApiMock.mockResolvedValue([{ ...TEAM, isActive: false }]);
 
     render(<SalesTeams />);
 
-    for (const heading of ["Team name", "Team scope", "Team manager", "Members", "Created date", "Status", "Actions"]) {
+    for (const heading of ["Team name", "Team manager", "Members", "Created date", "Actions"]) {
       expect(await screen.findByRole("columnheader", { name: heading })).toBeInTheDocument();
     }
-    expect(screen.getByText("Support")).toBeInTheDocument();
-    expect(screen.getByText("Inactive")).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "Status" })).not.toBeInTheDocument();
     expect(screen.getByText("1")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: `View ${TEAM.name}` })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: `Edit ${TEAM.name}` })).toBeInTheDocument();
@@ -162,21 +161,17 @@ describe("<SalesTeams />", () => {
     expect(memberSelect).toBeInTheDocument();
     expect(within(managerSelect).getByRole("option", { name: "Jordan Manager (MANAGER)" })).toBeInTheDocument();
     expect(within(memberSelect).getByRole("option", { name: "Ava Sales (USER)" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Team scope" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "Description" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Status" })).toHaveValue("Active");
 
     fireEvent.change(screen.getByRole("textbox", { name: /Team name/ }), { target: { value: "Bangalore Sales Team" } });
-    fireEvent.change(screen.getByRole("combobox", { name: "Team scope" }), { target: { value: "Support" } });
     fireEvent.change(screen.getByRole("combobox", { name: "Team manager" }), { target: { value: "3" } });
     fireEvent.change(screen.getByRole("combobox", { name: "Select a member to add" }), { target: { value: "1" } });
     fireEvent.change(screen.getByRole("textbox", { name: "Description" }), { target: { value: "Supports customers" } });
-    fireEvent.change(screen.getByRole("combobox", { name: "Status" }), { target: { value: "Inactive" } });
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
       const post = fetchApiMock.mock.calls.find(([url, options]) => url === "/api/sales-teams" && options?.method === "POST");
-      expect(JSON.parse(post[1].body)).toEqual({ name: "Bangalore Sales Team", scope: "Support", description: "Supports customers", status: "Inactive", territoryMode: "individual", territoryId: null, managerId: 3, memberIds: [1] });
+      expect(JSON.parse(post[1].body)).toEqual({ name: "Bangalore Sales Team", description: "Supports customers", status: "Active", territoryMode: "individual", territoryId: null, managerId: 3, memberIds: [1] });
     });
   });
 
@@ -191,9 +186,33 @@ describe("<SalesTeams />", () => {
     expect(within(details).getByRole("heading", { name: "North America Sales" })).toBeInTheDocument();
     expect(within(details).getByText("Team manager")).toBeInTheDocument();
     expect(within(details).getByText("1 total")).toBeInTheDocument();
-    expect(within(details).getByText("Shared reports")).toBeInTheDocument();
-    expect(within(details).getByText("Shared activities & collaboration")).toBeInTheDocument();
-    expect(within(details).getByRole("button", { name: /remove/i })).toBeInTheDocument();
+    expect(within(details).queryByText("Shared reports")).not.toBeInTheDocument();
+    expect(within(details).queryByText("Shared activities & collaboration")).not.toBeInTheDocument();
+    expect(within(details).queryByRole("button", { name: /remove/i })).not.toBeInTheDocument();
+    expect(within(details).queryByRole("button", { name: "Add member" })).not.toBeInTheDocument();
+    expect(within(details).queryByRole("combobox", { name: "Territory assignment mode" })).not.toBeInTheDocument();
+  });
+
+  it("saves Generic CRM edits from the details modal", async () => {
+    document.body.dataset.vertical = "generic";
+    fetchApiMock.mockImplementation((url, options = {}) => {
+      if (url === "/api/staff") return Promise.resolve(STAFF);
+      if (url === "/api/territories?fields=summary") return Promise.resolve([]);
+      if (url === "/api/sales-teams/7" && options.method === "PUT") return Promise.resolve({ ...TEAM, name: "Updated Sales" });
+      return Promise.resolve([TEAM]);
+    });
+
+    render(<SalesTeams />);
+    fireEvent.click(await screen.findByRole("button", { name: `Edit ${TEAM.name}` }));
+    const details = await screen.findByRole("dialog", { name: "Team details" });
+    fireEvent.change(within(details).getByRole("textbox", { name: "Team name" }), { target: { value: "Updated Sales" } });
+    fireEvent.click(within(details).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => {
+      const put = fetchApiMock.mock.calls.find(([url, options]) => url === "/api/sales-teams/7" && options?.method === "PUT");
+      expect(put).toBeTruthy();
+      expect(JSON.parse(put[1].body)).toMatchObject({ name: "Updated Sales", managerId: 3, memberIds: [1] });
+    });
   });
 
   it("opens an existing team for editing and PUTs the updated membership", async () => {

@@ -159,6 +159,7 @@ const IS_LOCAL_STACK = /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(
 let genericAdminToken = null;
 let genericAdminUserId = null;
 let genericAdminTenantId = null;
+let genericTaskAssigneeId = null;
 let wellnessAdminToken = null;
 let wellnessAdminUserId = null;
 let wellnessAdminTenantId = null;
@@ -194,6 +195,21 @@ async function getGenericAdmin(request) {
     genericAdminTenantId = r.tenantId;
   }
   return { token: genericAdminToken, userId: genericAdminUserId, tenantId: genericAdminTenantId };
+}
+
+async function getGenericTaskAssignee(request) {
+  if (genericTaskAssigneeId) return genericTaskAssigneeId;
+  const admin = await getGenericAdmin(request);
+  const response = await get(request, admin.token, '/api/staff?fields=summary&limit=100');
+  const payload = await response.json();
+  const staff = Array.isArray(payload) ? payload : (payload?.data || payload?.users || []);
+  const assignee = staff.find((member) => {
+    const role = String(member.role || '').toUpperCase();
+    return member.deactivatedAt == null && role !== 'ADMIN' && role !== 'CUSTOMER';
+  });
+  expect(assignee, 'an active non-admin staff member is required for task audit fixtures').toBeTruthy();
+  genericTaskAssigneeId = assignee.id;
+  return genericTaskAssigneeId;
 }
 
 async function getWellnessAdmin(request) {
@@ -715,9 +731,13 @@ test.describe('Audit coverage — Estimate', () => {
 test.describe('Audit coverage — Task', () => {
   test('POST /api/tasks emits AuditLog Task CREATE row', async ({ request }) => {
     const { token, userId, tenantId } = await getGenericAdmin(request);
+    const targetUserId = await getGenericTaskAssignee(request);
     const res = await post(request, token, '/api/tasks', {
       title: `${RUN_TAG} task-create`,
+      type: 'Task',
       priority: 'Medium',
+      dueDate: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+      targetUserId,
     });
     expect(res.status(), `task create: ${await res.text()}`).toBe(201);
     const t = await res.json();
@@ -729,9 +749,13 @@ test.describe('Audit coverage — Task', () => {
 
   test('PUT /api/tasks/:id emits AuditLog Task UPDATE row', async ({ request }) => {
     const { token, userId, tenantId } = await getGenericAdmin(request);
+    const targetUserId = await getGenericTaskAssignee(request);
     const create = await post(request, token, '/api/tasks', {
       title: `${RUN_TAG} task-update`,
+      type: 'Task',
       priority: 'Medium',
+      dueDate: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+      targetUserId,
     });
     expect(create.status()).toBe(201);
     const t = await create.json();
@@ -746,8 +770,13 @@ test.describe('Audit coverage — Task', () => {
 
   test('DELETE /api/tasks/:id emits AuditLog Task SOFT_DELETE row (#167)', async ({ request }) => {
     const { token, userId, tenantId } = await getGenericAdmin(request);
+    const targetUserId = await getGenericTaskAssignee(request);
     const create = await post(request, token, '/api/tasks', {
       title: `${RUN_TAG} task-delete`,
+      type: 'Task',
+      priority: 'Medium',
+      dueDate: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+      targetUserId,
     });
     expect(create.status()).toBe(201);
     const t = await create.json();

@@ -87,6 +87,21 @@ async function authDelete(request, path) {
 
 // ── cleanup tracking ────────────────────────────────────────────────
 const createdTaskIds = [];
+let taskAssigneeId = null;
+
+async function getTaskAssigneeId(request) {
+  if (taskAssigneeId) return taskAssigneeId;
+  const response = await authGet(request, '/api/staff?fields=summary&limit=100');
+  const payload = await response.json();
+  const staff = Array.isArray(payload) ? payload : (payload?.data || payload?.users || []);
+  const assignee = staff.find((member) => {
+    const role = String(member.role || '').toUpperCase();
+    return member.deactivatedAt == null && role !== 'ADMIN' && role !== 'CUSTOMER';
+  });
+  expect(assignee, 'an active non-admin staff member is required for Generic CRM task fixtures').toBeTruthy();
+  taskAssigneeId = assignee.id;
+  return taskAssigneeId;
+}
 
 test.afterAll(async ({ request }) => {
   for (const id of createdTaskIds) {
@@ -96,13 +111,15 @@ test.afterAll(async ({ request }) => {
 
 // Helper: create a task and remember it for cleanup.
 async function createTask(request, overrides = {}) {
+  const targetUserId = overrides.targetUserId ?? await getTaskAssigneeId(request);
   const res = await authPost(request, '/api/tasks', {
     title: `${RUN_TAG} ${overrides.title || 'task'}`,
-    priority: overrides.priority,
+    type: overrides.type || 'Task',
+    priority: overrides.priority || 'Medium',
     status: overrides.status,
-    dueDate: overrides.dueDate,
+    dueDate: overrides.dueDate || new Date(Date.now() + 7 * 86_400_000).toISOString(),
     contactId: overrides.contactId,
-    userId: overrides.userId,
+    targetUserId,
     notes: overrides.notes,
   });
   expect(res.status(), `task create: ${await res.text()}`).toBe(201);
@@ -126,7 +143,7 @@ test.describe('Tasks API — POST /', () => {
     expect(res.status()).toBe(400);
   });
 
-  test('201 with required title only — defaults priority="Medium", status="Pending"', async ({ request }) => {
+  test('201 with Generic CRM required fields — defaults priority="Medium", status="Pending"', async ({ request }) => {
     const t = await createTask(request, { title: 'minimal' });
     expect(t.priority).toBe('Medium');
     expect(t.status).toBe('Pending');

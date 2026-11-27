@@ -46,6 +46,8 @@ const REQUEST_TIMEOUT = 60000;
 const RUN_TAG = `E2E_LEADRPT_${Date.now()}`;
 
 let adminToken = null;
+let adminUserId = null;
+let taskAssigneeId = null;
 let managerToken = null;
 let userToken = null;
 let savedStages = null;
@@ -93,6 +95,20 @@ const put = (request, token, path, body) =>
 const post = (request, token, path, body) =>
   retryOn5xx(() => request.post(`${BASE_URL}${path}`, { headers: headers(token), data: body ?? {}, timeout: REQUEST_TIMEOUT }));
 
+async function getTaskAssignee(request) {
+  if (taskAssigneeId) return taskAssigneeId;
+  const response = await get(request, adminToken, '/api/staff?fields=summary&limit=100');
+  const payload = await response.json();
+  const staff = Array.isArray(payload) ? payload : (payload?.data || payload?.users || []);
+  const assignee = staff.find((member) => {
+    const role = String(member.role || '').toUpperCase();
+    return member.deactivatedAt == null && role !== 'ADMIN' && role !== 'CUSTOMER';
+  });
+  expect(assignee, 'an active non-admin staff member is required for lead-report task fixtures').toBeTruthy();
+  taskAssigneeId = assignee.id;
+  return taskAssigneeId;
+}
+
 const REPORT_PATHS = [
   '/api/lead-reports/overview',
   '/api/lead-reports/productivity',
@@ -106,7 +122,9 @@ const REPORT_PATHS = [
 ];
 
 test.beforeAll(async ({ request }) => {
-  adminToken = (await loginAs(request, 'admin@globussoft.com', 'password123')).token;
+  const adminLogin = await loginAs(request, 'admin@globussoft.com', 'password123');
+  adminToken = adminLogin.token;
+  adminUserId = adminLogin.userId;
   managerToken = (await loginAs(request, 'manager@crm.com', 'password123')).token;
   userToken = (await loginAs(request, 'user@crm.com', 'password123')).token;
 
@@ -377,11 +395,13 @@ test.describe('Lead Reports — meetings & site visits', () => {
 
   test('a Task created with type "Site Visit" shows up in the report', async ({ request }) => {
     const dueDate = new Date(Date.now() + 2 * 3600_000).toISOString();
+    const targetUserId = await getTaskAssignee(request);
     const c = await post(request, adminToken, '/api/tasks', {
       title: `${RUN_TAG} plot walkthrough`,
       type: 'Site Visit',
       priority: 'High',
       dueDate,
+      targetUserId,
     });
     expect(c.status()).toBe(201);
     const created = await c.json();
@@ -399,31 +419,36 @@ test.describe('Lead Reports — meetings & site visits', () => {
   });
 
   test('rejects an unknown task type rather than storing it', async ({ request }) => {
+    const targetUserId = await getTaskAssignee(request);
     const r = await post(request, adminToken, '/api/tasks', {
       title: `${RUN_TAG} bad type`,
       type: 'Teleportation',
+      priority: 'Medium',
+      dueDate: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+      targetUserId,
     });
     expect(r.status()).toBe(400);
     expect((await r.json()).code).toBe('INVALID_TASK_TYPE');
   });
 
   test('rejects an unknown visit outcome', async ({ request }) => {
+    const targetUserId = await getTaskAssignee(request);
     const r = await post(request, adminToken, '/api/tasks', {
       title: `${RUN_TAG} bad outcome`,
       type: 'Site Visit',
       outcome: 'vibes',
+      priority: 'Medium',
+      dueDate: new Date(Date.now() + 7 * 86_400_000).toISOString(),
+      targetUserId,
     });
     expect(r.status()).toBe(400);
     expect((await r.json()).code).toBe('INVALID_TASK_OUTCOME');
   });
 
-  test('a task created without type/outcome still works — the columns are optional', async ({ request }) => {
+  test('a task without the required type or assignee is rejected', async ({ request }) => {
     const r = await post(request, adminToken, '/api/tasks', { title: `${RUN_TAG} plain task` });
-    expect(r.status()).toBe(201);
-    const j = await r.json();
-    createdTaskIds.push(j.id);
-    expect(j.type).toBeNull();
-    expect(j.outcome).toBeNull();
+    expect(r.status()).toBe(400);
+    expect((await r.json()).code).toBe('REQUIRED_TASK_FIELDS_MISSING');
   });
 });
 

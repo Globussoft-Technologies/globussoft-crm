@@ -131,6 +131,17 @@ function makeBearer({ userId = 7, tenantId = 1, role = 'ADMIN', vertical } = {})
   return 'Bearer ' + jwt.sign({ userId, tenantId, role, ...(vertical ? { vertical } : {}) }, JWT_SECRET, { expiresIn: '1h' });
 }
 
+function genericTaskPayload(overrides = {}) {
+  return {
+    title: 'x',
+    type: 'Task',
+    priority: 'Medium',
+    dueDate: '2099-06-01T10:30:00Z',
+    targetUserId: 42,
+    ...overrides,
+  };
+}
+
 // CJS self-mocking seam: the route does `require('../lib/eventBus').emitEvent(...)`
 // lazily inside each handler. The eventBus module is cached by Node CJS resolver;
 // patching the singleton's `emitEvent` here propagates to the route at call time.
@@ -431,7 +442,7 @@ describe('POST / — create', () => {
     const res = await request(makeApp())
       .post('/api/tasks')
       .set('Authorization', makeBearer())
-      .send({ title: 'x', priority: 'Urgent' });
+      .send(genericTaskPayload({ priority: 'Urgent' }));
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('INVALID_PRIORITY');
     expect(prisma.task.create).not.toHaveBeenCalled();
@@ -441,7 +452,7 @@ describe('POST / — create', () => {
     const res = await request(makeApp())
       .post('/api/tasks')
       .set('Authorization', makeBearer())
-      .send({ title: 'x', status: 'WIP' });
+      .send(genericTaskPayload({ status: 'WIP' }));
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('INVALID_STATUS');
   });
@@ -450,7 +461,7 @@ describe('POST / — create', () => {
     const res = await request(makeApp())
       .post('/api/tasks')
       .set('Authorization', makeBearer())
-      .send({ title: 'x', dueDate: '1999-12-31T00:00:00Z' });
+      .send(genericTaskPayload({ dueDate: '1999-12-31T00:00:00Z' }));
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('INVALID_DUEDATE');
   });
@@ -462,7 +473,7 @@ describe('POST / — create', () => {
     const res = await request(makeApp())
       .post('/api/tasks')
       .set('Authorization', makeBearer({ tenantId: 1 }))
-      .send({ title: 'x', targetUserId: 42 });
+      .send(genericTaskPayload());
     expect(res.status).toBe(201);
     const args = prisma.task.create.mock.calls[0][0];
     expect(args.data.userId).toBe(42);
@@ -473,7 +484,7 @@ describe('POST / — create', () => {
     const res = await request(makeApp())
       .post('/api/tasks')
       .set('Authorization', makeBearer({ userId: 7, role: 'ADMIN' }))
-      .send({ title: 'x', targetUserId: 7 });
+      .send(genericTaskPayload({ targetUserId: 7 }));
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('SELF_ASSIGNMENT_FORBIDDEN');
     expect(prisma.task.create).not.toHaveBeenCalled();
@@ -483,27 +494,27 @@ describe('POST / — create', () => {
     const res = await request(makeApp())
       .post('/api/tasks')
       .set('Authorization', makeBearer({ userId: 7, role: 'USER' }))
-      .send({ title: 'x', targetUserId: 42 });
+      .send(genericTaskPayload({ targetUserId: 42 }));
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('RBAC_DENIED');
     expect(prisma.task.create).not.toHaveBeenCalled();
   });
 
-  test('Generic USER can create a task without assigning it to themselves', async () => {
-    prisma.task.create.mockResolvedValue({ id: 103, title: 'x', tenantId: 1, userId: null });
+  test('Generic USER must provide an assignee', async () => {
     const res = await request(makeApp())
       .post('/api/tasks')
       .set('Authorization', makeBearer({ userId: 7, role: 'USER', vertical: 'generic' }))
-      .send({ title: 'x' });
-    expect(res.status).toBe(201);
-    expect(prisma.task.create.mock.calls[0][0].data.createdById).toBe(7);
+      .send(genericTaskPayload({ targetUserId: undefined }));
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('REQUIRED_TASK_FIELDS_MISSING');
+    expect(prisma.task.create).not.toHaveBeenCalled();
   });
 
   test('Generic USER cannot assign a task to themselves', async () => {
     const res = await request(makeApp())
       .post('/api/tasks')
       .set('Authorization', makeBearer({ userId: 7, role: 'USER', vertical: 'generic' }))
-      .send({ title: 'x', targetUserId: 7 });
+      .send(genericTaskPayload({ targetUserId: 7 }));
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('SELF_ASSIGNMENT_FORBIDDEN');
     expect(prisma.task.create).not.toHaveBeenCalled();
@@ -516,7 +527,7 @@ describe('POST / — create', () => {
     const res = await request(makeApp())
       .post('/api/tasks')
       .set('Authorization', makeBearer({ tenantId: 1 }))
-      .send({ title: 'x', userId: 99 }); // stripDangerousMimic strips this → strippedFields.userId=99
+      .send(genericTaskPayload({ targetUserId: undefined, userId: 99 })); // stripDangerousMimic strips this → strippedFields.userId=99
     expect(res.status).toBe(201);
     const args = prisma.task.create.mock.calls[0][0];
     expect(args.data.userId).toBe(99);
@@ -529,7 +540,7 @@ describe('POST / — create', () => {
     await request(makeApp())
       .post('/api/tasks')
       .set('Authorization', makeBearer())
-      .send({ title: 'x' });
+      .send(genericTaskPayload());
     expect(emitEventMock).toHaveBeenCalledWith(
       'task.created',
       expect.objectContaining({ taskId: 102, title: 'x' }),
@@ -543,7 +554,7 @@ describe('POST / — create', () => {
     await request(makeApp())
       .post('/api/tasks')
       .set('Authorization', makeBearer({ tenantId: 1 }))
-      .send({ title: 'x', tenantId: 9999 }); // hostile cross-tenant attempt
+      .send(genericTaskPayload({ tenantId: 9999 })); // hostile cross-tenant attempt
     const args = prisma.task.create.mock.calls[0][0];
     expect(args.data.tenantId).toBe(1);
   });
@@ -555,7 +566,7 @@ describe('POST / — create', () => {
     await request(makeApp())
       .post('/api/tasks')
       .set('Authorization', makeBearer())
-      .send({ title: 'x', dueDate: '2026-06-01T10:30' }); // no TZ marker → IST
+      .send(genericTaskPayload({ dueDate: '2026-06-01T10:30' })); // no TZ marker → IST
     const args = prisma.task.create.mock.calls[0][0];
     // 10:30 IST = 05:00 UTC (10:30 - 5:30)
     expect(args.data.dueDate.toISOString()).toBe('2026-06-01T05:00:00.000Z');
@@ -566,7 +577,7 @@ describe('POST / — create', () => {
     await request(makeApp())
       .post('/api/tasks')
       .set('Authorization', makeBearer())
-      .send({ title: 'x', dueDate: '2026-06-01T10:30:00Z' }); // explicit UTC
+      .send(genericTaskPayload({ dueDate: '2026-06-01T10:30:00Z' })); // explicit UTC
     const args = prisma.task.create.mock.calls[0][0];
     expect(args.data.dueDate.toISOString()).toBe('2026-06-01T10:30:00.000Z');
   });

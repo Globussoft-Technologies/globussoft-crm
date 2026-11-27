@@ -76,7 +76,7 @@ describe("TmcTeacherCatalogues", () => {
 
     expect(screen.getByText("Nepal School Trip.pdf")).toBeInTheDocument();
     expect(screen.getByText("2 PDFs · Updating library…")).toBeInTheDocument();
-    expect(screen.getByText("1 catalogue selected")).toBeInTheDocument();
+    expect(screen.getByText(/catalogue selected/).parentElement).toHaveTextContent("1 catalogue selected");
     expect(screen.getByRole("button", { name: "Update selection" })).toBeEnabled();
   });
 

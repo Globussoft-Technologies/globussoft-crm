@@ -4348,7 +4348,7 @@ function DocumentsTab({ trip, onChange, notify }) {
       const initialTerms = tripConsentTerms || consentTermsTemplate;
       return !existing || existing === DEFAULT_TMC_CONSENT_TERMS
         ? initialTerms
-        : formatConsentTermsForEditing(existing);
+        : current;
     });
   }, [consentTermsTemplate, tripConsentTerms]);
 
@@ -4538,9 +4538,7 @@ function DocumentsTab({ trip, onChange, notify }) {
         method: "PATCH",
         body: JSON.stringify({ consentTerms: terms }),
       });
-      const savedTerms = formatConsentTermsForEditing(
-        result?.consentTerms || terms,
-      );
+      const savedTerms = String(result?.consentTerms || terms).trim();
       setConsentTerms(savedTerms);
       setTripConsentTerms(savedTerms);
       setConsentTermsTemplate(savedTerms);

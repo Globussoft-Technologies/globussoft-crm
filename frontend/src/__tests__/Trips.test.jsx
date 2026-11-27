@@ -401,16 +401,22 @@ describe('<Trips /> — load + render lifecycle', () => {
 
     const table = screen.getByRole('table');
     const topScroll = document.querySelector('.top-scroll-sync__top');
-    const bottomScroll = document.querySelector('.top-scroll-sync__bottom');
+    const detachedBottomScroll = document.querySelector('.top-scroll-sync__detached-bottom');
+    const viewport = document.querySelector('.top-scroll-sync__bottom');
 
-    expect(table.style.width).toBe('100%');
-    expect(table.style.minWidth).toBe('1900px');
+    const tableWidth = Number.parseFloat(table.style.width);
+    const columnWidthTotal = [...table.querySelectorAll('col')]
+      .reduce((total, column) => total + Number.parseFloat(column.style.width), 0);
+    expect(tableWidth).toBeGreaterThanOrEqual(1900);
+    expect(tableWidth).toBe(columnWidthTotal);
+    expect(table.style.minWidth).toBe(table.style.width);
     expect(table.style.tableLayout).toBe('fixed');
-    expect(topScroll).toBeTruthy();
-    expect(bottomScroll).toBeTruthy();
-    expect(topScroll.style.overflowX).toBe('scroll');
-    expect(topScroll.style.overflowY).toBe('hidden');
-    expect(bottomScroll.style.overflowX).toBe('scroll');
+    expect(topScroll).toBeNull();
+    expect(detachedBottomScroll).toBeTruthy();
+    expect(detachedBottomScroll.style.overflowX).toBe('scroll');
+    expect(detachedBottomScroll.style.overflowY).toBe('hidden');
+    expect(viewport.style.overflowX).toBe('hidden');
+    expect(viewport.style.overflowY).toBe('auto');
     expect(table.querySelectorAll('col').length).toBe(12);
   });
 
@@ -776,11 +782,9 @@ describe('<Trips /> — new-trip drawer + create POST', () => {
     await screen.findByRole('heading', { name: /^New Trip$/i });
     // Fill the form. School is now a free-text input — type the school name;
     // the backend find-or-creates a Contact under the hood.
-    const inputs = screen.getAllByRole('textbox');
-    // Order matches the drawer markup: trip code → destination → school.
-    fireEvent.change(inputs[0], { target: { value: 'TMC-KAS-2026-XYZ-G9' } });
-    fireEvent.change(inputs[1], { target: { value: 'Kashmir' } });
-    fireEvent.change(inputs[2], { target: { value: 'DPS North' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'Trip code' }), { target: { value: 'TMC-KAS-2026-XYZ-G9' } });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Destination' }), { target: { value: 'Kashmir' } });
+    fireEvent.change(screen.getByRole('textbox', { name: 'School' }), { target: { value: 'DPS North' } });
     // Depart date + return date inputs — find by type="date".
     const dateInputs = document.querySelectorAll('input[type="date"]');
     fireEvent.change(dateInputs[0], { target: { value: '2026-12-01' } });
@@ -823,9 +827,8 @@ describe('<Trips /> — new-trip drawer + create POST', () => {
     const form = heading.closest('form');
     expect(within(form).getByText(/Itinerary copied from/i)).toBeInTheDocument();
 
-    const inputs = within(form).getAllByRole('textbox');
-    fireEvent.change(inputs[0], { target: { value: 'TMC-AND-2026-DPS-G7' } });
-    fireEvent.change(inputs[2], { target: { value: 'DPS North' } });
+    fireEvent.change(within(form).getByRole('textbox', { name: 'Trip code' }), { target: { value: 'TMC-AND-2026-DPS-G7' } });
+    fireEvent.change(within(form).getByRole('textbox', { name: 'School' }), { target: { value: 'DPS North' } });
     const dateInputs = form.querySelectorAll('input[type="date"]');
     fireEvent.change(dateInputs[0], { target: { value: '2026-12-01' } });
     fireEvent.change(dateInputs[1], { target: { value: '2026-12-08' } });

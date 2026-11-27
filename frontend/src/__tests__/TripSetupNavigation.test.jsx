@@ -11,7 +11,7 @@ it('keeps the navigator through completion, hides it on reopening, and dismisses
   expect(screen.getByText('100%')).toBeVisible();
   first.unmount();
 
-  const next = render(nav([true, true, true, undefined, true, true, false]));
+  const next = render(nav([true, true, true, undefined, true, true, undefined]));
   next.rerender(nav(all));
   expect(screen.queryByLabelText('Trip navigator')).toBeNull();
   next.rerender(nav(pending));

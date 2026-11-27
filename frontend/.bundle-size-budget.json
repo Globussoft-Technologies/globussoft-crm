@@ -74,7 +74,8 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 11150,
+    "all-js-maxKB": 11200,
+    "//tmc-rooming-consent-catalogue-js": "11150 -> 11200 KB: the TMC rooming, consent, catalogue, and trip-management workflows add 41.6 KB across travel route-split chunks, with no new dependency. The parent build measured 11144.7 KB and this Node 24 Windows build measures 11186.3 KB; Linux CI measured 11180.6 KB. Retain 13.7 KB against the larger measurement; all per-chunk caps remain unchanged.",
     "//generic-rbac-pipelines-email-js": "11110 -> 11150 KB: sidebar-aligned RBAC administration, Generic pipeline-stage management, contact workflow refinements, and tenant SendGrid settings bring Linux CI to 11123.5 KB and the local Windows production build to 11129.2 KB. No oversized dependency or individual chunk regression was introduced; retain 20.8 KB against the larger measurement while preserving every per-chunk cap.",
     "//travel-email-automation-js": "10950 -> 10975 KB: the lazy Travel Email Automation workspace adds its route declaration, template editor, delivery-history controls, and API orchestration without a new runtime dependency. Linux CI reported 10954.9 KB total JS and a fresh Node 24 Windows build measures 10960.7 KB; retain 14.3 KB of local headroom while preserving every entry, vendor, and feature-chunk cap.",
     "//merged-leads-js": "The combined Travel Email Automation and Generic Leads calling workspace build measures 11095.3 KB of JS.",

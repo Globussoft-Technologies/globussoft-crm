@@ -123,7 +123,7 @@ const notifyObj = {
   confirm: notifyConfirm,
   prompt: notifyPrompt,
 };
-const CONSENT_TERMS_TEMPLATE = 'TERMS AND CONDITIONS FOR INTERNATIONAL EDUCATIONAL TRAVEL PROGRAMMES These Terms and Conditions govern the booking and participation. 1. DEFINITIONS Unless the context otherwise requires: A. “Participant” means the student enrolled in the programme. 2. ACCEPTANCE OF TERMS A. By accepting these Terms, the Parent or Guardian agrees to the programme rules.';
+const CONSENT_TERMS_TEMPLATE = 'TERMS AND CONDITIONS FOR INTERNATIONAL EDUCATIONAL TRAVEL PROGRAMMES These Terms and Conditions govern the booking and participation. 1. DEFINITIONS Unless the context otherwise requires: A. “Participant” means the student enrolled in the programme. B. “Parent/Guardian” means the adult legally responsible for the participant. 2. ACCEPTANCE OF TERMS A. By accepting these Terms, the Parent or Guardian agrees to the programme rules.';
 vi.mock('../utils/notify', () => ({
   useNotify: () => notifyObj,
 }));
@@ -436,6 +436,7 @@ describe('<TripDetail /> — tab strip', () => {
     renderPage(101, { search: '?tab=documents' });
     await screen.findByRole('heading', { name: 'TMC-AND-2026-MUMBAI-G7', level: 1 });
     expect(screen.getByRole('tab', { name: /Documents/i })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('button', { name: /Document collection/i }));
     expect(screen.getByText('Documents to collect')).toBeInTheDocument();
   });
 
@@ -639,8 +640,11 @@ describe('<TripDetail /> — Participants tab', () => {
     await screen.findByText('Anaya Sharma');
 
     fireEvent.click(screen.getByRole('tab', { name: /Documents/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Document collection/i }));
     expect(screen.getByText('Teacher emergency contact')).toBeInTheDocument();
-    expect(screen.getByText('DOCX · Required')).toBeInTheDocument();
+    const requirementCard = screen.getByTestId('trip-requirement-card');
+    expect(requirementCard).toHaveTextContent('DOCX');
+    expect(requirementCard).toHaveTextContent('Required');
     expect(screen.queryByText(/passport status|upload passport|sync passport/i)).not.toBeInTheDocument();
   });
 
@@ -1358,8 +1362,11 @@ describe('<TripDetail /> — dynamic document requirements', () => {
 
     expect(screen.getAllByText('School medical clearance')).toHaveLength(2);
     expect(screen.getAllByText('Emergency contact letter')).toHaveLength(2);
-    expect(screen.getByText(/PDF, DOCX · Required/)).toBeInTheDocument();
-    expect(screen.getByText(/PDF, JPG \/ JPEG · Required/)).toBeInTheDocument();
+    const requirementCards = screen.getAllByTestId('trip-requirement-card');
+    expect(requirementCards[0]).toHaveTextContent('PDF, DOCX');
+    expect(requirementCards[0]).toHaveTextContent('Required');
+    expect(requirementCards[1]).toHaveTextContent('PDF, JPG / JPEG');
+    expect(requirementCards[1]).toHaveTextContent('Required');
     expect(screen.getByRole('button', { name: /View document/ })).toBeInTheDocument();
     expect(screen.getByTestId('trip-document-actions')).toHaveStyle({ justifyContent: 'flex-start', width: '100%' });
     expect(screen.getByText('Pending')).toBeInTheDocument();
@@ -1584,10 +1591,10 @@ describe('<TripDetail /> — dynamic document requirements', () => {
 
   it('creates an admin-defined requirement with the selected file types', async () => {
     await openDocumentsTab();
-    const documentNameInput = screen.getByLabelText('Document name');
+    const documentNameInput = screen.getByLabelText(/Document name/);
     expect(documentNameInput).toBeRequired();
     expect(documentNameInput.closest('label')).toHaveTextContent(/Document name\s*\*/);
-    fireEvent.change(screen.getByLabelText('Document name'), { target: { value: 'Travel insurance certificate' } });
+    fireEvent.change(screen.getByLabelText(/Document name/), { target: { value: 'Travel insurance certificate' } });
     fireEvent.click(screen.getByRole('checkbox', { name: 'PDF' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'DOCX' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add requirement' }));
@@ -1608,7 +1615,7 @@ describe('<TripDetail /> — dynamic document requirements', () => {
 
   it('blocks document requirement names that already exist on the trip', async () => {
     await openDocumentsTab();
-    fireEvent.change(screen.getByLabelText('Document name'), { target: { value: '  school MEDICAL clearance  ' } });
+    fireEvent.change(screen.getByLabelText(/Document name/), { target: { value: '  school MEDICAL clearance  ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add requirement' }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('A document requirement with this name already exists');
@@ -1637,7 +1644,7 @@ describe('<TripDetail /> — dynamic document requirements', () => {
 
   it('shows the digital consent form preview and saves its editable terms', async () => {
     await openDocumentsTab(makeTrip({ tripType: 'international' }));
-    fireEvent.change(screen.getByLabelText('Document name'), { target: { value: 'Parent consent form' } });
+    fireEvent.change(screen.getByLabelText(/Document name/), { target: { value: 'Parent consent form' } });
     fireEvent.click(screen.getByRole('radio', { name: 'Digital consent form' }));
     expect(screen.getByTestId('trip-consent-form-fields')).toBeInTheDocument();
     expect(screen.getByText('Parent or guardian full name *')).toBeInTheDocument();
@@ -1655,7 +1662,7 @@ describe('<TripDetail /> — dynamic document requirements', () => {
     fireEvent.click(within(previewDialog).getByRole('button', { name: 'Close preview' }));
     const editedTerms = `${termsEditor.value}\n\nADMIN ADDED CLAUSE`;
     fireEvent.change(termsEditor, { target: { value: editedTerms } });
-    fireEvent.change(screen.getByLabelText('Document name'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText(/Document name/), { target: { value: '' } });
     expect(screen.getByRole('button', { name: 'Add requirement' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
@@ -1667,7 +1674,7 @@ describe('<TripDetail /> — dynamic document requirements', () => {
       expect(JSON.parse(call[1].body)).toEqual({ consentTerms: editedTerms });
     });
     expect(notifySuccess).toHaveBeenCalledWith('Consent form saved');
-    fireEvent.change(screen.getByLabelText('Document name'), { target: { value: 'Parent consent form' } });
+    fireEvent.change(screen.getByLabelText(/Document name/), { target: { value: 'Parent consent form' } });
     fireEvent.click(screen.getByRole('button', { name: 'Add requirement' }));
 
     await waitFor(() => {
@@ -1703,7 +1710,7 @@ describe('<TripDetail /> — dynamic document requirements', () => {
       target: { value: 'Updated consent terms for the next parent submissions.' },
     });
     expect(screen.getByLabelText('Consent form terms')).toHaveValue('Updated consent terms for the next parent submissions.');
-    fireEvent.change(screen.getByLabelText('Document name'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText(/Document name/), { target: { value: '' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
@@ -1719,8 +1726,8 @@ describe('<TripDetail /> — dynamic document requirements', () => {
   it('edits and removes a configured requirement without a document-type restriction', async () => {
     await openDocumentsTab();
     fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0]);
-    expect(screen.getByLabelText('Document name')).toHaveValue('School medical clearance');
-    fireEvent.change(screen.getByLabelText('Document name'), { target: { value: 'Updated authorization letter' } });
+    expect(screen.getByLabelText(/Document name/)).toHaveValue('School medical clearance');
+    fireEvent.change(screen.getByLabelText(/Document name/), { target: { value: 'Updated authorization letter' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => {

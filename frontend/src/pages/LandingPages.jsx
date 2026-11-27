@@ -1001,7 +1001,7 @@ export default function LandingPages() {
                 {tripLandingPageContext && (
                   <div role="note" style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', padding: '0.55rem 0.65rem', marginBottom: '0.8rem', border: '1px solid var(--border-color)', borderRadius: 7, background: 'var(--subtle-bg)', color: 'var(--text-secondary)', fontSize: '0.76rem' }}>
                     <LockKeyhole size={14} aria-hidden="true" />
-                    Trip details from TMC Trips are fixed here and can’t be edited.
+                    Trip details are prefilled. Adjust the audience for the page you want to create.
                   </div>
                 )}
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.85rem' }}>
@@ -1069,9 +1069,8 @@ export default function LandingPages() {
                       placeholder='e.g. "Pilgrims", "Honeymooners", "School students Grades 6-12"'
                       maxLength={200}
                       disabled={generating}
-                      readOnly={Boolean(tripLandingPageContext)}
                       className="input-field"
-                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem', ...(tripLandingPageContext ? { background: 'var(--subtle-bg)', cursor: 'not-allowed' } : {}) }}
+                      style={{ width: '100%', padding: '0.55rem 0.75rem', fontSize: '0.9rem' }}
                     />
                   </div>
                 </div>

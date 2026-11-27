@@ -507,7 +507,11 @@ describe('ContactDetail profile', () => {
       );
     });
     const [, opts] = fetchApiMock.mock.calls.find(([_u, o]) => _u.endsWith('/activities') && o?.method === 'POST');
-    expect(JSON.parse(opts.body)).toEqual({ type: 'Note', description: 'Followed up today' });
+    expect(JSON.parse(opts.body)).toEqual({
+      type: 'Note',
+      description: 'Followed up today',
+      richDescriptionBase64: 'Rm9sbG93ZWQgdXAgdG9kYXk=',
+    });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add note' })).toBeNull());
   });
 

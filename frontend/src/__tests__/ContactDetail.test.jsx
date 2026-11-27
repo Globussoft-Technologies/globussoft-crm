@@ -22,6 +22,7 @@ vi.mock('../utils/notify', () => ({ useNotify: () => notifyObj }));
 import ContactDetail from '../pages/ContactDetail';
 import ContactDetailsDrawer from '../components/contact/ContactDetailsDrawer';
 import { AuthContext } from '../appContexts';
+import { formatDateTime } from '../utils/date';
 
 const BASE_CONTACT = {
   id: 42,
@@ -135,6 +136,53 @@ async function getProfile() {
 }
 
 describe('ContactDetail — current profile contract', () => {
+  it('reveals and highlights the Generic tag row when opened from the leads More control', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      contact: { kind: 'ok', data: { ...BASE_CONTACT, tags: ['Warm', 'VIP'] } },
+    }));
+    renderPage({
+      vertical: 'generic',
+      listType: 'leads',
+      state: { focusTags: true },
+      renderBackdrop: false,
+    });
+
+    const profile = await getProfile();
+    const tagChip = await profile.findByText('VIP');
+    expect(tagChip.closest('.cp-tags-row')).toHaveClass('cp-tags-row-focused');
+  });
+
+  it('shows and applies the delete icon in the Generic Overview tag picker', async () => {
+    const baseFetch = makeFetchImpl({
+      contact: { kind: 'ok', data: { ...BASE_CONTACT, status: 'Interested', tags: ['VIP'] } },
+    });
+    fetchApiMock.mockImplementation((url, options = {}) => {
+      if (url === '/api/contacts/tags' && options.method === 'DELETE') {
+        return Promise.resolve({ deletedTag: 'VIP', updatedContacts: 3 });
+      }
+      if (url === '/api/contacts/tags') {
+        return Promise.resolve({ tags: [{ name: 'VIP', color: '#2563eb' }] });
+      }
+      return baseFetch(url, options);
+    });
+    renderPage({ vertical: 'generic', listType: 'leads', renderBackdrop: false });
+
+    const profile = await getProfile();
+    fireEvent.click(await profile.findByRole('button', { name: '+ Add tag' }));
+    const picker = await screen.findByRole('dialog', { name: 'Tag selector' });
+    const deleteButton = within(picker).getByRole('button', { name: 'Delete saved tag VIP' });
+    expect(deleteButton).toBeVisible();
+    expect(deleteButton.querySelector('svg')).not.toBeNull();
+    fireEvent.click(deleteButton);
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/tags', {
+      method: 'DELETE',
+      body: JSON.stringify({ tag: 'VIP', status: 'Lead' }),
+    }));
+    await waitFor(() => expect(within(picker).queryByText('VIP', { exact: true })).toBeNull());
+    expect(profile.queryByText('VIP', { exact: true })).toBeNull();
+  });
+
   it('shows the owner without a reassignment control for a read-only travel role', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl({
       contact: { kind: 'ok', data: { ...BASE_CONTACT, assignedToId: 7, assignedTo: { id: 7, name: 'TMC Operator' } } },
@@ -220,7 +268,7 @@ describe('ContactDetail — current profile contract', () => {
     });
 
     const profile = await screen.findByRole('region', { name: 'Contact profile' });
-    expect(profile).toHaveClass('cp-full-page');
+    expect(profile).toHaveClass('cp-full-page', 'cp-profile-fixed--generic', 'cp-profile-fixed--standalone');
     expect(profile.querySelector('.cp-slide-panel')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Close profile' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Back to Leads' })).toBeInTheDocument();
@@ -302,8 +350,25 @@ describe('ContactDetail — current profile contract', () => {
     });
 
     expect(await screen.findByLabelText('Contact profile')).toBeInTheDocument();
-    expect(document.querySelector('.cp-slide-panel')).toBeInTheDocument();
+    expect(document.querySelector('.cp-slide-panel')).toHaveClass('cp-profile-fixed--generic');
+    expect(screen.getByRole('button', { name: 'Close profile' })).toBeInTheDocument();
     expect(document.querySelector('.cp-full-page')).toBeNull();
+  });
+
+  it('keeps Generic lead overview blocks visible when an older saved preference hid them', async () => {
+    window.localStorage.setItem('cp-overview-prefs', JSON.stringify({ blocks: false }));
+    fetchApiMock.mockImplementation(makeFetchImpl());
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      state: { leadsListState: { pageIndex: 0, pageSize: 10 } },
+    });
+
+    const profile = within(await screen.findByLabelText('Contact profile'));
+    expect(profile.getByText(/No upcoming meetings with/i)).toBeInTheDocument();
+    expect(profile.getByText(/Last contacted/i)).toBeInTheDocument();
+    expect(profile.getByText(/not part of any sales sequence/i)).toBeInTheDocument();
   });
 
   it('lets an in-app lead drawer switch to the full-page profile', async () => {
@@ -681,6 +746,149 @@ describe('ContactDetail — current profile contract', () => {
     expect(within(basicSection).getByText(String(BASE_CONTACT.id))).toBeInTheDocument();
   });
 
+  it('shows the exact created date and time in the Generic CRM overview', async () => {
+    const createdAt = '2026-11-26T09:15:00.000Z';
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      contact: { kind: 'ok', data: { ...BASE_CONTACT, createdAt } },
+    }));
+    renderPage({ vertical: 'generic', listType: 'leads', renderBackdrop: false });
+    const profile = await getProfile();
+
+    const createdField = profile.getByText('Created at', { exact: true }).closest('.cp-field');
+    expect(within(createdField).getByText(formatDateTime(createdAt))).toBeInTheDocument();
+    expect(within(createdField).queryByText('yesterday')).toBeNull();
+  });
+
+  it('shows table-created notes and persisted tags in the Generic CRM profile', async () => {
+    const tableNote = {
+      id: 88,
+      type: 'Note',
+      description: 'Added from the Leads table',
+      createdAt: '2026-11-27T05:30:00.000Z',
+    };
+    const contact = {
+      ...BASE_CONTACT,
+      note: 'Older contact note',
+      tags: ['table-tag'],
+      activities: [tableNote, ...BASE_CONTACT.activities],
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      contact: { kind: 'ok', data: contact },
+      activities: {
+        kind: 'ok',
+        data: { data: contact.activities, total: 3, page: 1, limit: 100, totalPages: 1 },
+      },
+    }));
+    const previousPrefs = window.localStorage.getItem('cp-overview-prefs');
+    window.localStorage.setItem('cp-overview-prefs', JSON.stringify({
+      visibleFields: { note: true },
+      fieldOrder: ['location', 'company', 'email', 'phone', 'owner', 'createdAt', 'note'],
+    }));
+
+    try {
+      renderPage({ listType: 'leads', vertical: 'generic', renderBackdrop: false });
+      const profile = await getProfile();
+
+      expect(await profile.findByText('table-tag')).toBeInTheDocument();
+      await waitFor(() => {
+        expect(profile.getAllByText('Added from the Leads table').length).toBeGreaterThanOrEqual(2);
+      });
+
+      fireEvent.click(profile.getByRole('button', { name: 'Contact details' }));
+      const basicSection = profile.getByRole('button', { name: 'Collapse Basic information' }).closest('.cd-detail-section');
+      const noteField = within(basicSection).getByText('Note').closest('.cd-basic-field');
+      expect(within(noteField).getByText('Added from the Leads table')).toBeInTheDocument();
+      expect(within(noteField).queryByText('Older contact note')).toBeNull();
+    } finally {
+      if (previousPrefs === null) window.localStorage.removeItem('cp-overview-prefs');
+      else window.localStorage.setItem('cp-overview-prefs', previousPrefs);
+    }
+  });
+
+  it('limits the Generic Overview note preview and opens the complete note', async () => {
+    const note = {
+      id: 89,
+      type: 'Note',
+      description: 'Complete latest note content <img src="/note.png" alt="note attachment">',
+      createdAt: '2026-11-27T06:30:00.000Z',
+    };
+    const contact = { ...BASE_CONTACT, note: 'Older note', activities: [note] };
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      contact: { kind: 'ok', data: contact },
+      activities: {
+        kind: 'ok',
+        data: { data: [note], total: 1, page: 1, limit: 100, totalPages: 1 },
+      },
+    }));
+    const previousPrefs = window.localStorage.getItem('cp-overview-prefs');
+    window.localStorage.setItem('cp-overview-prefs', JSON.stringify({
+      visibleFields: { note: true },
+      fieldOrder: ['note'],
+    }));
+
+    try {
+      renderPage({ listType: 'leads', vertical: 'generic', renderBackdrop: false });
+      const profile = await getProfile();
+      const profileElement = screen.getByLabelText('Contact profile');
+      const noteLabel = Array.from(profileElement.querySelectorAll('.cp-info-grid .cp-label'))
+        .find((element) => element.textContent === 'Note');
+      const noteField = noteLabel.closest('.cp-field');
+      const preview = noteField.querySelector('.cp-generic-note-content');
+      expect(preview).toBeInTheDocument();
+      fireEvent.click(within(noteField).getByRole('button', { name: 'View details' }));
+
+      const dialog = screen.getByRole('dialog', { name: 'Full note' });
+      expect(within(dialog).getByText('Complete latest note content', { exact: false })).toBeInTheDocument();
+      expect(within(dialog).getByRole('img', { name: 'note attachment' })).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+
+      fireEvent.click(profile.getByRole('button', { name: 'Contact details' }));
+      const basicSection = profile.getByRole('button', { name: 'Collapse Basic information' }).closest('.cd-detail-section');
+      const contactNoteField = within(basicSection).getByText('Note').closest('.cd-basic-field');
+      fireEvent.click(within(contactNoteField).getByRole('button', { name: 'View details' }));
+      expect(within(screen.getByRole('dialog', { name: 'Full note' })).getByText('Complete latest note content', { exact: false })).toBeInTheDocument();
+    } finally {
+      if (previousPrefs === null) window.localStorage.removeItem('cp-overview-prefs');
+      else window.localStorage.setItem('cp-overview-prefs', previousPrefs);
+    }
+  });
+
+  it('highlights the entire Generic CRM note area for two seconds only when opened from More', async () => {
+    const requestedNote = {
+      id: 88,
+      type: 'Note',
+      description: 'Requested note',
+      createdAt: '2026-11-27T05:30:00.000Z',
+    };
+    const activities = [requestedNote, ...BASE_CONTACT.activities];
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      contact: { kind: 'ok', data: { ...BASE_CONTACT, activities } },
+      activities: {
+        kind: 'ok',
+        data: { data: activities, total: 3, page: 1, limit: 100, totalPages: 1 },
+      },
+    }));
+    renderPage({
+      listType: 'leads',
+      vertical: 'generic',
+      renderBackdrop: false,
+      state: {
+        highlightNoteId: 88,
+        returnTo: '/leads?page=1&limit=10',
+        leadsListState: { pageIndex: 0, pageSize: 10 },
+      },
+    });
+
+    await getProfile();
+    await waitFor(() => {
+      expect(document.querySelector('.cp-ov-side')).toHaveClass('cp-note-area-highlight');
+    });
+    expect(document.querySelector('[data-note-activity-id="88"]')).not.toHaveClass('cp-note-entry-highlight');
+    await waitFor(() => {
+      expect(document.querySelector('.cp-ov-side')).not.toHaveClass('cp-note-area-highlight');
+    }, { timeout: 3000 });
+  });
+
   it('shows the canonical Won label for a legacy Generic Customer status', async () => {
     fetchApiMock.mockImplementation(makeFetchImpl());
     renderPage({ vertical: 'generic' });
@@ -762,6 +970,11 @@ describe('ContactDetail — current profile contract', () => {
     fireEvent.click(profile.getByRole('button', { name: 'Contact details' }));
     fireEvent.click(profile.getByRole('checkbox', { name: 'Show empty fields' }));
 
+    const detailsToolbar = profile.getByRole('heading', { name: 'Contact details' }).closest('.cd-content-toolbar');
+    expect(detailsToolbar).toContainElement(profile.getByRole('tablist', { name: 'Contact detail groups' }));
+    expect(detailsToolbar).toContainElement(profile.getByRole('textbox', { name: 'Search fields' }));
+    expect(detailsToolbar).toContainElement(profile.getByRole('checkbox', { name: 'Show empty fields' }));
+
     expect(profile.getByText('Page URL')).toBeInTheDocument();
     expect(profile.getByText('https://example.com/pricing')).toBeInTheDocument();
     expect(profile.getByText('Location')).toBeInTheDocument();
@@ -780,6 +993,24 @@ describe('ContactDetail — current profile contract', () => {
     expect(profile.getByText('Callified Score')).toBeInTheDocument();
     expect(profile.getByText('First Touch Source')).toBeInTheDocument();
     expect(profile.getByText('Last Touch Source')).toBeInTheDocument();
+  });
+
+  it('matches the Generic lead table read-only rules in Contact details', async () => {
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      contact: { kind: 'ok', data: { ...BASE_CONTACT, whatsappPhone: '+91-9000000002' } },
+    }));
+    renderPage({ vertical: 'generic', listType: 'leads', renderBackdrop: false });
+    const profile = await getProfile();
+
+    fireEvent.click(profile.getByRole('button', { name: 'Contact details' }));
+
+    const sourceField = profile.getByText('Source', { selector: '.cd-basic-field > span' }).closest('.cd-basic-field');
+    const whatsappField = profile.getByText('WhatsApp Number', { selector: '.cd-basic-field > span' }).closest('.cd-basic-field');
+    const emailField = profile.getByText('Email', { selector: '.cd-basic-field > span' }).closest('.cd-basic-field');
+
+    expect(within(sourceField).queryByRole('button', { name: 'Edit field' })).toBeNull();
+    expect(within(whatsappField).queryByRole('button', { name: 'Edit field' })).toBeNull();
+    expect(within(emailField).getByRole('button', { name: 'Edit field' })).toBeInTheDocument();
   });
 
   it.each(['wellness', 'travel'])('preserves Website URL outside Generic CRM (%s)', async (vertical) => {
@@ -876,6 +1107,31 @@ describe('ContactDetail — current profile contract', () => {
     expect(await profile.findByText('No activities recorded yet.')).toBeInTheDocument();
   });
 
+  it('keeps Generic note text, View details, edit, and exact time in one row', async () => {
+    const note = {
+      id: 80,
+      type: 'Note',
+      description: 'Detailed note <img src="/note.png" alt="attachment">',
+      createdAt: '2026-10-21T06:15:00.000Z',
+      contactId: 42,
+      userId: 7,
+    };
+    fetchApiMock.mockImplementation(makeFetchImpl({
+      activities: { kind: 'ok', data: { data: [note], total: 1, page: 1, limit: 5, totalPages: 1 } },
+    }));
+    renderPage({ vertical: 'generic' });
+    const profile = await getProfile();
+
+    const editButton = await profile.findByRole('button', { name: `Edit note ${note.description}` });
+    const row = editButton.closest('.cp-generic-note-list-item');
+    expect(row).not.toBeNull();
+    expect(within(row).getByRole('button', { name: 'View details' })).toBeInTheDocument();
+    const timestamp = row.querySelector('time');
+    expect(timestamp).toHaveAttribute('datetime', note.createdAt);
+    expect(timestamp).toHaveTextContent(/\d{1,2}:\d{2}/);
+    expect(timestamp).not.toHaveTextContent(/ago|just now/i);
+  });
+
   it('opens the note editor from the pencil and persists the updated note', async () => {
     const note = {
       id: 81,
@@ -907,10 +1163,69 @@ describe('ContactDetail — current profile contract', () => {
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
       '/api/contacts/42/activities/81',
-      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ description: 'Updated note' }) }),
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({
+          description: 'Updated note',
+          richDescriptionBase64: 'VXBkYXRlZCBub3Rl',
+        }),
+      }),
     ));
     expect(await profile.findByText('Updated note')).toBeInTheDocument();
     expect(notifyObj.success).toHaveBeenCalledWith('Note updated.');
+  });
+
+  it('deletes a Generic CRM note after confirmation', async () => {
+    const removableNote = {
+      id: 82,
+      type: 'Note',
+      description: 'Removable note',
+      createdAt: '2026-10-22T06:00:00.000Z',
+      contactId: 42,
+      userId: 7,
+    };
+    const olderNote = {
+      id: 81,
+      type: 'Note',
+      description: 'Older note remains',
+      createdAt: '2026-10-21T06:00:00.000Z',
+      contactId: 42,
+      userId: 7,
+    };
+    const baseFetch = makeFetchImpl({
+      contact: { kind: 'ok', data: { ...BASE_CONTACT, activities: [removableNote, olderNote] } },
+      activities: { kind: 'ok', data: { data: [removableNote, olderNote], total: 2, page: 1, limit: 100, totalPages: 1 } },
+    });
+    let noteDeleted = false;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/contacts/42/activities/82' && opts?.method === 'DELETE') {
+        noteDeleted = true;
+        return Promise.resolve({ deleted: true, id: 82 });
+      }
+      if (noteDeleted && /^\/api\/contacts\/42\/activities\?/.test(url)) {
+        return Promise.resolve({ data: [olderNote], total: 1, page: 1, limit: 100, totalPages: 1 });
+      }
+      return baseFetch(url, opts);
+    });
+    renderPage({ vertical: 'generic' });
+    const profile = await getProfile();
+
+    fireEvent.click(await profile.findByRole('button', { name: 'Delete note Removable note' }));
+
+    expect(notifyObj.confirm).toHaveBeenCalledWith({
+      message: 'Delete this note?',
+      confirmText: 'Delete',
+      destructive: true,
+    });
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
+      '/api/contacts/42/activities/82',
+      { method: 'DELETE' },
+    ));
+    await waitFor(() => {
+      expect(profile.queryByRole('button', { name: 'Delete note Removable note' })).toBeNull();
+    });
+    expect(profile.getByText('Older note remains')).toBeInTheDocument();
+    expect(notifyObj.success).toHaveBeenCalledWith('Note deleted.');
   });
 
   it('keeps immediately typed text in the generic note composer', async () => {
@@ -1168,6 +1483,8 @@ describe('Generic CRM contact details', () => {
     const picker = await screen.findByRole('dialog', { name: 'Tag selector' });
     const vipLabel = within(picker).getByText('VIP', { exact: true });
     expect(vipLabel.closest('button')).toHaveAttribute('aria-selected', 'true');
+    expect(within(picker).queryByLabelText(/Change color for/i)).toBeNull();
+    expect(within(picker).getByLabelText('New tag color')).toBeInTheDocument();
     fireEvent.click(within(picker).getByText('Prospect', { exact: true }));
     fireEvent.change(within(picker).getByRole('textbox', { name: 'New tag name' }), { target: { value: 'Renewal' } });
     fireEvent.click(within(picker).getByRole('button', { name: 'Create' }));
@@ -1175,6 +1492,40 @@ describe('Generic CRM contact details', () => {
     fireEvent.click(within(picker).getByRole('button', { name: 'Apply tags' }));
 
     await waitFor(() => expect(saveTags).toHaveBeenCalledWith({ key: 'tags' }, ['VIP', 'Prospect', 'Renewal']));
+  });
+
+  it('deletes a saved Generic tag from the detail picker and current lead', async () => {
+    const saveTags = vi.fn().mockResolvedValue(undefined);
+    fetchApiMock.mockImplementation((url, options = {}) => {
+      if (url === '/api/lead-custom-fields') return Promise.resolve([]);
+      if (url === '/api/contacts/tags' && options.method === 'DELETE') {
+        return Promise.resolve({ deletedTag: 'VIP', updatedContacts: 2 });
+      }
+      if (url === '/api/contacts/tags') {
+        return Promise.resolve({ tags: [{ name: 'VIP', color: '#2563eb' }] });
+      }
+      return Promise.resolve({});
+    });
+
+    render(
+      <AuthContext.Provider value={{ tenant: { vertical: 'generic' } }}>
+        <ContactDetailsDrawer inline genericTagsEnabled contact={{ ...BASE_CONTACT, tags: ['VIP'] }} onFieldSave={saveTags} />
+      </AuthContext.Provider>,
+    );
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit tags' }));
+    const picker = await screen.findByRole('dialog', { name: 'Tag selector' });
+    const deleteButton = within(picker).getByRole('button', { name: 'Delete saved tag VIP' });
+    expect(deleteButton).toBeVisible();
+    expect(deleteButton.querySelector('svg')).not.toBeNull();
+    fireEvent.click(deleteButton);
+
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/tags', {
+      method: 'DELETE',
+      body: JSON.stringify({ tag: 'VIP', status: 'Lead' }),
+    }));
+    await waitFor(() => expect(saveTags).toHaveBeenCalledWith({ key: 'tags' }, []));
+    expect(within(picker).queryByText('VIP', { exact: true })).toBeNull();
   });
 
   it.each(['wellness', 'travel'])('does not request the Generic tag catalog for %s CRM', async (vertical) => {

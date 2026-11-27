@@ -14,21 +14,31 @@ import {
   Search,
   StickyNote,
   Tag,
+  Trash2,
   TrendingUp,
   Video,
   X,
 } from 'lucide-react';
 import { SOCIAL_NETWORKS } from './contactProfileConfig';
 import { InlineField } from './ProfileWidgets';
+import RichTextNotePreview from './RichTextNotePreview';
 import TagPickerPopover from '../../pages/wellness/patients/TagPickerPopover';
 import { fetchApi } from '../../utils/api';
+import { useNotify } from '../../utils/notify';
 import { AuthContext } from '../../appContexts';
 import {
   GENERIC_LEAD_STATUS_EDIT_OPTIONS,
   genericLeadStatusLabel,
   genericLeadStatusValue,
 } from '../../utils/genericLeadStatus';
+import {
+  GENERIC_TAG_COLORS,
+  fallbackTagColor,
+  tagTextColor,
+} from '../../utils/genericTagColors';
 import './ContactDetailsDrawer.css';
+
+export { GENERIC_TAG_COLORS, fallbackTagColor, tagTextColor };
 
 const GROUPS = [{ key: 'basic', label: 'Basic information', openByDefault: true }];
 
@@ -82,23 +92,8 @@ const ACTIONS = [
   { key: 'deal', label: 'Add deal', Icon: Plus, primary: true },
 ];
 
-export const GENERIC_TAG_COLORS = ['#2563eb', '#7c3aed', '#0891b2', '#059669', '#d97706', '#db2777', '#dc2626'];
-
 export function tagKey(name) {
   return String(name || '').trim().toLowerCase();
-}
-
-export function fallbackTagColor(name) {
-  let hash = 0;
-  for (const char of String(name || '')) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
-  return GENERIC_TAG_COLORS[Math.abs(hash) % GENERIC_TAG_COLORS.length];
-}
-
-export function tagTextColor(color) {
-  const hex = String(color || '').replace('#', '');
-  if (hex.length !== 6) return '#fff';
-  const [r, g, b] = [0, 2, 4].map((offset) => parseInt(hex.slice(offset, offset + 2), 16));
-  return (r * 299 + g * 587 + b * 114) / 1000 > 155 ? '#0f172a' : '#fff';
 }
 
 export function normalizeTagRecords(data) {
@@ -155,8 +150,9 @@ export function ContactDetailsGroup({ label, open, onToggle, children, showHeade
   );
 }
 
-export default function ContactDetailsDrawer({ contact, onClose, onAction, onFieldSave, onOwnerChange, staff = [], locations = [], inline = false, hideSms = false, hideAppointmentActions = false, wellnessLeadView = false, genericTagsEnabled = false }) {
+export default function ContactDetailsDrawer({ contact, latestNote, onClose, onAction, onFieldSave, onOwnerChange, staff = [], locations = [], inline = false, hideSms = false, hideAppointmentActions = false, wellnessLeadView = false, genericTagsEnabled = false }) {
   const { tenant } = useContext(AuthContext);
+  const notify = useNotify();
   const isWellness = tenant?.vertical === 'wellness';
   const isTravel = tenant?.vertical === 'travel';
   const isGeneric = !isWellness && !isTravel;
@@ -183,7 +179,8 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
   const [newTagName, setNewTagName] = useState('');
   const [newTagColor, setNewTagColor] = useState(GENERIC_TAG_COLORS[0]);
   const [tagCreating, setTagCreating] = useState(false);
-  const [tagColorSaving, setTagColorSaving] = useState('');
+  const [tagDeleting, setTagDeleting] = useState('');
+  const [deletedTagKeys, setDeletedTagKeys] = useState(() => new Set());
   const [tagRemoving, setTagRemoving] = useState('');
   const name = contact?.name || 'Unnamed contact';
   const initials = name.charAt(0).toUpperCase();
@@ -220,6 +217,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
 
   useEffect(() => {
     setPendingTags(dedupeTags(contact?.tags));
+    setDeletedTagKeys(new Set());
   }, [contact?.id, contact?.tags]);
 
   useEffect(() => {
@@ -302,10 +300,10 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     { label: 'Email', key: 'email', value: contact?.email },
     { label: 'First Name', key: 'firstName', value: contact?.firstName || nameParts[0] },
     { label: 'Last Name', key: 'lastName', value: contact?.lastName || nameParts.slice(1).join(' ') },
-    { label: 'WhatsApp Number', key: 'whatsappPhone', value: contact?.whatsappPhone },
+    { label: 'WhatsApp Number', key: 'whatsappPhone', value: contact?.whatsappPhone, readOnly: true },
     { label: 'Company', key: 'company', value: contact?.company },
     { label: 'Lead Score', key: 'aiScore', value: contact?.aiScore, readOnly: true },
-    { label: 'Source', key: 'source', value: contact?.source },
+    { label: 'Source', key: 'source', value: contact?.source, readOnly: true },
     { label: 'Web Form', key: 'webForm', value: latestWebFormSubmission?.webForm?.name || contact?.webFormName || customFields.webForm, readOnly: true },
     { label: 'Medium', key: 'medium', value: contact?.medium },
     { label: 'Pickup Location', key: 'pickupLocation', value: genericWorkflowDetails?.pickupAddress || contact?.pickupAddress || contact?.pickupLocation || customFields.pickupLocation, readOnly: true },
@@ -332,7 +330,7 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     { label: 'Service Type', key: 'industry', value: contact?.industry },
     { label: 'No Of Employee', key: 'companySize', value: contact?.companySize },
     { label: 'Sub-brand', key: 'subBrand', value: contact?.subBrand },
-    { label: 'Note', key: 'note', value: contact?.note },
+    { label: 'Note', key: 'note', value: latestNote ?? contact?.note },
     { label: 'State', key: 'stateCode', value: contact?.stateCode },
     { label: 'Last Updated', key: 'lastUpdated', value: contact?.updatedAt, readOnly: true },
     { label: 'First Touch Source', key: 'firstTouchSource', value: contact?.firstTouchSource },
@@ -415,10 +413,10 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
   const toggleGroup = (key) => setOpenGroups((current) => ({ ...current, [key]: !current[key] }));
   const runAction = (key) => onAction?.(key);
 
-  const allTagRecords = [...tagCatalog];
+  const allTagRecords = tagCatalog.filter((record) => !deletedTagKeys.has(tagKey(record.name)));
   tags.forEach((tag) => {
     const nameValue = String(tag || '').trim();
-    if (nameValue && !allTagRecords.some((record) => tagKey(record.name) === tagKey(nameValue))) {
+    if (nameValue && !deletedTagKeys.has(tagKey(nameValue)) && !allTagRecords.some((record) => tagKey(record.name) === tagKey(nameValue))) {
       allTagRecords.push({ name: nameValue, color: fallbackTagColor(nameValue) });
     }
   });
@@ -534,6 +532,11 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
       });
       const record = normalizeTagRecords([created])[0] || { name: nameValue, color: newTagColor };
       setTagCatalog((current) => [...current, record]);
+      setDeletedTagKeys((current) => {
+        const next = new Set(current);
+        next.delete(tagKey(record.name));
+        return next;
+      });
       setPendingTags((current) => [...current, record.name]);
       setNewTagName('');
     } catch (_error) {
@@ -543,22 +546,35 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
     }
   };
 
-  const changeGenericTagColor = async (nameValue, color) => {
+  const deleteGenericTag = async (nameValue) => {
     const key = tagKey(nameValue);
-    const previous = tagCatalog;
-    setTagColorSaving(key);
-    setTagCatalog((current) => current.map((record) => tagKey(record.name) === key ? { ...record, color } : record));
+    if (!key || tagDeleting) return;
+    const confirmed = await notify.confirm({
+      title: 'Delete saved tag?',
+      message: `Delete "${nameValue}" from every lead in this pipeline? This cannot be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      destructive: true,
+    });
+    if (!confirmed) return;
+
+    setTagDeleting(key);
     setTagMutationError('');
     try {
-      await fetchApi(`/api/contacts/tags/${encodeURIComponent(nameValue)}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ color }),
+      const result = await fetchApi('/api/contacts/tags', {
+        method: 'DELETE',
+        body: JSON.stringify({ tag: nameValue, status: 'Lead' }),
       });
+      const nextTags = pendingTags.filter((tag) => tagKey(tag) !== key);
+      setDeletedTagKeys((current) => new Set(current).add(key));
+      setTagCatalog((current) => current.filter((record) => tagKey(record.name) !== key));
+      setPendingTags(nextTags);
+      await onFieldSave?.({ key: 'tags' }, nextTags);
+      notify.success(`Deleted "${nameValue}" from ${result?.updatedContacts ?? 0} lead${(result?.updatedContacts ?? 0) === 1 ? '' : 's'}`);
     } catch (_error) {
-      setTagCatalog(previous);
-      setTagMutationError('Could not update tag color.');
+      setTagMutationError('Could not delete tag.');
     } finally {
-      setTagColorSaving('');
+      setTagDeleting('');
     }
   };
 
@@ -570,6 +586,8 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
         return <span className="cd-tag-chip" key={nameValue} style={{ background: color, borderColor: color, color: tagTextColor(color) }}>{nameValue}<button type="button" aria-label={`Remove tag ${nameValue}`} onClick={() => removeGenericTag(nameValue)} disabled={tagRemoving === nameValue}>×</button></span>;
       })}
     </div>
+  ) : isGeneric && field.key === 'note' ? (
+    field.value ? <RichTextNotePreview value={field.value} /> : displayValue(field.value)
   ) : field.owner ? (
     <InlineField
       value={contact?.assignedToId ?? ''}
@@ -668,33 +686,35 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
         </header>
 
         <div className="cd-content">
-          <div className="cd-title-row">
-            <h3>{isWellness ? 'Patient details' : 'Contact details'}</h3>
-          </div>
-
-          {isGeneric ? (
-            <div className="cd-tabs" role="tablist" aria-label="Contact detail groups">
-              {GENERIC_DETAIL_TABS.map((tab) => <button
-                type="button"
-                className={activeDetailTab === tab.key ? 'is-active' : ''}
-                role="tab"
-                aria-selected={activeDetailTab === tab.key}
-                key={tab.key}
-                onClick={() => setActiveDetailTab(tab.key)}
-              >{tab.label}</button>)}
+          <div className="cd-content-toolbar">
+            <div className="cd-title-row">
+              <h3>{isWellness ? 'Patient details' : 'Contact details'}</h3>
             </div>
-          ) : !isTravel && (
-            <div className="cd-tabs" role="tablist" aria-label="Contact detail groups">
-              <button type="button" className="is-active" role="tab" aria-selected="true">All details</button>
-            </div>
-          )}
 
-          <div className="cd-tools">
-            {!wellnessLeadView && <label className="cd-search">
-              <Search size={14} />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search fields" aria-label="Search fields" />
-            </label>}
-            <label className="cd-toggle"><input type="checkbox" checked={showEmpty} onChange={(event) => setShowEmpty(event.target.checked)} /><span aria-hidden="true" /> Show empty fields</label>
+            {isGeneric ? (
+              <div className="cd-tabs" role="tablist" aria-label="Contact detail groups">
+                {GENERIC_DETAIL_TABS.map((tab) => <button
+                  type="button"
+                  className={activeDetailTab === tab.key ? 'is-active' : ''}
+                  role="tab"
+                  aria-selected={activeDetailTab === tab.key}
+                  key={tab.key}
+                  onClick={() => setActiveDetailTab(tab.key)}
+                >{tab.label}</button>)}
+              </div>
+            ) : !isTravel && (
+              <div className="cd-tabs" role="tablist" aria-label="Contact detail groups">
+                <button type="button" className="is-active" role="tab" aria-selected="true">All details</button>
+              </div>
+            )}
+
+            <div className="cd-tools">
+              {!wellnessLeadView && <label className="cd-search">
+                <Search size={14} />
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search fields" aria-label="Search fields" />
+              </label>}
+              <label className="cd-toggle"><input type="checkbox" checked={showEmpty} onChange={(event) => setShowEmpty(event.target.checked)} /><span aria-hidden="true" /> Show empty fields</label>
+            </div>
           </div>
 
           {(!isGeneric || activeDetailTab === 'all') && <section className="cd-all-details">
@@ -773,7 +793,16 @@ export default function ContactDetailsDrawer({ contact, onClose, onAction, onFie
                               <span className="cd-tag-option-check">{isPendingTag(record.name) ? '✓' : ''}</span>
                               <span className="cd-tag-chip" style={{ background: record.color, borderColor: record.color, color: tagTextColor(record.color) }}>{record.name}</span>
                             </button>
-                            <label className="cd-tag-color"><input type="color" value={record.color} onChange={(event) => changeGenericTagColor(record.name, event.target.value)} disabled={tagColorSaving === tagKey(record.name)} aria-label={`Change color for ${record.name}`} /><span className="cd-tag-color-swatch" style={{ backgroundColor: record.color }} aria-hidden="true" /></label>
+                            <button
+                              type="button"
+                              className="cd-tag-option-delete"
+                              onClick={() => deleteGenericTag(record.name)}
+                              disabled={Boolean(tagDeleting)}
+                              aria-label={`Delete saved tag ${record.name}`}
+                              title={`Delete ${record.name}`}
+                            >
+                              <Trash2 size={13} />
+                            </button>
                           </div>
                         )) : <div className="cd-tag-picker-message">No tags available.</div>}
                       </div>

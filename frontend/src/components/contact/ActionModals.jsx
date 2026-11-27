@@ -17,14 +17,13 @@ import { AuthContext } from '../../appContexts';
 import { scopedStorageKey } from '../../utils/scopedStorage';
 import PipelineStagesManager from '../PipelineStagesManager';
 
-function inputInstant(value) {
-  const timezone = tenantTimezone();
+function inputInstant(value, timezone = tenantTimezone()) {
   return timezone ? parseWorkspaceDateTime(value, timezone) : new Date(value);
 }
 
-function taskDueDate(value) {
-  if (!tenantTimezone()) return value;
-  const date = inputInstant(value);
+function taskDueDate(value, timezone = tenantTimezone()) {
+  if (!timezone) return value;
+  const date = inputInstant(value, timezone);
   if (Number.isNaN(date.getTime())) throw new Error('Choose a valid time in the workspace timezone.');
   return date.toISOString();
 }
@@ -60,10 +59,12 @@ export function EmailModal({ contact, onClose, onDone }) {
   const [ccText, setCcText] = useState('');
   const [bccList, setBccList] = useState([]);
   const [bccText, setBccText] = useState('');
-  const [showCc, setShowCc] = useState(false);
-  const [showBcc, setShowBcc] = useState(false);
+  const [showCc, setShowCc] = useState(() => tenantVertical === 'generic');
+  const [showBcc, setShowBcc] = useState(() => tenantVertical === 'generic');
   const [subject, setSubject] = useState('');
   const [emailTemplates, setEmailTemplates] = useState([]);
+  const [senderEmail, setSenderEmail] = useState('');
+  const [useEmailTemplate, setUseEmailTemplate] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [templateLoading, setTemplateLoading] = useState(false);
   const [sending, setSending] = useState(false);
@@ -88,8 +89,15 @@ export function EmailModal({ contact, onClose, onDone }) {
     if (tenantVertical !== 'generic') return undefined;
     let active = true;
     fetchApi('/api/email-templates?fields=summary', { silent: true })
-      .then((rows) => { if (active) setEmailTemplates(Array.isArray(rows) ? rows : []); })
+      .then((rows) => { if (active) setEmailTemplates(Array.isArray(rows) ? rows : (rows?.items || [])); })
       .catch(() => { if (active) setEmailTemplates([]); });
+    fetchApi('/api/generic/email-provider', { silent: true })
+      .then((status) => {
+        if (!active) return;
+        const fromEmail = status?.fromEmail || status?.fallback?.fromEmail || '';
+        setSenderEmail(fromEmail);
+      })
+      .catch(() => { if (active) setSenderEmail(''); });
     return () => { active = false; };
   }, [tenantVertical]);
 
@@ -296,32 +304,58 @@ export function EmailModal({ contact, onClose, onDone }) {
       <aside className="cp-meeting-drawer" style={{ width: '72vw', maxWidth: 1100 }} onClick={(e) => e.stopPropagation()}>
         <header className="cp-task-head"><h3>New mail</h3><button type="button" className="cp-icon-btn" onClick={onClose} aria-label="Close"><X size={18} /></button></header>
         <div className={`cp-meeting-body${tenantVertical === 'generic' ? ' cp-generic-mail-body' : ''}`} style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', minHeight: 0, flexShrink: 1, padding: '0.75rem 1.25rem', overflowY: tenantVertical === 'generic' ? 'hidden' : 'auto' }}>
-          {tenantVertical === 'generic' && <div>
-            <label htmlFor="generic-email-template" style={{ display: 'block', marginBottom: '0.25rem', fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Email template</label>
-            <select id="generic-email-template" className="cp-input" value={selectedTemplateId} onChange={(event) => applyEmailTemplate(event.target.value)} disabled={templateLoading} aria-label="Select email template">
-              <option value="">Write custom email</option>
+          {tenantVertical === 'generic' && (
+            <label style={{ display: 'inline-flex', alignItems: 'center', alignSelf: 'flex-end', gap: '0.4rem', fontSize: '0.78rem', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={useEmailTemplate}
+                onChange={(event) => {
+                  setUseEmailTemplate(event.target.checked);
+                  if (!event.target.checked) setSelectedTemplateId('');
+                }}
+                disabled={templateLoading || sending}
+              />
+              Use email template
+            </label>
+          )}
+          {tenantVertical === 'generic' && useEmailTemplate && <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
+            <label htmlFor="generic-email-template" style={{ flex: '0 0 auto', margin: 0, padding: 0, fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Template</label>
+            <select id="generic-email-template" className="cp-input" value={selectedTemplateId} onChange={(event) => applyEmailTemplate(event.target.value)} disabled={templateLoading || sending} aria-label="Select email template" style={{ flex: 1, minWidth: 0 }}>
+              <option value="">{emailTemplates.length > 0 ? 'Select a template' : 'No email templates available'}</option>
               {emailTemplates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
             </select>
           </div>}
           <div className={tenantVertical === 'generic' ? 'cp-generic-mail-recipients' : undefined} style={{ display: 'flex', gap: '0.6rem', alignItems: 'flex-start', flex: tenantVertical === 'generic' ? '0 0 auto' : undefined }}>
             <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}><span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', width: 24 }}>To</span><div style={{ flex: 1 }}>{mailRow(toList, setToList, toText, setToText, contact?.name || 'Recipients')}</div></div>
-              {showCc && <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}><span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', width: 24 }}>Cc</span><div style={{ flex: 1 }}>{mailRow(ccList, setCcList, ccText, setCcText, 'Cc')}</div></div>}
-              {showBcc && <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}><span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', width: 24 }}>Bcc</span><div style={{ flex: 1 }}>{mailRow(bccList, setBccList, bccText, setBccText, 'Bcc')}</div></div>}
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}><span style={{ flex: '0 0 auto', fontSize: '0.8rem', color: 'var(--text-secondary)', width: tenantVertical === 'generic' ? 48 : 24 }}>To{tenantVertical === 'generic' && <span aria-hidden="true" style={{ color: 'var(--danger-color, #dc2626)' }}> *</span>}</span><div style={{ flex: 1 }}>{mailRow(toList, setToList, toText, setToText, contact?.name || 'Recipients')}</div></div>
+              {tenantVertical === 'generic' && <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}><label htmlFor="generic-email-from" style={{ flex: '0 0 48px', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>From<span aria-hidden="true" style={{ color: 'var(--danger-color, #dc2626)' }}> *</span></label><input id="generic-email-from" className="cp-input" value={senderEmail} readOnly placeholder="Loading sender email…" aria-label="From" aria-required="true" style={{ flex: 1, minWidth: 0 }} /></div>}
+              {showCc && <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}><span style={{ flex: '0 0 auto', fontSize: '0.8rem', color: 'var(--text-secondary)', width: tenantVertical === 'generic' ? 48 : 24 }}>Cc</span><div style={{ flex: 1 }}>{mailRow(ccList, setCcList, ccText, setCcText, 'Cc')}</div></div>}
+              {showBcc && <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}><span style={{ flex: '0 0 auto', fontSize: '0.8rem', color: 'var(--text-secondary)', width: tenantVertical === 'generic' ? 48 : 24 }}>Bcc</span><div style={{ flex: 1 }}>{mailRow(bccList, setBccList, bccText, setBccText, 'Bcc')}</div></div>}
             </div>
-            <div style={{ display: 'flex', gap: '0.5rem', fontSize: '0.78rem', paddingTop: '0.5rem' }}>
+            {tenantVertical !== 'generic' && <div style={{ display: 'flex', gap: '0.5rem', fontSize: '0.78rem', paddingTop: '0.5rem' }}>
               <span style={{ color: 'var(--text-secondary)' }}>From</span>
               {!showCc && <button type="button" onClick={() => setShowCc(true)} style={{ border: 'none', background: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.78rem' }}>Cc</button>}
               {!showBcc && <button type="button" onClick={() => setShowBcc(true)} style={{ border: 'none', background: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '0.78rem' }}>Bcc</button>}
-            </div>
+            </div>}
           </div>
-          <input className={`cp-input${tenantVertical === 'generic' ? ' cp-generic-mail-subject' : ''}`} value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Write a subject line" aria-label="Subject" style={{ border: 'none', borderBottom: '1px solid var(--border-color)', borderRadius: 0, paddingLeft: 0, flex: tenantVertical === 'generic' ? '0 0 auto' : undefined }} />
           {tenantVertical === 'generic' ? (
-            <div className="cp-generic-mail-editor-shell">
-              <div className="cp-generic-mail-editor" ref={editorRef} contentEditable role="textbox" aria-label="Email body" data-placeholder="Start typing your email..." onDrop={(e) => { if (e.dataTransfer?.files?.length) { e.preventDefault(); e.stopPropagation(); addFiles(e.dataTransfer.files); } }} style={{ flex: '1 1 auto', minHeight: 0, height: '100%', width: '100%', minWidth: 0, boxSizing: 'border-box', padding: '0.5rem 0', outline: 'none', fontSize: '0.9rem', lineHeight: 1.55, overflowY: 'auto', overflowX: 'hidden', overflowWrap: 'anywhere', wordBreak: 'break-word' }} />
-            </div>
+            <>
+              <div className="cp-generic-mail-subject" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: '0 0 auto' }}>
+                <label htmlFor="generic-email-subject" style={{ flex: '0 0 48px', whiteSpace: 'nowrap', fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Subject<span aria-hidden="true" style={{ color: 'var(--danger-color, #dc2626)' }}> *</span></label>
+                <input id="generic-email-subject" className="cp-input" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Write a subject line" aria-label="Subject" aria-required="true" style={{ minWidth: 0, flex: 1, border: 'none', borderBottom: '1px solid var(--border-color)', borderRadius: 0, paddingLeft: 0 }} />
+              </div>
+              <div style={{ display: 'flex', alignItems: 'stretch', gap: '0.5rem', flex: '1 1 0', minHeight: 0 }}>
+                <div style={{ flex: '0 0 48px', paddingTop: '0.5rem', fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Body<span aria-hidden="true" style={{ color: 'var(--danger-color, #dc2626)' }}> *</span></div>
+                <div className="cp-generic-mail-editor-shell" style={{ flex: '1 1 0', minWidth: 0 }}>
+                  <div className="cp-generic-mail-editor" ref={editorRef} contentEditable role="textbox" aria-label="Email body" aria-required="true" data-placeholder="Start typing your email..." onDrop={(e) => { if (e.dataTransfer?.files?.length) { e.preventDefault(); e.stopPropagation(); addFiles(e.dataTransfer.files); } }} style={{ flex: '1 1 auto', minHeight: 0, height: '100%', width: '100%', minWidth: 0, boxSizing: 'border-box', padding: '0.5rem 0', outline: 'none', fontSize: '0.9rem', lineHeight: 1.55, overflowY: 'auto', overflowX: 'hidden', overflowWrap: 'anywhere', wordBreak: 'break-word' }} />
+                </div>
+              </div>
+            </>
           ) : (
-            <div ref={editorRef} contentEditable role="textbox" aria-label="Email body" data-placeholder="Start typing your email..." onDrop={(e) => { if (e.dataTransfer?.files?.length) { e.preventDefault(); e.stopPropagation(); addFiles(e.dataTransfer.files); } }} style={{ flex: 1, minHeight: '12vh', maxHeight: '30vh', outline: 'none', fontSize: '0.9rem', lineHeight: 1.55, overflowY: 'auto' }} />
+            <>
+              <input className="cp-input" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Write a subject line" aria-label="Subject" style={{ border: 'none', borderBottom: '1px solid var(--border-color)', borderRadius: 0, paddingLeft: 0 }} />
+              <div ref={editorRef} contentEditable role="textbox" aria-label="Email body" data-placeholder="Start typing your email..." onDrop={(e) => { if (e.dataTransfer?.files?.length) { e.preventDefault(); e.stopPropagation(); addFiles(e.dataTransfer.files); } }} style={{ flex: 1, minHeight: '12vh', maxHeight: '30vh', outline: 'none', fontSize: '0.9rem', lineHeight: 1.55, overflowY: 'auto' }} />
+            </>
           )}
           {files.length > 0 && <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>{files.map((f, i) => <span key={`${f.name}-${i}`} className="cp-task-chip">📎 {f.name} · {mailSize(f.size)} <button type="button" aria-label={`Remove ${f.name}`} onClick={() => setFiles((p) => p.filter((_, x) => x !== i))}><X size={12} /></button></span>)}</div>}
         </div>
@@ -383,18 +417,74 @@ export function EmailModal({ contact, onClose, onDone }) {
 
 export function SmsModal({ contact, onClose, onDone }) {
   const notify = useNotify();
+  const auth = useContext(AuthContext) || {};
+  const tenantVertical = auth.tenant?.vertical || auth.user?.tenant?.vertical || 'generic';
+  const isGeneric = tenantVertical === 'generic';
   const [body, setBody] = useState('');
+  const [templates, setTemplates] = useState([]);
+  const [useTemplate, setUseTemplate] = useState(false);
+  const [templateId, setTemplateId] = useState('');
+  const [renderedTemplateBody, setRenderedTemplateBody] = useState('');
+  const [templateLoading, setTemplateLoading] = useState(false);
   const [sending, setSending] = useState(false);
+  const templateRequest = useRef(0);
+
+  useEffect(() => {
+    if (!isGeneric) return undefined;
+    let active = true;
+    fetchApi('/api/email-templates?channel=SMS', { silent: true })
+      .then((result) => {
+        if (active) setTemplates(Array.isArray(result) ? result : (result?.items || []));
+      })
+      .catch(() => { if (active) setTemplates([]); });
+    return () => { active = false; };
+  }, [isGeneric]);
+
+  const applySmsTemplate = async (nextTemplateId) => {
+    const requestId = ++templateRequest.current;
+    setTemplateId(nextTemplateId);
+    setRenderedTemplateBody('');
+    if (!nextTemplateId) return;
+    setTemplateLoading(true);
+    try {
+      const listedTemplate = templates.find((template) => String(template.id) === String(nextTemplateId));
+      const template = listedTemplate?.body !== undefined
+        ? listedTemplate
+        : await fetchApi(`/api/email-templates/${nextTemplateId}`, { silent: true });
+      const rendered = await fetchApi('/api/email-templates/preview', {
+        method: 'POST',
+        silent: true,
+        body: JSON.stringify({ subject: '', body: template?.body || '', contactId: contact?.id || null }),
+      });
+      if (requestId === templateRequest.current) setRenderedTemplateBody(rendered?.body || template?.body || '');
+    } catch (error) {
+      if (requestId === templateRequest.current) notify.error(error?.message || 'Failed to load SMS template.');
+    } finally {
+      if (requestId === templateRequest.current) setTemplateLoading(false);
+    }
+  };
+
   const submit = async (e) => {
     e.preventDefault();
+    if (isGeneric && useTemplate && (!templateId || !renderedTemplateBody.trim())) {
+      notify.error(templateLoading ? 'Wait for the SMS template to finish loading.' : 'Select an SMS template.');
+      return;
+    }
     setSending(true);
     try {
-      await sendSms({ to: contact.phone, body, contactId: contact.id });
+      await sendSms({
+        to: contact.phone,
+        body: isGeneric && useTemplate ? renderedTemplateBody : body,
+        contactId: contact.id,
+        ...(isGeneric ? { sendContext: 'generic-contact-profile' } : {}),
+      }, isGeneric ? { silent: true } : undefined);
       notify.success('SMS sent.');
       onDone();
       onClose();
-    } catch {
-      notify.error('Failed to send SMS.');
+    } catch (error) {
+      notify.error(isGeneric
+        ? (error?.serverMessage || error?.message || 'Failed to send SMS.')
+        : 'Failed to send SMS.');
     } finally {
       setSending(false);
     }
@@ -403,10 +493,52 @@ export function SmsModal({ contact, onClose, onDone }) {
     <Modal title={`SMS ${contact.name || ''}`} onClose={onClose}>
       <form onSubmit={submit} className="cp-form">
         <FormRow label="To"><input className="cp-input" value={contact.phone || ''} disabled /></FormRow>
-        <FormRow label="Message"><textarea className="cp-textarea" required rows={4} maxLength={1000} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Type your SMS…" /></FormRow>
+        {isGeneric && templates.length > 0 && (
+          <label className="cp-task-check">
+            <input
+              type="checkbox"
+              checked={useTemplate}
+              onChange={(e) => {
+                setUseTemplate(e.target.checked);
+                if (!e.target.checked) {
+                  templateRequest.current += 1;
+                  setTemplateId('');
+                  setRenderedTemplateBody('');
+                  setTemplateLoading(false);
+                }
+              }}
+              disabled={sending}
+            />
+            Use SMS template
+          </label>
+        )}
+        {isGeneric && useTemplate ? (
+          <>
+            <FormRow label="SMS template">
+              <select
+                aria-label="SMS template"
+                className="cp-input"
+                required
+                value={templateId}
+                onChange={(e) => applySmsTemplate(e.target.value)}
+                disabled={sending || templateLoading}
+              >
+                <option value="">Select a template</option>
+                {templates.map((template) => <option key={template.id} value={template.id}>{template.name}</option>)}
+              </select>
+            </FormRow>
+            {templateLoading ? (
+              <div style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>Loading personalized message…</div>
+            ) : renderedTemplateBody ? (
+              <div style={{ whiteSpace: 'pre-wrap', color: 'var(--text-secondary)', fontSize: '0.82rem' }}>{renderedTemplateBody}</div>
+            ) : null}
+          </>
+        ) : (
+          <FormRow label="Message"><textarea className="cp-textarea" required rows={4} maxLength={1000} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Type your SMS…" /></FormRow>
+        )}
         <div className="cp-btn-row">
           <button type="button" className="cp-action-btn" onClick={onClose}>Cancel</button>
-          <button type="submit" className="cp-action-btn cp-action-primary" disabled={sending}>{sending ? 'Sending…' : 'Send SMS'}</button>
+          <button type="submit" className="cp-action-btn cp-action-primary" disabled={sending || templateLoading || (isGeneric && useTemplate ? !templateId || !renderedTemplateBody.trim() : !body.trim())}>{sending ? 'Sending…' : 'Send SMS'}</button>
         </div>
       </form>
     </Modal>
@@ -573,9 +705,31 @@ export function TaskModal({ contact, staff = [], onClose, onDone }) {
   const [time, setTime] = useState('');
   const [outcome, setOutcome] = useState('');
   const [saving, setSaving] = useState(false);
+  const genericTimezone = tenant?.timezone || tenantTimezone() || 'UTC';
+  const genericNowParts = isGeneric ? wallTimeParts(new Date(), genericTimezone) : null;
+  const genericToday = genericNowParts
+    ? `${genericNowParts.year}-${String(genericNowParts.month).padStart(2, '0')}-${String(genericNowParts.day).padStart(2, '0')}`
+    : undefined;
+  const genericNowTime = genericNowParts
+    ? `${String(genericNowParts.hour).padStart(2, '0')}:${String(genericNowParts.minute).padStart(2, '0')}`
+    : undefined;
+  const reportGenericDueValidity = (event) => {
+    if (isGeneric) event.currentTarget.reportValidity();
+  };
   const submit = async (e) => {
     e.preventDefault();
     if (!title.trim() || !dueDate || (isGeneric && !taskType) || (isGeneric && !time) || (isGeneric && (canAssignGenericTask || canCreateGenericTaskForSelf) && !assigneeId) || saving) return;
+    if (isGeneric) {
+      const dueAt = inputInstant(`${dueDate}T${time}`, genericTimezone);
+      if (Number.isNaN(dueAt.getTime())) {
+        notify.error('Choose a valid due date and time.');
+        return;
+      }
+      if (dueAt.getTime() < Date.now()) {
+        notify.error('Due date and time cannot be in the past.');
+        return;
+      }
+    }
     setSaving(true);
     try {
       const type = isGeneric
@@ -591,7 +745,7 @@ export function TaskModal({ contact, staff = [], onClose, onDone }) {
       await createTask({
         title: title.trim(),
         notes: description.trim() || undefined,
-        dueDate: taskDueDate(`${dueDate}T${time || '00:00'}`),
+        dueDate: taskDueDate(`${dueDate}T${time || '00:00'}`, isGeneric ? genericTimezone : undefined),
         status: !isGeneric && completed ? 'Completed' : 'Pending',
         ...(isGeneric ? { priority } : {}),
         ...(isGeneric && canAssignGenericTask && assigneeId ? { targetUserId: assigneeId } : {}),
@@ -622,8 +776,8 @@ export function TaskModal({ contact, staff = [], onClose, onDone }) {
               <label className="cp-task-field"><span>Task type {isGeneric && <b>*</b>}</span><select className="cp-input" value={taskType} onChange={(e) => setTaskType(e.target.value)}><option value="">Select a type</option>{isGeneric ? <><option value="Task">Task</option><option value="Call">Call</option><option value="Follow Up">Follow Up</option><option value="Meeting">Meeting</option><option value="Site Visit">Site Visit</option></> : <><option>Follow up</option><option>Call reminder</option></>}</select></label>
               {isGeneric && <label className="cp-task-field"><span>Priority <b>*</b></span><select className="cp-input" value={priority} onChange={(e) => setPriority(e.target.value)}><option>Low</option><option>Medium</option><option>High</option><option>Critical</option></select></label>}
               <div className="cp-task-date-row">
-                <label className="cp-task-field"><span>Due date <b>*</b></span><input className="cp-input" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></label>
-                <label className="cp-task-field"><span>{isGeneric ? <>Due time <b>*</b></> : 'Time'}</span><input className="cp-input" type="time" value={time} onChange={(e) => setTime(e.target.value)} /></label>
+                <label className="cp-task-field"><span>Due date <b>*</b></span><input className="cp-input" type="date" min={isGeneric ? genericToday : undefined} value={dueDate} onChange={(e) => setDueDate(e.target.value)} onBlur={reportGenericDueValidity} /></label>
+                <label className="cp-task-field"><span>{isGeneric ? <>Due time <b>*</b></> : 'Time'}</span><input className="cp-input" type="time" min={isGeneric && dueDate === genericToday ? genericNowTime : undefined} value={time} onChange={(e) => setTime(e.target.value)} onBlur={reportGenericDueValidity} /></label>
               </div>
               {!isGeneric && <label className="cp-task-field"><span>Outcome</span><select className="cp-input" value={outcome} onChange={(e) => setOutcome(e.target.value)}><option value="">Select an outcome</option><option>Interested</option><option>Left message</option><option>No response</option><option>Not interested</option><option>Not able to reach</option></select></label>}
             </div>

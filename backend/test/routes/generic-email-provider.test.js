@@ -98,6 +98,34 @@ describe("Generic CRM SendGrid settings", () => {
     expect(prisma.tenantSetting.upsert).not.toHaveBeenCalled();
   });
 
+  test("returns the effective sender identity to Generic non-admins without exposing credentials", async () => {
+    const saveResponse = await request(makeApp())
+      .put("/api/generic/email-provider")
+      .set("Authorization", `Bearer ${tokenFor()}`)
+      .send({ apiKey: "SG.tenant.secret5678", fromEmail: "sender@generic.test", fromName: "Generic Sales" });
+    const stored = prisma.tenantSetting.upsert.mock.calls[0][0].create;
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      id: 41,
+      value: stored.value,
+      updatedAt: new Date("2026-11-25T00:00:00Z"),
+    });
+
+    expect(saveResponse.status).toBe(200);
+    const response = await request(makeApp())
+      .get("/api/generic/email-provider")
+      .set("Authorization", `Bearer ${tokenFor({ role: "USER" })}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      configured: true,
+      source: "tenant",
+      fromEmail: "sender@generic.test",
+      fromName: "Generic Sales",
+    });
+    expect(response.body.apiKey).toBeUndefined();
+    expect(response.body.apiKeyLast4).toBeUndefined();
+  });
+
   test("removes only the Generic CRM tenant credential", async () => {
     const response = await request(makeApp())
       .delete("/api/generic/email-provider")

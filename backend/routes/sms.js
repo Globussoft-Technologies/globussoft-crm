@@ -26,10 +26,32 @@ function trimGenericProviderValue(req, value) {
   return value.trim();
 }
 
+function isIndiaOnlySmsProvider(provider) {
+  return provider === "msg91" || provider === "fast2sms";
+}
+
+function isIndianSmsRecipient(phone) {
+  return /^91\d{10}$/.test(phone);
+}
+
+function genericContactSmsError(provider, providerError) {
+  const detail = String(providerError || "");
+  if (provider === "twilio" && /21608|unverified/i.test(detail)) {
+    return "Twilio trial accounts can send SMS only to verified recipient numbers. Verify this number in Twilio or upgrade the Twilio account.";
+  }
+  if (provider === "twilio" && /20003|authenticate|authentication/i.test(detail)) {
+    return "Twilio rejected the configured Account SID or Auth Token. Rotate both credentials in Configure SMS and try again.";
+  }
+  if (provider === "twilio" && /21211|invalid.*phone|not a valid phone/i.test(detail)) {
+    return "Twilio rejected the recipient phone number. Save it with the full country code and try again.";
+  }
+  return detail || "The SMS provider could not send this message. Check the provider configuration and try again.";
+}
+
 // ─── Send SMS ────────────────────────────────────────────────────────────────
 router.post("/send", verifyToken, smsSendLimiter, async (req, res) => {
   try {
-    const { to, body, contactId, templateId } = req.body;
+    const { to, body, contactId, templateId, sendContext } = req.body;
 
     if (!to || !body) {
       return res.status(400).json({ error: "to and body are required" });
@@ -52,6 +74,24 @@ router.post("/send", verifyToken, smsSendLimiter, async (req, res) => {
       return res.status(400).json({ error: "No active SMS provider configured" });
     }
 
+    const normalizedTo = normalizePhone(to);
+
+    // Deliberately limited to the manual Generic CRM contact-profile action.
+    // MSG91 and Fast2SMS are India-only in smsProvider. Without this guard,
+    // Fast2SMS would take the last 10 digits of an international number and
+    // could address the wrong Indian phone. All automated paths are unchanged.
+    if (
+      isGenericCrmRequest(req) &&
+      sendContext === "generic-contact-profile" &&
+      isIndiaOnlySmsProvider(config.provider) &&
+      !isIndianSmsRecipient(normalizedTo)
+    ) {
+      return res.status(400).json({
+        error: "The configured SMS provider supports Indian numbers only. Use an Indian number with country code +91, or configure Twilio for international SMS.",
+        code: "SMS_PROVIDER_COUNTRY_UNSUPPORTED",
+      });
+    }
+
     // If template specified, substitute variables
     let messageBody = body;
     let templateRecord = null;
@@ -62,8 +102,6 @@ router.post("/send", verifyToken, smsSendLimiter, async (req, res) => {
       const contact = await prisma.contact.findFirst({ where: { id: contactId, tenantId: req.user.tenantId } });
       if (contact) messageBody = substituteVars(templateRecord.body, contact);
     }
-
-    const normalizedTo = normalizePhone(to);
 
     // Create message record
     const message = await prisma.smsMessage.create({
@@ -111,6 +149,13 @@ router.post("/send", verifyToken, smsSendLimiter, async (req, res) => {
 
     if (result.success) {
       res.json({ success: true, messageId: message.id, providerMsgId: result.providerMsgId });
+    } else if (isGenericCrmRequest(req) && sendContext === "generic-contact-profile") {
+      res.status(502).json({
+        success: false,
+        messageId: message.id,
+        error: genericContactSmsError(config.provider, result.error),
+        code: "SMS_PROVIDER_SEND_FAILED",
+      });
     } else {
       res.status(500).json({ success: false, messageId: message.id, error: result.error });
     }

@@ -14,6 +14,7 @@ import {
 import { createPortal } from "react-dom";
 import IntlTelInput from "@intl-tel-input/react";
 import "intl-tel-input/styles";
+import phoneCountryData from "intl-tel-input/data";
 import {
   Link,
   useLocation,
@@ -45,6 +46,8 @@ import {
   Copy,
   Check,
   MapPin,
+  AlignRight,
+  Image as ImageIcon,
 } from "lucide-react";
 import { AuthContext } from "../App";
 import ColumnPicker from "../components/ColumnPicker";
@@ -62,6 +65,8 @@ import {
 } from "../utils/travelSubBrand";
 import { useActiveSubBrand } from "../utils/subBrand";
 import { copyToClipboard } from "../utils/clipboard";
+import { validateGenericCrmInlinePhone } from "../utils/genericCrmPhoneValidation";
+import { fallbackTagColor, tagTextColor } from "../utils/genericTagColors";
 import CallifiedLeadCallDialog from "../components/CallifiedLeadCallDialog";
 import { useLeadCalling } from "../hooks/useLeadCalling";
 import { usePermissions } from "../hooks/usePermissions";
@@ -81,7 +86,7 @@ import { CallifiedConnection, CrmDialClock, DialToolbar, LeadDialRuns } from '..
 import { runLeadBatches } from '../utils/leadBulkWork';
 import { useLeadCheckboxDrag } from '../utils/useLeadCheckboxDrag';
 import { buildAssistantFilterState } from "../utils/leadAssistantFilters";
-import { richTextToPlainText } from "../utils/richText";
+import { encodeRichTextHtml, richTextToPlainText, sanitizeRichTextHtml } from "../utils/richText";
 import { GENERIC_LEAD_QUICK_ADD_FIELDS } from "../utils/genericLeadQuickAddFields";
 import {
   GENERIC_LEAD_STATUS_EDIT_OPTIONS,
@@ -334,6 +339,87 @@ const FIELD_LIMITS = {
   treatmentOfInterest: 191,
   gst: 15,
 };
+const GENERIC_GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9]Z[0-9A-Z]$/;
+
+function getGenericEditFieldError(field, rawValue) {
+  const value = String(rawValue ?? "").trim();
+  if (field === "name") {
+    if (!value) return "Name is required";
+    if (!LEAD_NAME_RE.test(value)) return "Name can contain letters and spaces only";
+  }
+  if (field === "firstName" && value && (!LEAD_NAME_RE.test(value) || /\s/.test(value))) {
+    return "First Name must contain one name only";
+  }
+  if (field === "lastName" && value && !LEAD_NAME_RE.test(value)) {
+    return "Last Name can contain letters and spaces only";
+  }
+  if (field === "email") return getGenericInlineEmailError(value);
+  if (field === "phone") return validateGenericCrmInlinePhone(value);
+  if (field === "gst" && value && !GENERIC_GSTIN_RE.test(value)) {
+    return "GSTIN must be a valid 15-character GSTIN (e.g. 29ABCDE1234F1Z5)";
+  }
+  if (["birthDate", "anniversary"].includes(field) && value) {
+    const date = new Date(`${value}T00:00:00Z`);
+    const currentYear = new Date().getUTCFullYear();
+    const maxYear = field === "anniversary" ? currentYear + 1 : currentYear;
+    if (Number.isNaN(date.getTime())) return `${field === "birthDate" ? "Birth Date" : "Anniversary"} is not a valid date`;
+    if (date.getUTCFullYear() < 1900) return `${field === "birthDate" ? "Birth Date" : "Anniversary"} must be on or after 1900-01-01`;
+    if (date.getUTCFullYear() > maxYear || (field === "birthDate" && date.getTime() > Date.now())) {
+      return field === "birthDate" ? "Birth Date cannot be in the future" : `Anniversary must be on or before ${maxYear}-12-31`;
+    }
+  }
+  const limit = FIELD_LIMITS[field];
+  if (limit && value.length > limit) return `${field} must be at most ${limit} characters`;
+  if (value && CONTROL_CHAR_RE.test(value)) return `${field} contains invalid control characters`;
+  if (value && stripDangerousTags(value).stripped) return "HTML markup is not allowed";
+  return "";
+}
+
+function genericEditErrorField(error) {
+  const field = String(error?.body?.field || "").trim();
+  if (field) return field;
+  const code = String(error?.body?.code || "").toUpperCase();
+  if (code.includes("GST")) return "gst";
+  if (code.includes("BIRTH")) return "birthDate";
+  if (code.includes("ANNIVERSARY")) return "anniversary";
+  if (code.includes("EMAIL")) return "email";
+  if (code.includes("PHONE")) return "phone";
+  if (code.includes("NAME")) return "name";
+  const message = String(error?.body?.error || "").toLowerCase();
+  return Object.keys(GENERIC_ROW_EDIT_FIELD_CONFIG).find((key) =>
+    message.startsWith(key.toLowerCase()) || message.includes(` ${key.toLowerCase()} `),
+  ) || "";
+}
+
+const GENERIC_ROW_EDIT_FIELD_CONFIG = {
+  name: { label: "Name", type: "text" },
+  email: { label: "Email", type: "email" },
+  company: { label: "Company", type: "text" },
+  phone: { label: "Phone", type: "tel" },
+  medium: { label: "Medium", type: "text" },
+  subBrand: { label: "Sub-brand", type: "text" },
+  tags: { label: "Tags", type: "tags" },
+  assignedTo: { label: "Assigned To", type: "assignee", formKey: "assignedToId" },
+  status: { label: "Status", type: "status" },
+  title: { label: "Job Title", type: "text" },
+  firstName: { label: "First Name", type: "text" },
+  lastName: { label: "Last Name", type: "text" },
+  website: { label: "Website URL", type: "url" },
+  linkedin: { label: "LinkedIn", type: "url" },
+  industry: { label: "Service Type", type: "text" },
+  companySize: { label: "No Of Employee", type: "text" },
+  note: { label: "Note", type: "textarea" },
+  stateCode: { label: "State", type: "text" },
+  firstTouchSource: { label: "First Touch Source", type: "text" },
+  lastTouchSource: { label: "Last Touch Source", type: "text" },
+  treatmentOfInterest: { label: "Treatment Of Interest", type: "text" },
+  birthDate: { label: "Birth Date", type: "date" },
+  anniversary: { label: "Anniversary", type: "date" },
+  gst: { label: "GSTIN", type: "text" },
+  billingStateCode: { label: "Billing State Code", type: "text" },
+  campaign: { label: "Callified Campaign", type: "campaign", formKey: "callifiedCampaignId" },
+  callStatus: { label: "Call Status", type: "callStatus", formKey: "callifiedLeadStatus" },
+};
 const LEADS_PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 const GENERIC_LEADS_PAGE_SIZE_OPTIONS = [10, 15, 25, 50, 100];
 const MAX_LEADS_PAGE_SIZE = 500;
@@ -408,7 +494,7 @@ const DEFAULT_CREATE_LEAD_VISIBLE_FIELDS = [
 ];
 const loadCreateLeadFieldPrefs = (storageKey) => {
   if (typeof window === "undefined")
-    return { visible: null, required: null, quickAddSnapshot: null };
+    return { visible: null, required: null, quickAddSnapshot: null, requiredSnapshot: null };
   try {
     const saved = JSON.parse(window.localStorage.getItem(storageKey) || "null");
     if (Array.isArray(saved)) {
@@ -416,6 +502,7 @@ const loadCreateLeadFieldPrefs = (storageKey) => {
         visible: saved.filter((key) => typeof key === "string"),
         required: null,
         quickAddSnapshot: null,
+        requiredSnapshot: null,
       };
     }
     return {
@@ -434,9 +521,18 @@ const loadCreateLeadFieldPrefs = (storageKey) => {
               ),
             )
           : null,
+      requiredSnapshot:
+        saved?.requiredSnapshot && typeof saved.requiredSnapshot === "object"
+          ? Object.fromEntries(
+              Object.entries(saved.requiredSnapshot).filter(
+                ([key, value]) =>
+                  typeof key === "string" && typeof value === "boolean",
+              ),
+            )
+          : null,
     };
   } catch (_err) {
-    return { visible: null, required: null, quickAddSnapshot: null };
+    return { visible: null, required: null, quickAddSnapshot: null, requiredSnapshot: null };
   }
 };
 
@@ -1017,6 +1113,7 @@ function useMediaQuery(query) {
 
 const LEAD_TAG_LIMIT = 50;
 const LEAD_TAG_MAX_LENGTH = 80;
+const DEFAULT_LEAD_TAG_COLOR = "#4f46e5";
 
 function normalizeLeadTags(raw) {
   if (!raw) return [];
@@ -1054,13 +1151,28 @@ function removeLeadTagFromList(rawTags, tagKey) {
   return nextTags.length === currentTags.length ? null : nextTags;
 }
 
-function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true, labelForTag = (tag) => tag }) {
+function LeadTagsCell({
+  lead,
+  options,
+  onSave,
+  onCreateTag,
+  onDeleteTag,
+  onMore,
+  compact = false,
+  canEdit = true,
+  labelForTag = (tag) => tag,
+  colorForTag = () => "",
+}) {
   const tags = normalizeLeadTags(lead.tags);
+  const visibleTags = compact && tags.length > 0 ? tags.slice(-1) : tags;
+  const hiddenTagCount = tags.length - visibleTags.length;
   const [open, setOpen] = useState(false);
   const [draftTags, setDraftTags] = useState(tags);
   const [panel, setPanel] = useState(options.length > 0 ? "search" : "create");
   const [searchQuery, setSearchQuery] = useState("");
   const [newTagInput, setNewTagInput] = useState("");
+  const [newTagColor, setNewTagColor] = useState(DEFAULT_LEAD_TAG_COLOR);
+  const [creatingTag, setCreatingTag] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deletingTag, setDeletingTag] = useState("");
   const [hovered, setHovered] = useState(false);
@@ -1079,6 +1191,8 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true, labe
       setPanel(options.length > 0 ? "search" : "create");
       setSearchQuery("");
       setNewTagInput("");
+      setNewTagColor(DEFAULT_LEAD_TAG_COLOR);
+      setCreatingTag(false);
       setDeletingTag("");
       setPopoverReady(false);
       setPopoverStyle(null);
@@ -1161,9 +1275,22 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true, labe
     setSearchQuery("");
   };
 
-  const createNewTag = () => {
-    addDraftTag(newTagInput);
-    setNewTagInput("");
+  const createNewTag = async () => {
+    const tag = cleanLeadTagInput(newTagInput);
+    if (!tag || exactNewTagMatch || creatingTag) return;
+    setCreatingTag(true);
+    try {
+      const created = onCreateTag
+        ? await onCreateTag(tag, newTagColor)
+        : { name: tag };
+      addDraftTag(created?.name || tag);
+      setNewTagInput("");
+      setNewTagColor(DEFAULT_LEAD_TAG_COLOR);
+    } catch (_error) {
+      // Keep the draft in place so the user can retry the catalog creation.
+    } finally {
+      setCreatingTag(false);
+    }
   };
 
   const deleteSavedTag = async (tag) => {
@@ -1199,6 +1326,7 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true, labe
     setDraftTags(tags);
     setSearchQuery("");
     setNewTagInput("");
+    setNewTagColor(DEFAULT_LEAD_TAG_COLOR);
     setPanel(options.length > 0 ? "search" : "create");
     setOpen(false);
   };
@@ -1240,11 +1368,32 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true, labe
           </span>
         ) : (
           <>
-            {tags.map((tag) => (
-              <span key={tag} className="lead-tag-chip">
+            {visibleTags.map((tag) => (
+              <span
+                key={tag}
+                className="lead-tag-chip"
+                style={colorForTag(tag) ? {
+                  background: colorForTag(tag),
+                  borderColor: colorForTag(tag),
+                  color: tagTextColor(colorForTag(tag)),
+                } : undefined}
+              >
                 {labelForTag(tag)}
               </span>
             ))}
+            {compact && hiddenTagCount > 0 && (
+              <button
+                type="button"
+                className="lead-tag-overflow"
+                aria-label={`View all tags for ${lead.name || "lead"}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onMore?.(lead);
+                }}
+              >
+                +{hiddenTagCount} More
+              </button>
+            )}
           </>
         )}
       </div>
@@ -1334,6 +1483,11 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true, labe
                     <span
                       key={tag}
                       className="lead-tag-chip lead-tag-chip--selected"
+                      style={colorForTag(tag) ? {
+                        background: colorForTag(tag),
+                        borderColor: colorForTag(tag),
+                        color: tagTextColor(colorForTag(tag)),
+                      } : undefined}
                     >
                       <span className="lead-tag-chip__label">{labelForTag(tag)}</span>
                       {canEdit && (
@@ -1431,6 +1585,13 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true, labe
                                 className="lead-tags-option"
                                 onClick={() => applyExistingTag(tag)}
                               >
+                                {onCreateTag && (
+                                  <span
+                                    className="lead-tags-option-color"
+                                    style={{ backgroundColor: colorForTag(tag) || DEFAULT_LEAD_TAG_COLOR }}
+                                    aria-hidden="true"
+                                  />
+                                )}
                                 {tag}
                               </button>
                             )}
@@ -1483,10 +1644,22 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true, labe
                       maxLength={LEAD_TAG_MAX_LENGTH}
                       autoFocus
                     />
+                    {onCreateTag && (
+                      <label className="lead-tags-color-picker" title="Choose tag color">
+                        <input
+                          type="color"
+                          value={newTagColor}
+                          onChange={(e) => setNewTagColor(e.target.value)}
+                          aria-label="New tag color"
+                        />
+                        <span style={{ backgroundColor: newTagColor }} aria-hidden="true" />
+                      </label>
+                    )}
                     <button
                       type="submit"
                       className="lead-tags-add-button"
                       aria-label="Add new tag"
+                      disabled={creatingTag || Boolean(exactNewTagMatch)}
                     >
                       <Plus size={14} />
                     </button>
@@ -1516,7 +1689,7 @@ function LeadTagsCell({ lead, options, onSave, onDeleteTag, canEdit = true, labe
                   type="button"
                   className="btn-primary"
                   onClick={save}
-                  disabled={saving}
+                  disabled={saving || creatingTag}
                 >
                   Save
                 </button>
@@ -1596,6 +1769,41 @@ const toDateInputValue = (value) => {
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHAR_RE = /[\x00-\x1F\x7F]/;
 const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]{2,}$/;
+function getGenericInlineEmailError(rawValue) {
+  const value = String(rawValue || "").trim();
+  if (!value) return "";
+
+  const parts = value.split("@");
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    return "Email must contain one @ symbol with text before and after it (e.g. name@example.com).";
+  }
+
+  const [localPart, domain] = parts;
+  const unsupportedLocalCharacter = localPart.match(/[^A-Z0-9._]/i)?.[0];
+  if (unsupportedLocalCharacter) {
+    return `The character "${unsupportedLocalCharacter}" is not allowed before @. Only letters, numbers, dots, and underscores are allowed (e.g. first_name@gmail.com).`;
+  }
+  if (localPart.startsWith(".") || localPart.endsWith(".") || localPart.includes("..")) {
+    return "A dot before @ cannot be first, last, or repeated. Enter an address like first.last@gmail.com.";
+  }
+  const unsupportedDomainCharacter = domain.match(/[^A-Z0-9.]/i)?.[0];
+  if (unsupportedDomainCharacter) {
+    return `The character "${unsupportedDomainCharacter}" is not allowed after @. Use only letters, numbers, and dots in the domain (e.g. name@gmail.com).`;
+  }
+
+  const domainParts = domain.split(".");
+  if (domainParts.length < 2) {
+    return "Email domain must include an ending such as .com or .in (e.g. name@example.com).";
+  }
+  if (domainParts.some((part) => !part)) {
+    return "Email domain cannot contain consecutive dots or a dot at the beginning or end.";
+  }
+  if (!/^[A-Z]{2,}$/i.test(domainParts.at(-1))) {
+    return "Email must end with a valid domain extension such as .com or .in.";
+  }
+
+  return "";
+}
 const stripDangerousTags = (str) => {
   const DANGEROUS_TAG_RE =
     /<(script|iframe|object|embed|style|link|meta|form|svg|img|video|audio|source|applet|base|input|textarea)[^>]*>/gi;
@@ -1615,23 +1823,37 @@ const plainTextLeadNote = (value) => {
     .trim();
 };
 
-const COUNTRY_CODES = [
-  { code: "+1", country: "USA" },
-  { code: "+44", country: "UK" },
-  { code: "+91", country: "India" },
-  { code: "+61", country: "Australia" },
-  { code: "+33", country: "France" },
-  { code: "+49", country: "Germany" },
-  { code: "+39", country: "Italy" },
-  { code: "+34", country: "Spain" },
-  { code: "+81", country: "Japan" },
-  { code: "+86", country: "China" },
-  { code: "+55", country: "Brazil" },
-  { code: "+27", country: "South Africa" },
-  { code: "+971", country: "UAE" },
-  { code: "+65", country: "Singapore" },
-  { code: "+60", country: "Malaysia" },
-];
+const countryDisplayNames = typeof Intl.DisplayNames === "function"
+  ? new Intl.DisplayNames(["en"], { type: "region" })
+  : null;
+
+const countryFlag = (iso2) => String(iso2 || "")
+  .toUpperCase()
+  .replace(/[A-Z]/g, (letter) =>
+    String.fromCodePoint(127397 + letter.charCodeAt(0)));
+
+// The embedded Generic web form and Create Lead now draw from the same
+// international calling-code source. Some countries share a calling code;
+// keep the library's primary (lowest-priority) country for that code because
+// Create Lead stores the dial code separately, not the ISO country.
+const countryByDialCode = new Map();
+phoneCountryData
+  .slice()
+  .sort((left, right) => (left.priority || 0) - (right.priority || 0))
+  .forEach((country) => {
+    const code = `+${country.dialCode}`;
+    if (countryByDialCode.has(code)) return;
+    const iso = country.iso2.toUpperCase();
+    countryByDialCode.set(code, {
+      code,
+      iso,
+      country: countryDisplayNames?.of(iso) || iso,
+      flag: countryFlag(iso),
+    });
+  });
+
+const COUNTRY_CODES = Array.from(countryByDialCode.values())
+  .sort((left, right) => Number(left.code.slice(1)) - Number(right.code.slice(1)));
 
 // Keep Create Lead phone validation aligned with the embedded web form's
 // country rules. Values are national-number digit bounds; the selected
@@ -1656,24 +1878,12 @@ const LEAD_PHONE_RULES = {
 const getLeadPhoneRule = (countryCode) =>
   LEAD_PHONE_RULES[countryCode] || [7, 15];
 
-const GENERIC_PHONE_COUNTRY_BY_ISO = {
-  US: "+1",
-  CA: "+1",
-  GB: "+44",
-  IN: "+91",
-  AU: "+61",
-  FR: "+33",
-  DE: "+49",
-  IT: "+39",
-  ES: "+34",
-  JP: "+81",
-  CN: "+86",
-  BR: "+55",
-  ZA: "+27",
-  AE: "+971",
-  SG: "+65",
-  MY: "+60",
-};
+const GENERIC_PHONE_COUNTRY_BY_ISO = Object.fromEntries(
+  phoneCountryData.map((country) => [
+    country.iso2.toUpperCase(),
+    `+${country.dialCode}`,
+  ]),
+);
 
 function fetchJsonWithTimeout(url, timeoutMs) {
   const controller =
@@ -2108,6 +2318,7 @@ function BuiltInInlineCellEditor({
   showEditButton = true,
   disableTruncation = false,
   alwaysSelect = false,
+  onEdit = null,
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value ?? "");
@@ -2159,7 +2370,10 @@ function BuiltInInlineCellEditor({
     return (
       <span
         className="inline-cell-editor-display"
-        onClick={editOnDisplayClick ? () => setEditing(true) : undefined}
+        onClick={editOnDisplayClick ? () => {
+          if (onEdit) onEdit(lead, field);
+          else setEditing(true);
+        } : undefined}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         title={
@@ -2203,7 +2417,8 @@ function BuiltInInlineCellEditor({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              setEditing(true);
+              if (onEdit) onEdit(lead, field);
+              else setEditing(true);
             }}
             aria-label={`Edit ${label} for ${lead.name || "lead"}`}
             title={`Edit ${label}`}
@@ -2322,8 +2537,8 @@ function CreateLeadFieldsPicker({
     (field) =>
       !normalizedQuery || field.label.toLowerCase().includes(normalizedQuery),
   );
-  const allFieldsSelected = fields.every(
-    (field) => field.lockedVisible || draftVisible.has(field.key),
+  const hasSelectedOptionalFields = fields.some(
+    (field) => !field.lockedVisible && draftVisible.has(field.key),
   );
 
   useEffect(() => {
@@ -2341,8 +2556,14 @@ function CreateLeadFieldsPicker({
     if (field.lockedVisible) return;
     setDraftVisible((current) => {
       const next = new Set(current);
-      if (next.has(field.key)) next.delete(field.key);
-      else next.add(field.key);
+      if (next.has(field.key)) {
+        next.delete(field.key);
+        setDraftRequired((required) => {
+          const nextRequired = new Set(required);
+          nextRequired.delete(field.key);
+          return nextRequired;
+        });
+      } else next.add(field.key);
       return next;
     });
   };
@@ -2380,7 +2601,7 @@ function CreateLeadFieldsPicker({
         aria-label="Customize Create Lead fields"
         onMouseDown={(event) => event.stopPropagation()}
         style={{
-          width: "min(440px, calc(100vw - 2rem))",
+          width: "min(560px, calc(100vw - 2rem))",
           maxHeight: "min(680px, calc(100vh - 2rem))",
           display: "flex",
           flexDirection: "column",
@@ -2524,32 +2745,54 @@ function CreateLeadFieldsPicker({
         <div
           style={{
             display: "flex",
+            alignItems: "center",
             justifyContent: "space-between",
             gap: "0.5rem",
             padding: "0.8rem 1.1rem",
             borderTop: "1px solid var(--border-color)",
           }}
         >
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => {
-              if (allFieldsSelected) {
-                setDraftVisible(
-                  new Set(
-                    fields
-                      .filter((field) => field.lockedVisible)
-                      .map((field) => field.key),
-                  ),
-                );
-                return;
-              }
-              setDraftVisible(new Set(fields.map((field) => field.key)));
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "nowrap",
+              gap: "0.4rem",
             }}
           >
-            {allFieldsSelected ? "Deselect all fields" : "Select all fields"}
-          </button>
-          <div style={{ display: "flex", gap: "0.5rem" }}>
+            {hasSelectedOptionalFields && (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() =>
+                  setDraftVisible(
+                    new Set(
+                      fields
+                        .filter((field) => field.lockedVisible)
+                        .map((field) => field.key),
+                    ),
+                  )
+                }
+              >
+                Deselect selected fields
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() =>
+                setDraftVisible(new Set(fields.map((field) => field.key)))
+              }
+            >
+              Select all fields
+            </button>
+          </div>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "nowrap",
+              gap: "0.5rem",
+            }}
+          >
             <button type="button" className="btn-secondary" onClick={onClose}>
               Cancel
             </button>
@@ -3153,6 +3396,7 @@ const Leads = ({ initialListState = null } = {}) => {
   const [mobileLeadActionsOpen, setMobileLeadActionsOpen] = useState(false);
   const [genericTransferHost, setGenericTransferHost] = useState(null);
   const [leadTagCatalog, setLeadTagCatalog] = useState([]);
+  const [leadTagColors, setLeadTagColors] = useState({});
   const [staff, setStaff] = useState([]);
   const staffRequestId = useRef(0);
   const [services, setServices] = useState([]);
@@ -3429,7 +3673,7 @@ const Leads = ({ initialListState = null } = {}) => {
     () =>
       isGeneric
         ? loadCreateLeadFieldPrefs(createLeadFieldsStorageKey)
-        : { visible: null, required: null, quickAddSnapshot: null },
+        : { visible: null, required: null, quickAddSnapshot: null, requiredSnapshot: null },
   );
   const [leadDuplicate, setLeadDuplicate] = useState(null);
   const [creatingDuplicateLead, setCreatingDuplicateLead] = useState(false);
@@ -3446,7 +3690,7 @@ const Leads = ({ initialListState = null } = {}) => {
     setSavedCreateLeadFieldPrefs(
       isGeneric
         ? loadCreateLeadFieldPrefs(createLeadFieldsStorageKey)
-        : { visible: null, required: null, quickAddSnapshot: null },
+        : { visible: null, required: null, quickAddSnapshot: null, requiredSnapshot: null },
     );
   }, [createLeadFieldsStorageKey, isGeneric]);
 
@@ -3462,6 +3706,12 @@ const Leads = ({ initialListState = null } = {}) => {
     if (isTravel) setSubBrandFilter(activeSubBrand || "");
   }, [activeSubBrand, isTravel]);
   const [previewLead, setPreviewLead] = useState(null);
+  const [tableNoteLead, setTableNoteLead] = useState(null);
+  const [tableNoteSaving, setTableNoteSaving] = useState(false);
+  const [tableNoteImageUploading, setTableNoteImageUploading] = useState(false);
+  const tableNoteEditorRef = useRef(null);
+  const tableNoteImageInputRef = useRef(null);
+  const tableNoteSelectionRef = useRef(null);
   const [viewingPickupStatus, setViewingPickupStatus] = useState(null);
   const [savingPickupLocationId, setSavingPickupLocationId] = useState(null);
   // Generic CRM Callified filters
@@ -3604,6 +3854,7 @@ const Leads = ({ initialListState = null } = {}) => {
     source: "",
     customFields: {},
   });
+  const [editFieldErrors, setEditFieldErrors] = useState({});
   const [editSaving, setEditSaving] = useState(false);
   // Generic and Travel tenant-scoped Lead custom fields (Settings > Lead
   // Fields). Wellness uses its separate patient field surfaces.
@@ -3740,6 +3991,20 @@ const Leads = ({ initialListState = null } = {}) => {
     () => new Set(createLeadVisibleFieldKeys),
     [createLeadVisibleFieldKeys],
   );
+  const tenantRequiredSnapshot = useMemo(() => {
+    const overrides = tenantFieldConfig?.fieldOverrides || {};
+    return Object.fromEntries(
+      createLeadFieldCatalog.flatMap((field) => {
+        const override = overrides[field.configId];
+        if (
+          !override ||
+          (!Object.prototype.hasOwnProperty.call(override, "required") &&
+            !Object.prototype.hasOwnProperty.call(override, "isRequired"))
+        ) return [];
+        return [[field.key, Boolean(override.required ?? override.isRequired)]];
+      }),
+    );
+  }, [createLeadFieldCatalog, tenantFieldConfig]);
   const createLeadRequiredFieldKeys = useMemo(() => {
     const overrides = tenantFieldConfig?.fieldOverrides || {};
     const hasTenantRequiredConfig = Object.values(overrides).some(
@@ -3766,6 +4031,20 @@ const Leads = ({ initialListState = null } = {}) => {
               .filter((field) => field.required)
               .map((field) => field.key),
           );
+    if (Array.isArray(savedCreateLeadFieldPrefs.required)) {
+      const previousRequired = savedCreateLeadFieldPrefs.requiredSnapshot;
+      for (const field of createLeadFieldCatalog) {
+        const current = tenantRequiredSnapshot[field.key];
+        if (typeof current !== "boolean") continue;
+        if (
+          previousRequired &&
+          typeof previousRequired[field.key] === "boolean" &&
+          previousRequired[field.key] === current
+        ) continue;
+        if (current) saved.add(field.key);
+        else saved.delete(field.key);
+      }
+    }
     return createLeadFieldCatalog
       .filter(
         (field) =>
@@ -3777,7 +4056,9 @@ const Leads = ({ initialListState = null } = {}) => {
     createLeadFieldCatalog,
     createLeadVisibleFieldSet,
     savedCreateLeadFieldPrefs.required,
+    savedCreateLeadFieldPrefs.requiredSnapshot,
     tenantFieldConfig,
+    tenantRequiredSnapshot,
   ]);
   const createLeadRequiredFieldSet = useMemo(
     () => new Set(createLeadRequiredFieldKeys),
@@ -4550,6 +4831,32 @@ const Leads = ({ initialListState = null } = {}) => {
 
   const loadLeadTagCatalog = useCallback(async () => {
     try {
+      if (isGeneric) {
+        const data = await fetchApi("/api/contacts/tags", { silent: true });
+        const rows = Array.isArray(data?.tags)
+          ? data.tags
+          : Array.isArray(data)
+            ? data
+            : [];
+        const names = [];
+        const colors = {};
+        const seen = new Set();
+        for (const row of rows) {
+          const tag = cleanLeadTagInput(row?.name || row);
+          if (!tag) continue;
+          const key = tag.toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          names.push(tag);
+          if (/^#[0-9a-f]{6}$/i.test(String(row?.color || ""))) {
+            colors[key] = String(row.color).toLowerCase();
+          }
+        }
+        names.sort((a, b) => a.localeCompare(b));
+        setLeadTagCatalog(names);
+        setLeadTagColors(colors);
+        return;
+      }
       const data = await fetchApi(
         "/api/contacts/filter-values/tags?status=Lead",
         { silent: true },
@@ -4571,10 +4878,12 @@ const Leads = ({ initialListState = null } = {}) => {
       }
       tags.sort((a, b) => a.localeCompare(b));
       setLeadTagCatalog(tags);
+      setLeadTagColors({});
     } catch {
       setLeadTagCatalog([]);
+      setLeadTagColors({});
     }
-  }, []);
+  }, [isGeneric]);
 
   const fetchStaff = useCallback(async () => {
     const requestId = ++staffRequestId.current;
@@ -5995,10 +6304,19 @@ const Leads = ({ initialListState = null } = {}) => {
           ]),
         )
       : tenantQuickAddSnapshot;
+    const nextRequiredSnapshot = isAdmin
+      ? Object.fromEntries(
+          createLeadFieldCatalog.map((field) => [
+            field.key,
+            normalizedRequired.includes(field.key),
+          ]),
+        )
+      : tenantRequiredSnapshot;
     const normalized = {
       visible: normalizedVisible,
       required: normalizedRequired,
       quickAddSnapshot: nextQuickAddSnapshot,
+      requiredSnapshot: nextRequiredSnapshot,
     };
     setSavedCreateLeadFieldPrefs(normalized);
     try {
@@ -6021,6 +6339,7 @@ const Leads = ({ initialListState = null } = {}) => {
         nextOverrides[field.configId] = {
           ...(nextOverrides[field.configId] || {}),
           quickAdd: visibleSet.has(field.key),
+          required: normalizedRequired.includes(field.key),
         };
       }
       const nextConfig = {
@@ -6358,14 +6677,49 @@ const Leads = ({ initialListState = null } = {}) => {
   };
 
   const openEdit = (lead) => {
+    const splitName = splitLeadName(lead.name);
+    const latestNote = (lead.activities || [])
+      .filter((activity) => activity.type === "Note" && activity.description)
+      .reduce(
+        (latest, activity) =>
+          !latest || new Date(activity.createdAt) > new Date(latest.createdAt)
+            ? activity
+            : latest,
+        null,
+      );
     setEditForm({
       name: lead.name || "",
       email: lead.email || "",
       company: lead.company || "",
       title: lead.title || "",
       source: lead.source || "",
+      phone: lead.phone || "",
+      medium: lead.medium || "",
+      subBrand: lead.subBrand || "",
+      tags: normalizeLeadTags(lead.tags).join(", "),
+      assignedToId: lead.assignedToId ? String(lead.assignedToId) : "",
+      status: genericLeadStatusValue(lead.status),
+      firstName: splitName.firstName,
+      lastName: splitName.lastName,
+      website: lead.website || "",
+      linkedin: lead.linkedin || "",
+      industry: lead.industry || "",
+      companySize: lead.companySize ?? "",
+      note: plainTextLeadNote(latestNote?.description || lead.note || lead.description),
+      noteActivityId: latestNote?.id || null,
+      stateCode: lead.stateCode || "",
+      firstTouchSource: lead.firstTouchSource || "",
+      lastTouchSource: lead.lastTouchSource || "",
+      treatmentOfInterest: lead.treatmentOfInterest || "",
+      birthDate: toDateInputValue(lead.birthDate),
+      anniversary: toDateInputValue(lead.anniversary),
+      gst: lead.gst || "",
+      billingStateCode: lead.billingStateCode || "",
+      callifiedCampaignId: lead.callifiedCampaignId ? String(lead.callifiedCampaignId) : "",
+      callifiedLeadStatus: normalizeCallStatus(lead.callifiedLeadStatus),
       customFields: { ...(lead.customFields || {}) },
     });
+    setEditFieldErrors({});
     setEditing(lead);
   };
 
@@ -6373,15 +6727,123 @@ const Leads = ({ initialListState = null } = {}) => {
     e.preventDefault();
     const editName = editForm.name.trim();
     if (!editName) {
-      notify.error("Name is required");
+      if (isGeneric) setEditFieldErrors((previous) => ({ ...previous, name: "Name is required" }));
+      else notify.error("Name is required");
       return;
     }
     if (isGeneric && !LEAD_NAME_RE.test(editName)) {
-      notify.error("Name can contain letters and spaces only");
+      setEditFieldErrors((previous) => ({ ...previous, name: "Name can contain letters and spaces only" }));
       return;
     }
     setEditSaving(true);
     try {
+      if (isGeneric) {
+        const payload = {};
+        const customFields = {};
+        let noteFieldIncluded = false;
+        for (const field of genericRowEditFields) {
+          if (field.type === "custom") {
+            customFields[field.customField.fieldKey] =
+              editForm.customFields?.[field.customField.fieldKey];
+            continue;
+          }
+          const key = field.formKey || field.key;
+          if (key === "note") {
+            noteFieldIncluded = true;
+            continue;
+          }
+          if (key === "tags") {
+            payload.tags = normalizeLeadTags(
+              String(editForm.tags || "").split(","),
+            );
+            continue;
+          }
+          if (key === "assignedToId" || key === "callifiedCampaignId") {
+            payload[key] = editForm[key] === "" ? null : Number(editForm[key]);
+            continue;
+          }
+          if (key === "birthDate" || key === "anniversary") {
+            payload[key] = editForm[key] || null;
+            continue;
+          }
+          payload[key] = typeof editForm[key] === "string"
+            ? editForm[key].trim()
+            : editForm[key];
+        }
+        if (Object.keys(customFields).length) payload.customFields = customFields;
+
+        const phoneError = payload.phone
+          ? validateGenericCrmInlinePhone(payload.phone)
+          : "";
+        if (phoneError) {
+          return;
+        }
+        const emailError = payload.email
+          ? getGenericInlineEmailError(payload.email)
+          : "";
+        if (emailError) {
+          return;
+        }
+
+        let updatedLead = editing;
+        if (Object.keys(payload).length) {
+          updatedLead = await fetchApi(`/api/contacts/${editing.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+        }
+        let savedNoteActivity = null;
+        if (noteFieldIncluded && editForm.note.trim()) {
+          const notePayload = {
+            description: editForm.note.trim(),
+            richDescriptionBase64: encodeRichTextHtml(editForm.note.trim()),
+          };
+          if (editForm.noteActivityId) {
+            savedNoteActivity = await fetchApi(
+              `/api/contacts/${editing.id}/activities/${editForm.noteActivityId}`,
+              { method: "PATCH", body: JSON.stringify(notePayload) },
+            );
+          } else {
+            savedNoteActivity = await fetchApi(
+              `/api/contacts/${editing.id}/activities`,
+              {
+                method: "POST",
+                body: JSON.stringify({ type: "Note", ...notePayload }),
+              },
+            );
+          }
+        }
+        const savedUpdatedAt = updatedLead?.updatedAt || new Date().toISOString();
+        setLeads((previous) => previous.map((row) => row.id === editing.id
+          ? {
+              ...row,
+              ...payload,
+              ...(payload.customFields
+                ? { customFields: { ...(row.customFields || {}), ...payload.customFields } }
+                : {}),
+              ...(noteFieldIncluded && savedNoteActivity
+                ? {
+                    activities: editForm.noteActivityId
+                      ? (row.activities || []).map((activity) =>
+                          activity.id === editForm.noteActivityId
+                            ? { ...activity, ...savedNoteActivity, description: editForm.note.trim() }
+                            : activity)
+                      : [{
+                          ...savedNoteActivity,
+                          type: savedNoteActivity?.type || "Note",
+                          description: savedNoteActivity?.description || editForm.note.trim(),
+                          createdAt: savedNoteActivity?.createdAt || new Date().toISOString(),
+                        }, ...(row.activities || [])],
+                  }
+                : {}),
+              updatedAt: savedUpdatedAt,
+            }
+          : row));
+        notify.success("Lead updated");
+        setEditing(null);
+        return;
+      }
       const updatedLead = await fetchApi(`/api/contacts/${editing.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -6414,7 +6876,15 @@ const Leads = ({ initialListState = null } = {}) => {
       notify.success("Lead updated");
       setEditing(null);
     } catch (err) {
-      notify.error(err?.body?.error || err?.message || "Failed to update lead");
+      const field = isGeneric ? genericEditErrorField(err) : "";
+      if (field) {
+        setEditFieldErrors((previous) => ({
+          ...previous,
+          [field]: err?.body?.error || err?.message || "Invalid value",
+        }));
+      } else {
+        notify.error(err?.body?.error || err?.message || "Failed to update lead");
+      }
     } finally {
       setEditSaving(false);
     }
@@ -8064,6 +8534,47 @@ const Leads = ({ initialListState = null } = {}) => {
       }),
         { key: "actions", label: "Actions", locked: true },
       ];
+  const genericRowEditFields = isGeneric && editing
+    ? [
+        ...Object.entries(GENERIC_ROW_EDIT_FIELD_CONFIG).flatMap(([key, config]) => {
+          const formKey = config.formKey || key;
+          let value = editing[formKey];
+          if (formKey === "tags") value = normalizeLeadTags(editing.tags);
+          if (formKey === "assignedToId") value = editing.assignedToId;
+          if (formKey === "status") value = editing.status;
+          if (formKey === "firstName") value = splitLeadName(editing.name).firstName;
+          if (formKey === "lastName") value = splitLeadName(editing.name).lastName;
+          if (formKey === "note") {
+            value = (editing.activities || []).some(
+              (activity) => activity.type === "Note" && activity.description,
+            ) || editing.note || editing.description;
+          }
+          if (formKey === "callifiedCampaignId") value = editing.callifiedCampaignId;
+          if (formKey === "callifiedLeadStatus") value = editing.callifiedLeadStatus;
+          const hasValue = value !== null && value !== undefined && value !== ""
+            && (!Array.isArray(value) || value.length > 0);
+          return hasValue ? [{ key, formKey, label: config.label, type: config.type }] : [];
+        }),
+        ...customFieldDefs.flatMap((field) => {
+          const value = editing.customFields?.[field.fieldKey];
+          const hasValue = value !== null && value !== undefined && value !== ""
+            && (!Array.isArray(value) || value.length > 0);
+          return hasValue
+            ? [{
+                key: `cf_${field.fieldKey}`,
+                label: field.label,
+                type: "custom",
+                customField: field,
+              }]
+            : [];
+        }),
+      ]
+    : [];
+  const genericRowEditCustomKeys = new Set(
+    genericRowEditFields
+      .filter((field) => field.type === "custom")
+      .map((field) => `custom:${field.customField.fieldKey}`),
+  );
   // Generic, Travel, and Wellness use a fixed Name pane beside the
   // horizontally scrollable columns.
   const leadsFrozenColumnDefs = usesSplitLeadTableLayout
@@ -8349,6 +8860,29 @@ const Leads = ({ initialListState = null } = {}) => {
     ]),
   ).sort((a, b) => a.localeCompare(b));
 
+  const handleCreateLeadTag = async (name, color) => {
+    const created = await fetchApi("/api/contacts/tags", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, color }),
+    });
+    const createdName = cleanLeadTagInput(created?.name || name);
+    const createdColor = /^#[0-9a-f]{6}$/i.test(String(created?.color || ""))
+      ? String(created.color).toLowerCase()
+      : color;
+    setLeadTagCatalog((previous) => {
+      if (previous.some((tag) => tag.toLowerCase() === createdName.toLowerCase())) {
+        return previous;
+      }
+      return [...previous, createdName].sort((left, right) => left.localeCompare(right));
+    });
+    setLeadTagColors((previous) => ({
+      ...previous,
+      [createdName.toLowerCase()]: createdColor,
+    }));
+    return { name: createdName, color: createdColor };
+  };
+
   const updateLeadInlineValue = async (lead, field, rawValue) => {
     let value = typeof rawValue === "string" ? rawValue.trim() : rawValue;
     if (field === "tags") {
@@ -8382,13 +8916,12 @@ const Leads = ({ initialListState = null } = {}) => {
       notify.error("Name can contain letters and spaces only");
       throw new Error("Invalid name");
     }
-    if (
-      isGeneric &&
-      field === "phone" &&
-      value &&
-      !/^\+?\d{7,15}$/.test(String(value))
-    ) {
-      notify.error("Phone number must contain 7-15 digits and may start with +");
+    const phoneError =
+      isGeneric && field === "phone"
+        ? validateGenericCrmInlinePhone(value)
+        : "";
+    if (phoneError) {
+      notify.error(phoneError);
       throw new Error("Invalid phone number");
     }
     if (isGeneric && field === "companySize") {
@@ -8411,9 +8944,13 @@ const Leads = ({ initialListState = null } = {}) => {
       notify.error(`${field} is too long. Maximum ${limit} characters.`);
       throw new Error("Field too long");
     }
-    if (field === "email" && value && !EMAIL_RE.test(value)) {
-      notify.error("Enter a valid email address");
-      throw new Error("Invalid email");
+    const inlineEmailError =
+      isGeneric && field === "email"
+        ? getGenericInlineEmailError(value)
+        : "";
+    if (inlineEmailError) {
+      notify.error(inlineEmailError);
+      return false;
     }
     if (typeof value === "string") {
       const stripped = stripDangerousTags(value);
@@ -8745,10 +9282,14 @@ const Leads = ({ initialListState = null } = {}) => {
     pageIndex: isGeneric ? leadsPage : currentLeadsPage,
     pageSize: currentLeadsPageSize,
   };
+  const inheritedLeadNavigationState =
+    location.state && typeof location.state === "object" ? location.state : {};
+  const {
+    focusTags: _staleFocusTags,
+    ...leadNavigationStateWithoutTagFocus
+  } = inheritedLeadNavigationState;
   const leadListNavigationState = {
-    ...(location.state && typeof location.state === "object"
-      ? location.state
-      : {}),
+    ...leadNavigationStateWithoutTagFocus,
     returnTo: buildLeadsListPath(
       location.search,
       isGeneric ? leadsPage : currentLeadsPage,
@@ -8789,6 +9330,147 @@ const Leads = ({ initialListState = null } = {}) => {
         ? leadListNavigationState
         : leadFullDetailNavigationState,
     });
+  };
+  const openGenericLeadTags = (lead) => {
+    rememberLeadListState();
+    navigate(leadDetailPathWithListState(lead), {
+      state: {
+        ...leadListNavigationState,
+        focusTags: true,
+      },
+    });
+  };
+  const openGenericLeadNoteComposer = (lead) => {
+    setTableNoteLead(lead);
+  };
+  const openGenericLeadNotesDetail = (lead, noteId) => {
+    rememberLeadListState();
+    navigate(leadDetailPathWithListState(lead), {
+      state: {
+        ...leadListNavigationState,
+        ...(noteId != null ? { highlightNoteId: noteId } : {}),
+      },
+    });
+  };
+  useEffect(() => {
+    if (!tableNoteLead || !tableNoteEditorRef.current) return;
+    tableNoteEditorRef.current.innerHTML = "";
+    tableNoteEditorRef.current.focus();
+  }, [tableNoteLead]);
+
+  const formatTableNote = (command, value = null) => {
+    tableNoteEditorRef.current?.focus();
+    if (typeof document.execCommand === "function") {
+      document.execCommand(command, false, value);
+    }
+  };
+
+  const rememberTableNoteSelection = () => {
+    const editor = tableNoteEditorRef.current;
+    const selection = window.getSelection?.();
+    if (!editor || !selection?.rangeCount) return;
+    const range = selection.getRangeAt(0);
+    const container = range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+      ? range.commonAncestorContainer.parentNode
+      : range.commonAncestorContainer;
+    if (container && editor.contains(container)) {
+      tableNoteSelectionRef.current = range.cloneRange();
+    }
+  };
+
+  const openTableNoteImagePicker = (event) => {
+    // Keep the contentEditable caret alive while the native file picker opens.
+    event.preventDefault();
+    rememberTableNoteSelection();
+    tableNoteImageInputRef.current?.click();
+  };
+
+  const handleTableNotePaste = (event) => {
+    event.preventDefault();
+    const clipboard = event.clipboardData;
+    const pasted = clipboard?.getData("text/html") || clipboard?.getData("text/plain") || "";
+    formatTableNote("insertHTML", sanitizeRichTextHtml(pasted));
+  };
+
+  const handleTableNoteImage = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !file.type.startsWith("image/")) return;
+    setTableNoteImageUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("image", file, file.name);
+      formData.append("purpose", "generic-crm-note");
+      const uploaded = await fetchApi("/api/uploads/image", {
+        method: "POST",
+        body: formData,
+      });
+      if (!uploaded?.url) throw new Error("Image upload returned no URL");
+      const editor = tableNoteEditorRef.current;
+      if (!editor) return;
+      editor.focus();
+      const selection = window.getSelection?.();
+      const savedRange = tableNoteSelectionRef.current;
+      if (selection && savedRange) {
+        selection.removeAllRanges();
+        selection.addRange(savedRange);
+      }
+      const imageCount = editor.querySelectorAll("img").length;
+      if (typeof document.execCommand === "function") {
+        document.execCommand("insertImage", false, uploaded.url);
+      }
+      // Some browsers reject insertImage after returning from a native picker.
+      // Still show the selected image instead of silently doing nothing.
+      if (editor.querySelectorAll("img").length === imageCount) {
+        const image = document.createElement("img");
+        image.src = uploaded.url;
+        image.alt = file.name || "Selected image";
+        editor.appendChild(image);
+      }
+      tableNoteSelectionRef.current = null;
+    } catch (error) {
+      notify.error(error?.body?.error || error?.message || "Failed to upload image");
+    } finally {
+      setTableNoteImageUploading(false);
+    }
+  };
+
+  const saveTableNote = async () => {
+    if (!tableNoteLead || tableNoteSaving) return;
+    const html = sanitizeRichTextHtml(tableNoteEditorRef.current?.innerHTML || "");
+    const text = tableNoteEditorRef.current?.innerText?.trim()
+      || tableNoteEditorRef.current?.textContent?.trim()
+      || "";
+    if (!text && !html.includes("<img")) {
+      notify.error("Enter a note before saving");
+      return;
+    }
+    setTableNoteSaving(true);
+    try {
+      const result = await fetchApi(`/api/contacts/${tableNoteLead.id}/activities`, {
+        method: "POST",
+        body: JSON.stringify({
+          type: "Note",
+          description: html,
+          richDescriptionBase64: encodeRichTextHtml(html),
+        }),
+      });
+      const activity = {
+        ...result,
+        type: result?.type || "Note",
+        description: result?.description || html,
+        createdAt: result?.createdAt || new Date().toISOString(),
+      };
+      setLeads((current) => current.map((row) => row.id === tableNoteLead.id
+        ? { ...row, activities: [activity, ...(row.activities || [])] }
+        : row));
+      notify.success("Note added");
+      setTableNoteLead(null);
+    } catch (error) {
+      notify.error(error?.body?.error || error?.message || "Failed to add note");
+    } finally {
+      setTableNoteSaving(false);
+    }
   };
   const handleLeadViewAction = (lead) => {
     if (isGeneric) {
@@ -9272,6 +9954,7 @@ const Leads = ({ initialListState = null } = {}) => {
     required = false,
     disableTruncation = false,
     onSave = updateLeadInlineValue,
+    onEdit,
     className,
     alwaysSelect = false,
     editable = true,
@@ -9289,6 +9972,7 @@ const Leads = ({ initialListState = null } = {}) => {
         type={type}
         options={options}
         onSave={onSave}
+        onEdit={onEdit}
         renderValue={renderValue}
         required={required}
         editOnDisplayClick={editable && canLeadUpdate}
@@ -9488,6 +10172,25 @@ const Leads = ({ initialListState = null } = {}) => {
           label: "Email",
           value: lead.email,
           type: "email",
+          renderValue: isGeneric
+            ? (email) => {
+                const emailError = getGenericInlineEmailError(email);
+                return emailError ? (
+                  <span
+                    title={emailError}
+                    aria-label={`${email}. Invalid email: ${emailError}`}
+                    style={{ display: "inline-flex", alignItems: "center", gap: 5, color: "var(--danger-color, #dc2626)" }}
+                  >
+                    <span>{email}</span>
+                    <span style={{ fontSize: ".65rem", fontWeight: 700, whiteSpace: "nowrap" }}>
+                      Invalid email
+                    </span>
+                  </span>
+                ) : (
+                  email
+                );
+              }
+            : null,
           disableTruncation: isGeneric,
           extraStyle: isGeneric
             ? {
@@ -9639,9 +10342,13 @@ const Leads = ({ initialListState = null } = {}) => {
               lead={lead}
               options={leadTagOptions}
               onSave={updateLeadInlineValue}
+              onCreateTag={isGeneric ? handleCreateLeadTag : undefined}
               onDeleteTag={handleDeleteLeadTag}
+              onMore={isGeneric ? openGenericLeadTags : undefined}
+              compact={isGeneric}
               canEdit={canLeadUpdate}
               labelForTag={isTravel ? travelTagLabel : undefined}
+              colorForTag={isGeneric ? (tag) => leadTagColors[tag.toLowerCase()] || fallbackTagColor(tag) : undefined}
             />
           </td>
         );
@@ -9826,11 +10533,15 @@ const Leads = ({ initialListState = null } = {}) => {
           renderValue: (displayValue) =>
             displayValue ? String(displayValue) : "",
           onSave: async (row, _field, part) => {
+            if (isGeneric && isFirst && /\s/.test(part)) {
+              notify.error("First Name must contain one name only. Enter additional names in Last Name.");
+              return false;
+            }
             const current = splitLeadName(row.name);
             const next = isFirst
               ? [part, current.lastName].filter(Boolean).join(" ")
               : [current.firstName, part].filter(Boolean).join(" ");
-            await updateLeadInlineValue(row, "name", next.trim() || row.name);
+            return updateLeadInlineValue(row, "name", next.trim() || row.name);
           },
         });
       }
@@ -10045,12 +10756,32 @@ const Leads = ({ initialListState = null } = {}) => {
           label: scalarLabels[column.key] || column.label,
           value: plainDisplayValue,
           extraStyle: { color: "var(--text-secondary)" },
-          renderValue: (displayValue) =>
-            column.key === "note"
-              ? plainTextLeadNote(displayValue)
-              : displayValue
-                ? String(displayValue)
-                : "",
+          renderValue: (displayValue) => {
+            if (column.key === "note") {
+              const noteText = plainTextLeadNote(displayValue);
+              return isGeneric && noteText ? (
+                <span className="lead-note-cell-preview">
+                  <span className="lead-note-cell-text">{noteText}</span>
+                  <button
+                    type="button"
+                    className="lead-note-more"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openGenericLeadNotesDetail(lead, noteActivity?.id);
+                    }}
+                    aria-label={`View all notes for ${lead.name || "lead"}`}
+                  >
+                    More
+                  </button>
+                </span>
+              ) : noteText;
+            }
+            return displayValue ? String(displayValue) : "";
+          },
+          onEdit:
+            isGeneric && column.key === "note"
+              ? (row) => openGenericLeadNoteComposer(row)
+              : undefined,
         });
       }
       case "birthDate":
@@ -12602,13 +13333,13 @@ const Leads = ({ initialListState = null } = {}) => {
                         data-lead-row-id={String(lead.id)}
                         data-selected={isGeneric && selectedLeadIds.has(lead.id) ? "true" : undefined}
                         style={{
-                          cursor: isTravel ? "default" : "pointer",
+                          cursor: isGeneric || isTravel ? "default" : "pointer",
                         }}
-                        className={isTravel ? undefined : "table-row-hover"}
+                        className={isGeneric || isTravel ? undefined : "table-row-hover"}
                         onClick={() => {
-                          if (!isTravel) openLeadDetail(lead);
+                          if (!isGeneric && !isTravel) openLeadDetail(lead);
                         }}
-                        title={isTravel ? undefined : "Open lead detail"}
+                        title={isGeneric || isTravel ? undefined : "Open lead detail"}
                       >
                         <td
                           style={getBodyCellStyle("name", {
@@ -12775,13 +13506,13 @@ const Leads = ({ initialListState = null } = {}) => {
                         data-lead-row-id={String(lead.id)}
                         data-selected={isGeneric && selectedLeadIds.has(lead.id) ? "true" : undefined}
                         style={{
-                          cursor: isTravel ? "default" : "pointer",
+                          cursor: isGeneric || isTravel ? "default" : "pointer",
                         }}
-                        className={isTravel ? undefined : "table-row-hover"}
+                        className={isGeneric || isTravel ? undefined : "table-row-hover"}
                         onClick={() => {
-                          if (!isTravel) openLeadDetail(lead);
+                          if (!isGeneric && !isTravel) openLeadDetail(lead);
                         }}
-                        title={isTravel ? undefined : "Open lead detail"}
+                        title={isGeneric || isTravel ? undefined : "Open lead detail"}
                       >
                         {leadsScrollableColumnDefs.map((column) => (
                           <Fragment key={column.key}>
@@ -15191,6 +15922,54 @@ const Leads = ({ initialListState = null } = {}) => {
         )}
       </div>
 
+      {tableNoteLead && createPortal(
+        <div
+          className="lead-note-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Add note"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget && !tableNoteSaving) setTableNoteLead(null);
+          }}
+        >
+          <div className="lead-note-composer" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="lead-note-header">
+              <h2>Add note</h2>
+              <button type="button" className="lead-note-icon-button" aria-label="Close" disabled={tableNoteSaving} onClick={() => setTableNoteLead(null)}><X size={18} /></button>
+            </div>
+            <div className="lead-note-related">Lead: <strong>{tableNoteLead.name || "Unnamed lead"}</strong></div>
+            <input ref={tableNoteImageInputRef} type="file" accept="image/*" hidden aria-hidden="true" onChange={handleTableNoteImage} />
+            <div
+              ref={tableNoteEditorRef}
+              className="lead-note-editor"
+              contentEditable={!tableNoteSaving}
+              suppressContentEditableWarning
+              onPaste={handleTableNotePaste}
+              data-placeholder="Start typing your note..."
+              role="textbox"
+              aria-label="Note content"
+            />
+            <div className="lead-note-toolbar" aria-label="Note formatting">
+              <select aria-label="Font size" defaultValue="3" onChange={(event) => formatTableNote("fontSize", event.target.value)}>
+                <option value="2">12</option><option value="3">14</option><option value="4">16</option><option value="5">18</option>
+              </select>
+              <button type="button" onClick={() => formatTableNote("bold")} aria-label="Bold"><strong>B</strong></button>
+              <button type="button" onClick={() => formatTableNote("italic")} aria-label="Italic"><em>I</em></button>
+              <button type="button" onClick={() => formatTableNote("underline")} aria-label="Underline"><u>U</u></button>
+              <button type="button" onClick={() => formatTableNote("justifyLeft")} aria-label="Align left">≡</button>
+              <button type="button" onClick={() => formatTableNote("justifyCenter")} aria-label="Align center">☰</button>
+              <button type="button" onClick={() => formatTableNote("justifyRight")} aria-label="Align right"><AlignRight size={15} /></button>
+              <button type="button" onMouseDown={openTableNoteImagePicker} aria-label="Insert image" disabled={tableNoteImageUploading} title={tableNoteImageUploading ? "Uploading image..." : "Insert image"}><ImageIcon size={15} /></button>
+            </div>
+            <div className="lead-note-actions">
+              <button type="button" className="btn-secondary" disabled={tableNoteSaving} onClick={() => setTableNoteLead(null)}>Cancel</button>
+              <button type="button" className="btn-primary" disabled={tableNoteSaving || tableNoteImageUploading} onClick={saveTableNote}>{tableNoteImageUploading ? "Uploading…" : tableNoteSaving ? "Saving…" : "Done"}</button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
+
       {previewLeadCurrent && (
         <div
           onClick={(e) => {
@@ -15841,20 +16620,18 @@ const Leads = ({ initialListState = null } = {}) => {
                             value={newLead.countryCode}
                             placeholder="Code"
                             allowClear={false}
-                            sanitizeInput={(input) =>
-                              `${String(input).trimStart().startsWith("+") ? "+" : ""}${String(input).replace(/\D/g, "")}`
-                            }
                             options={COUNTRY_CODES.map((cc) => ({
                               value: cc.code,
-                              label: cc.code,
-                              keywords: cc.code,
+                              label: `${cc.flag} ${cc.code}`,
+                              hint: cc.country,
+                              keywords: `${cc.code} ${cc.country} ${cc.iso}`,
                             }))}
                             onChange={(value) => {
                               genericPhoneCountryUserChangedRef.current = true;
                               handleChange("countryCode", value);
                             }}
                             style={{ color: "#111827", caretColor: "#111827" }}
-                            wrapperStyle={{ width: "100px", flexShrink: 0 }}
+                            wrapperStyle={{ width: "120px", flexShrink: 0 }}
                           />
                         ) : (
                           <select
@@ -16182,14 +16959,20 @@ const Leads = ({ initialListState = null } = {}) => {
           aria-label="Edit Lead"
         >
           <div
-            className="card"
+            className={`card${isGeneric ? " generic-lead-edit-modal" : ""}`}
             style={{
               background: "var(--bg-color)",
               color: "var(--text-primary)",
               width: "100%",
               maxWidth: 480,
               maxHeight: "90vh",
-              overflowY: "auto",
+              ...(isGeneric
+                ? {
+                    display: "flex",
+                    flexDirection: "column",
+                    overflow: "hidden",
+                  }
+                : { overflowY: "auto" }),
               padding: "1.5rem",
             }}
           >
@@ -16199,6 +16982,7 @@ const Leads = ({ initialListState = null } = {}) => {
                 justifyContent: "space-between",
                 alignItems: "center",
                 marginBottom: "1rem",
+                ...(isGeneric ? { flexShrink: 0 } : {}),
               }}
             >
               <h3 style={{ margin: 0, fontSize: "1.1rem", fontWeight: 600 }}>
@@ -16225,8 +17009,144 @@ const Leads = ({ initialListState = null } = {}) => {
                 display: "flex",
                 flexDirection: "column",
                 gap: "0.875rem",
+                ...(isGeneric
+                  ? {
+                      minHeight: 0,
+                      overflow: "hidden",
+                    }
+                  : {}),
               }}
             >
+              <div
+                data-testid={isGeneric ? "generic-edit-fields-scroll" : undefined}
+                style={isGeneric
+                  ? {
+                      display: "flex",
+                      flex: "1 1 auto",
+                      flexDirection: "column",
+                      gap: "0.875rem",
+                      minHeight: 0,
+                      overflowY: "auto",
+                      overflowX: "hidden",
+                      paddingRight: "0.25rem",
+                      scrollbarGutter: "stable",
+                    }
+                  : { display: "contents" }}
+              >
+              {isGeneric && genericRowEditFields
+                .filter((field) => field.type !== "custom")
+                .map((field) => {
+                  const inputId = `generic-row-edit-${field.formKey || field.key}`;
+                  const formKey = field.formKey || field.key;
+                  const setValue = (value) => {
+                    setEditForm((previous) => {
+                      const next = { ...previous, [formKey]: value };
+                      if (formKey === "name") {
+                        const parts = splitLeadName(value);
+                        next.firstName = parts.firstName;
+                        next.lastName = parts.lastName;
+                      }
+                      if (formKey === "firstName" || formKey === "lastName") {
+                        next.name = [
+                          formKey === "firstName" ? value : previous.firstName,
+                          formKey === "lastName" ? value : previous.lastName,
+                        ].filter(Boolean).join(" ");
+                      }
+                      return next;
+                    });
+                    if (editFieldErrors[formKey]) {
+                      const nextError = getGenericEditFieldError(formKey, value);
+                      if (!nextError) {
+                        setEditFieldErrors((previous) => ({ ...previous, [formKey]: "" }));
+                      }
+                    }
+                  };
+                  let control;
+                  if (field.type === "status") {
+                    control = (
+                      <select id={inputId} className="input-field" value={editForm[formKey]} onChange={(event) => setValue(event.target.value)}>
+                        {GENERIC_LEAD_STATUS_EDIT_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    );
+                  } else if (field.type === "assignee") {
+                    control = (
+                      <select id={inputId} className="input-field" value={editForm.assignedToId} onChange={(event) => setValue(event.target.value)}>
+                        <option value="">Unassigned</option>
+                        {assignableStaff(editing).map((staffMember) => (
+                          <option key={staffMember.id} value={staffMember.id}>{staffOptionLabel(staffMember)}</option>
+                        ))}
+                      </select>
+                    );
+                  } else if (field.type === "campaign") {
+                    control = (
+                      <select id={inputId} className="input-field" value={editForm.callifiedCampaignId} onChange={(event) => setValue(event.target.value)}>
+                        <option value="">Unassigned</option>
+                        {callifiedCampaigns.map((campaign) => (
+                          <option key={campaign.id} value={campaign.id}>{campaign.name || `Campaign ${campaign.id}`}</option>
+                        ))}
+                      </select>
+                    );
+                  } else if (field.type === "callStatus") {
+                    control = (
+                      <select id={inputId} className="input-field" value={editForm.callifiedLeadStatus} onChange={(event) => setValue(event.target.value)}>
+                        {CALL_STATUS_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    );
+                  } else if (field.type === "textarea") {
+                    control = <textarea id={inputId} className="input-field" rows={3} value={editForm[formKey]} onChange={(event) => setValue(event.target.value)} />;
+                  } else {
+                    control = (
+                      <input
+                        id={inputId}
+                        type={field.type === "tags" ? "text" : field.type}
+                        className="input-field"
+                        value={editForm[formKey] ?? ""}
+                        aria-invalid={Boolean(editFieldErrors[formKey])}
+                        aria-describedby={editFieldErrors[formKey] ? `${inputId}-error` : undefined}
+                        onChange={(event) => setValue(
+                          formKey === "name"
+                            ? sanitizeLeadNameInput(event.target.value)
+                            : event.target.value,
+                        )}
+                        onBlur={() => {
+                          const error = getGenericEditFieldError(formKey, editForm[formKey]);
+                          setEditFieldErrors((previous) => ({ ...previous, [formKey]: error }));
+                        }}
+                        required={formKey === "name"}
+                      />
+                    );
+                  }
+                  return (
+                    <div key={field.key}>
+                      <label htmlFor={inputId} style={createLeadFieldLabelStyle}>{field.label}</label>
+                      {control}
+                      {editFieldErrors[formKey] && (
+                        <div
+                          id={`${inputId}-error`}
+                          role="alert"
+                          style={{
+                            color: "#b42318",
+                            fontSize: "0.8rem",
+                            marginTop: "0.35rem",
+                          }}
+                        >
+                          {editFieldErrors[formKey]}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              {isGeneric && genericRowEditCustomKeys.size > 0 && renderCustomFieldInputs(
+                editForm.customFields,
+                handleCustomFieldChangeEdit,
+                genericRowEditCustomKeys,
+              )}
+              {!isGeneric && (
+                <>
               <input
                 type="text"
                 placeholder="Full Name"
@@ -16298,12 +17218,23 @@ const Leads = ({ initialListState = null } = {}) => {
                 editForm.customFields,
                 handleCustomFieldChangeEdit,
               )}
+                </>
+              )}
+              </div>
               <div
                 style={{
                   display: "flex",
                   justifyContent: "flex-end",
                   gap: "0.5rem",
                   marginTop: "0.5rem",
+                  ...(isGeneric
+                    ? {
+                        flexShrink: 0,
+                        paddingTop: "0.75rem",
+                        borderTop: "1px solid var(--border-color)",
+                        background: "var(--bg-color)",
+                      }
+                    : {}),
                 }}
               >
                 <button

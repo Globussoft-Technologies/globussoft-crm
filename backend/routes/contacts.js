@@ -45,6 +45,7 @@ const {
 const { sanitizeText } = require("../lib/sanitizeJson");
 const { getLeadCustomFieldValues } = require("../lib/leadCustomFieldValues");
 const { normalizePhoneValue, normalizeGenericCrmPhone } = require("../lib/phoneFormatting");
+const { decodeGenericRichText } = require("../lib/genericRichText");
 const {
   deleteContactDependents,
   hardDeleteContact,
@@ -2744,12 +2745,21 @@ router.delete("/tags", async (req, res) => {
       typeof req.body?.status === "string" && req.body.status.trim()
         ? req.body.status.trim()
         : "Lead";
+    // Generic CRM's Leads page is intentionally an all-contact-status view
+    // (New/Contacted/Interested/etc.) even though its compatibility request
+    // still says status=Lead. Deleting a tag from that page must therefore
+    // remove it from every Generic lead row, not only legacy status="Lead"
+    // records; otherwise a detail-page reload brings the tag back.
+    const statusWhere =
+      isGenericCrmRequest(req) && statusScope === "Lead"
+        ? {}
+        : { status: statusScope };
     const tagKey = tag.toLowerCase();
     const rows = await prisma.contact.findMany({
       where: {
         tenantId,
         deletedAt: null,
-        status: statusScope,
+        ...statusWhere,
         tagsJson: { not: null },
       },
       select: { id: true, tagsJson: true },
@@ -3740,7 +3750,21 @@ router.post("/:id/activities", async (req, res) => {
     if (!contact) return res.status(404).json({ error: "Contact not found" });
     if (!(await canAccessLead(req, contact)))
       return res.status(404).json({ error: "Contact not found" });
-    const { type, description } = req.body;
+    const { type } = req.body;
+    let { description } = req.body;
+    if (
+      isGenericCrmRequest(req) &&
+      type === "Note" &&
+      req.body.richDescriptionBase64
+    ) {
+      description = decodeGenericRichText(req.body.richDescriptionBase64);
+      if (description === null) {
+        return res.status(400).json({
+          error: "Invalid rich note content",
+          code: "INVALID_RICH_NOTE",
+        });
+      }
+    }
     const activity = await prisma.activity.create({
       data: {
         type,
@@ -3771,9 +3795,18 @@ router.patch("/:id/activities/:activityId", async (req, res) => {
     if (!Number.isFinite(contactId) || !Number.isFinite(activityId)) {
       return res.status(400).json({ error: "Invalid contact or activity ID", code: "INVALID_ID" });
     }
-    const description = typeof req.body.description === "string"
+    let description = typeof req.body.description === "string"
       ? req.body.description.trim()
       : "";
+    if (isGenericCrmRequest(req) && req.body.richDescriptionBase64) {
+      description = decodeGenericRichText(req.body.richDescriptionBase64);
+      if (description === null) {
+        return res.status(400).json({
+          error: "Invalid rich note content",
+          code: "INVALID_RICH_NOTE",
+        });
+      }
+    }
     if (!description) {
       return res.status(400).json({ error: "Description is required", code: "DESCRIPTION_REQUIRED" });
     }

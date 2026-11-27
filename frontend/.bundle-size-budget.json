@@ -74,7 +74,8 @@
   ],
 
   "totals": {
-    "all-js-maxKB": 11200,
+    "all-js-maxKB": 11275,
+    "//generic-rich-notes-leads-js": "11200 -> 11275 KB: commit 13cd9a13 expands Generic CRM rich-note transport/rendering, contact and deal profile actions, lead communication workflows, and phone validation without adding a runtime dependency. The Node 24 Windows production build measures 11239.5 KB; retain 35.5 KB of aggregate headroom while preserving every entry, vendor, and feature-chunk cap.",
     "//tmc-rooming-consent-catalogue-js": "11150 -> 11200 KB: the TMC rooming, consent, catalogue, and trip-management workflows add 41.6 KB across travel route-split chunks, with no new dependency. The parent build measured 11144.7 KB and this Node 24 Windows build measures 11186.3 KB; Linux CI measured 11180.6 KB. Retain 13.7 KB against the larger measurement; all per-chunk caps remain unchanged.",
     "//generic-rbac-pipelines-email-js": "11110 -> 11150 KB: sidebar-aligned RBAC administration, Generic pipeline-stage management, contact workflow refinements, and tenant SendGrid settings bring Linux CI to 11123.5 KB and the local Windows production build to 11129.2 KB. No oversized dependency or individual chunk regression was introduced; retain 20.8 KB against the larger measurement while preserving every per-chunk cap.",
     "//travel-email-automation-js": "10950 -> 10975 KB: the lazy Travel Email Automation workspace adds its route declaration, template editor, delivery-history controls, and API orchestration without a new runtime dependency. Linux CI reported 10954.9 KB total JS and a fresh Node 24 Windows build measures 10960.7 KB; retain 14.3 KB of local headroom while preserving every entry, vendor, and feature-chunk cap.",
@@ -120,7 +121,8 @@
     "//previous-total-bump-3": "7950→8150 on 2026-09-15: PR #1441 adds lazy-loaded contact/deal profile workflows and the standalone email composer, bringing total JS to 8027.5 KB. No new runtime dependency was added; this preserves 122.5 KB headroom while retaining per-chunk limits.",
     "//previous-total-bump-2": "7850→7950 on 2026-09-10: PR #1432 added the lazy-loaded TMC teacher and parent portal screens, bringing total JS to 7885.4 KB. The feature adds no new dependency; this restores 64.6 KB of total-budget headroom while retaining the existing per-chunk limits.",
     "//previous-total-bump": "7800→7850 on 2026-09-04: PR #1404 added the wellness patient-signature workflow and pushed total JS to 7803.4 KB. This small increase restored 46.6 KB headroom; no new dependency was introduced.",
-    "all-css-maxKB": 1000,
+    "all-css-maxKB": 1020,
+    "//generic-rich-notes-leads-css": "1000 -> 1020 KB: commit 13cd9a13 adds scoped Generic CRM contact-profile, lead-workflow, and responsive action styles. The Node 24 Windows production build measures 1005.9 KB; retain 14.1 KB of aggregate headroom with no CSS framework or duplicate global stylesheet added.",
     "//generic-crm-navigation-leads-css": "990 -> 1000 KB: commit 15716222 adds intentional, scoped Generic CRM navigation, lead-management, reporting, marketing-sequence, webhook, and role-configuration styles, bringing the Node 24 production build to 990.9 KB CSS. The import and dependency review found no duplicate global stylesheet or new CSS framework; retain 9.1 KB of reviewable headroom without changing JavaScript or per-chunk caps.",
     "//pr1703-trip-layout": "990 -> 995 KB: the responsive TMC trip stepper, sharing controls, detail tabs and themed table badges bring total CSS to 991.6 KB in PR validation run 45812514261.",
     "//2026-11-25-tmc-audit-styles": "970 -> 990 KB: the TMC teacher-management page and Audit Log refresh add scoped, route-level stylesheets. The fresh production build measures 972.5 KB total CSS; 990 KB preserves 17.5 KB of headroom while keeping the aggregate CSS gate enforced.",

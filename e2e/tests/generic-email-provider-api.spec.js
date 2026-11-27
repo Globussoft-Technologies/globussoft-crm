@@ -33,6 +33,13 @@ test('Wellness tenant cannot access Generic SendGrid settings', async ({ request
 
 test('Generic non-admin cannot replace SendGrid credentials', async ({ request }) => {
   const token = await login(request, 'user@crm.com');
+  const statusResponse = await request.get(`${BASE_URL}/api/generic/email-provider`, { headers: auth(token) });
+  expect(statusResponse.status()).toBe(200);
+  const status = await statusResponse.json();
+  expect(status.fromEmail).toMatch(/^[^\s@]+@[^\s@]+\.[^\s@]+$/);
+  expect(status.apiKey).toBeUndefined();
+  expect(status.apiKeyLast4).toBeUndefined();
+
   const response = await request.put(`${BASE_URL}/api/generic/email-provider`, {
     headers: { ...auth(token), 'Content-Type': 'application/json' },
     data: { apiKey: 'SG.invalid.forbidden', fromEmail: 'sender@example.test', fromName: 'Forbidden' },

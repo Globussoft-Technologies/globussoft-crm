@@ -1,24 +1,50 @@
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { X } from 'lucide-react';
-import { RichText, truncateRichTextHtml } from '../../utils/richText';
+import { RichText, sanitizeRichTextHtml } from '../../utils/richText';
 
 export default function RichTextNotePreview({ value }) {
   const [open, setOpen] = useState(false);
-  const preview = useMemo(() => truncateRichTextHtml(value, 50), [value]);
+  const [overflowing, setOverflowing] = useState(false);
+  const previewRef = useRef(null);
+  const safeHtml = useMemo(() => sanitizeRichTextHtml(value), [value]);
+  const hasImage = /<img\b/i.test(safeHtml);
 
-  if (!preview.truncated) return <RichText value={value} />;
+  useLayoutEffect(() => {
+    const preview = previewRef.current;
+    if (!preview) return undefined;
+    const measure = () => setOverflowing(
+      hasImage
+        || preview.scrollHeight > preview.clientHeight + 1
+        || preview.scrollWidth > preview.clientWidth + 1,
+    );
+    measure();
+    const observer = typeof ResizeObserver === 'function'
+      ? new ResizeObserver(measure)
+      : null;
+    observer?.observe(preview);
+    window.addEventListener('resize', measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [hasImage, safeHtml]);
 
   return (
     <>
       <div className="cp-generic-note-preview">
-        <RichText value={preview.html} />
-        <button type="button" className="cp-note-extend" onClick={() => setOpen(true)}>View full note</button>
+        <div
+          ref={previewRef}
+          className={`cp-generic-note-content${hasImage ? ' cp-generic-note-content--image' : ''}`}
+        >
+          <RichText value={value} />
+        </div>
+        {overflowing && <button type="button" className="cp-note-extend" onClick={() => setOpen(true)}>View details</button>}
       </div>
       {open && (
         <div className="cp-overlay cp-generic-note-overlay" onClick={() => setOpen(false)} role="dialog" aria-modal="true" aria-label="Full note">
           <div className="cp-modal cp-modal-wide" onClick={(event) => event.stopPropagation()}>
             <div className="cp-modal-head">
-              <h3>Full note</h3>
+              <h3>Note details</h3>
               <button type="button" className="cp-icon-btn" onClick={() => setOpen(false)} aria-label="Close"><X size={16} /></button>
             </div>
             <div className="cp-modal-body cp-generic-note-full"><RichText value={value} /></div>

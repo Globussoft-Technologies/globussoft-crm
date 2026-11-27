@@ -450,7 +450,7 @@ describe('ContactDetail profile', () => {
     expect(panel.getByRole('button', { name: 'Won / Churned' })).toBeInTheDocument();
   });
 
-  it('shows who changed the lifecycle, when, and the complete from/to values', async () => {
+  it('shows only Generic CRM status values in status history', async () => {
     fetchApiMock.mockImplementation((url) => {
       if (url === '/api/contacts/7') return Promise.resolve({ ...baseContact });
       if (url.startsWith('/api/staff')) return Promise.resolve([]);
@@ -480,10 +480,12 @@ describe('ContactDetail profile', () => {
     expect(dialog.queryByRole('heading', { name: 'Lifecycle history' })).toBeNull();
     expect(await dialog.findByText('Rajesh Sharma')).toBeInTheDocument();
     expect(dialog.getByText('rajesh@example.com')).toBeInTheDocument();
-    expect(dialog.getByText('New')).toBeInTheDocument();
-    expect(dialog.getByText('Contacted')).toBeInTheDocument();
-    expect(dialog.getByText('CRM status: Lead')).toBeInTheDocument();
-    expect(dialog.getByText('CRM status: Prospect')).toBeInTheDocument();
+    expect(dialog.getByText('Every recorded status change for Ahmad Malik.')).toBeInTheDocument();
+    expect(dialog.getByText('Lead')).toBeInTheDocument();
+    expect(dialog.getByText('Prospect')).toBeInTheDocument();
+    expect(dialog.queryByText('New')).not.toBeInTheDocument();
+    expect(dialog.queryByText('Contacted')).not.toBeInTheDocument();
+    expect(dialog.queryByText(/CRM status:/)).not.toBeInTheDocument();
     expect(dialog.getByText(/Requested a later follow-up/)).toBeInTheDocument();
     expect(fetchApiMock).toHaveBeenCalledWith('/api/contacts/7/lifecycle-history', { silent: true });
   });
@@ -505,7 +507,11 @@ describe('ContactDetail profile', () => {
       );
     });
     const [, opts] = fetchApiMock.mock.calls.find(([_u, o]) => _u.endsWith('/activities') && o?.method === 'POST');
-    expect(JSON.parse(opts.body)).toEqual({ type: 'Note', description: 'Followed up today' });
+    expect(JSON.parse(opts.body)).toEqual({
+      type: 'Note',
+      description: 'Followed up today',
+      richDescriptionBase64: 'Rm9sbG93ZWQgdXAgdG9kYXk=',
+    });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add note' })).toBeNull());
   });
 

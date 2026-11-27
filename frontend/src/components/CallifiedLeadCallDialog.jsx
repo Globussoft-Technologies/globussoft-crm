@@ -104,10 +104,12 @@ export default function CallifiedLeadCallDialog({ lead, onClose, onCalled, defau
         className="card"
         style={{
           background: "var(--bg-color)",
+          boxSizing: "border-box",
           width: "100%",
           maxWidth: "480px",
           maxHeight: "90vh",
-          overflow: "auto",
+          overflowX: "hidden",
+          overflowY: "auto",
           borderRadius: "12px",
           border: "1px solid var(--border-color)",
           padding: "1.5rem",

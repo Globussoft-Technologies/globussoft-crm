@@ -14,6 +14,7 @@ const deal = {
   amount: 5600,
   currency: 'USD',
   probability: 40,
+  dealKind: 'one-time',
   stage: 'proposal',
   expectedClose: '2026-11-15T00:00:00.000Z',
   createdAt: '2026-08-15T00:00:00.000Z',
@@ -52,6 +53,34 @@ describe('<DealDetails />', () => {
     expect(screen.getAllByText('Ravi Owner').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Follow up after the proposal.').length).toBeGreaterThan(0);
     expect(fetchApiMock).toHaveBeenCalledWith('/api/deals/42');
+  });
+
+  it('edits Generic CRM deal type using the deal kind options', async () => {
+    fetchApiMock.mockImplementation((url, options) => {
+      if (url === '/api/deals/42') {
+        const update = options?.method === 'PUT' ? JSON.parse(options.body) : {};
+        return Promise.resolve({ ...deal, ...update });
+      }
+      if (url === '/api/pipeline_stages') return Promise.resolve([{ id: 1, name: 'Lead' }]);
+      if (url.startsWith('/api/pipelines')) return Promise.resolve([]);
+      return Promise.resolve([]);
+    });
+
+    renderPage();
+    expect(await screen.findByText('One-Time Deal')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Deal type' }));
+
+    const editor = await screen.findByRole('dialog', { name: 'Edit Deal type' });
+    const select = within(editor).getByRole('combobox');
+    expect(within(select).getByRole('option', { name: 'One-Time Deal' })).toBeInTheDocument();
+    expect(within(select).getByRole('option', { name: 'Recurring Deal' })).toBeInTheDocument();
+    expect(within(select).queryByRole('option', { name: 'New Business' })).toBeNull();
+
+    fireEvent.change(select, { target: { value: 'recurring' } });
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith('/api/deals/42', {
+      method: 'PUT', body: JSON.stringify({ dealKind: 'recurring' }),
+    }));
   });
 
   it.each(['missing', 'failed', 'invalid', 'pending'])('does not save a currency change with %s rates', async (scenario) => {

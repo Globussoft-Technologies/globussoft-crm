@@ -1436,9 +1436,11 @@ const Contacts = () => {
           on narrow viewports instead of stacking awkwardly over the description. */}
       <header className="contacts-page__header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: isGeneric ? 'flex-start' : 'center', marginBottom: isGeneric ? '1rem' : '2rem', flexWrap: 'wrap', gap: '0.75rem' }}>
         <div style={{ minWidth: 0, flex: '1 1 240px', display: 'flex', alignItems: isGeneric ? 'flex-start' : 'center', gap: '0.75rem' }}>
-          {isGeneric && <UserPlus size={24} color="var(--text-primary)" />}
           <div style={{ minWidth: 0 }}>
-          <h2 style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>Contacts</h2>
+          <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0, fontSize: '1.5rem', fontWeight: 'bold' }}>
+            {isGeneric && <UserPlus size={24} color="var(--text-primary)" />}
+            Contacts
+          </h2>
           {/* #143: surface the total count so the user knows what they're looking at,
               matching the parity that /wellness/patients already has. */}
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
@@ -1524,7 +1526,11 @@ const Contacts = () => {
                       right: 0,
                       left: 'auto',
                       zIndex: 1089,
-                      width: 'min(420px, 92vw)',
+                      // Keep the menu within the header's available width on
+                      // compact desktop layouts. The generic Contacts page
+                      // intentionally clips its content viewport, so a wide
+                      // right-aligned menu otherwise loses its left edge.
+                      width: 'min(320px, calc(100vw - 2rem))',
                       padding: '0.85rem',
                       background: 'var(--bg-color)',
                       border: '1px solid var(--border-color)',

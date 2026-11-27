@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Building2, Download, FileText, Plus, Trash2, Upload } from 'lucide-react';
+import { Building2, Download, Eye, FileText, Plus, Trash2, Upload } from 'lucide-react';
 import { useNotify } from '../../utils/notify';
 import { formatMoney } from '../../utils/money';
 import { formatDate, formatDateTime, workspaceDayKey } from '../../utils/date';
@@ -15,6 +15,7 @@ import { DEAL_STAGES } from './contactProfileConfig';
 import { FormRow, Modal, Stars } from './ProfileWidgets';
 import { isRichTextMarkup, richTextToPlainText, RichText } from '../../utils/richText';
 import RichTextNotePreview from './RichTextNotePreview';
+import { AuthContext } from '../../appContexts';
 
 const DEFAULT_GENERIC_DEAL_STAGES = ['New Lead', 'Contracted', 'Negotiation', 'Won', 'Lost'];
 const WHATSAPP_STATUS_REFRESH_MS = 10_000;
@@ -532,6 +533,8 @@ export function DealsTab({ contact, refresh, onOpenDeal, isWellness = false, isT
 }
 
 export function InsightsTab({ contactId }) {
+  const { tenant } = useContext(AuthContext) || {};
+  const isGeneric = tenant?.vertical === 'generic' || document.body?.dataset.vertical === 'generic';
   const [score, setScore] = useState(null);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
@@ -553,15 +556,15 @@ export function InsightsTab({ contactId }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
       <div className="cp-card">
         <h3>AI score</h3>
-        <div className="cp-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+        <div className="cp-grid" style={{ gridTemplateColumns: isGeneric ? 'minmax(0, 1fr)' : 'repeat(2, minmax(0, 1fr))' }}>
           <div className="cp-field">
             <div className="cp-label">Stored score</div>
             <div className="cp-value" style={{ fontSize: '1.6rem', fontWeight: 700 }}>{score.currentStoredScore ?? 0}</div>
           </div>
-          <div className="cp-field">
+          {!isGeneric && <div className="cp-field">
             <div className="cp-label">Live computed</div>
             <div className="cp-value" style={{ fontSize: '1.6rem', fontWeight: 700 }}>{score.liveComputedScore ?? 0}</div>
-          </div>
+          </div>}
         </div>
         <div style={{ marginTop: '0.5rem' }}><Stars value={Math.max(0, Math.min(5, Math.round((Number(score.currentStoredScore) || 0) / 20)))} size={15} /></div>
       </div>
@@ -590,9 +593,12 @@ export function InsightsTab({ contactId }) {
 
 export function FilesTab({ contactId }) {
   const notify = useNotify();
+  const { tenant } = useContext(AuthContext) || {};
+  const isGeneric = tenant?.vertical === 'generic' || document.body?.dataset.vertical === 'generic';
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [previewFile, setPreviewFile] = useState(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -631,11 +637,16 @@ export function FilesTab({ contactId }) {
   return (
     <div className="cp-card">
       <h3>Files ({files.length})</h3>
-      <div className="cp-btn-row" style={{ marginBottom: '0.75rem' }}>
+      <div className="cp-btn-row" style={{ marginBottom: '0.75rem', ...(isGeneric ? { flexDirection: 'column', alignItems: 'flex-end' } : { alignItems: 'flex-start' }) }}>
         <label className="cp-action-btn cp-action-primary" style={{ cursor: 'pointer' }}>
           <Upload size={12} /> {uploading ? 'Uploading…' : 'Upload'}
-          <input type="file" multiple hidden accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv" onChange={onPick} disabled={uploading} />
+          <input type="file" multiple hidden accept={`image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv${isGeneric ? ',.json' : ''}`} onChange={onPick} disabled={uploading} />
         </label>
+        {isGeneric && (
+          <span style={{ color: 'var(--text-secondary)', fontSize: '0.75rem' }}>
+            Accepted: PDF, CSV, Excel, Word, JSON, and images
+          </span>
+        )}
       </div>
       {loading ? (
         <div className="cp-empty">Loading files…</div>
@@ -647,11 +658,32 @@ export function FilesTab({ contactId }) {
             <FileText size={15} color="var(--primary-color, var(--accent-color))" />
             <a href={a.fileUrl} target="_blank" rel="noreferrer" style={{ flex: 1, color: 'var(--text-primary)', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.filename}</a>
             <span style={{ color: 'var(--text-secondary)', fontSize: '0.72rem' }}>{formatDate(a.createdAt)}</span>
+            {isGeneric && <button type="button" className="cp-icon-btn" onClick={() => setPreviewFile(a)} title="Preview" aria-label={`Preview ${a.filename}`}><Eye size={13} /></button>}
             <a href={a.fileUrl} download={a.filename} className="cp-icon-btn" title="Download" aria-label="Download file"><Download size={13} /></a>
             <button type="button" className="cp-icon-btn" onClick={() => remove(a)} title="Delete" aria-label="Delete file"><Trash2 size={13} /></button>
           </div>
         ))
       )}
+      {previewFile && (() => {
+        const filename = String(previewFile.filename || '').toLowerCase();
+        const mimeType = String(previewFile.mimeType || '').toLowerCase();
+        const isImage = mimeType.startsWith('image/') || /\.(gif|jpe?g|png|webp|svg)$/.test(filename);
+        const isPdf = mimeType === 'application/pdf' || filename.endsWith('.pdf');
+        const previewUrl = `/api/contacts/${contactId}/attachments/${previewFile.id}/preview`;
+        return (
+          <Modal title={`Preview: ${previewFile.filename}`} onClose={() => setPreviewFile(null)} wide>
+            {isImage ? (
+              <img src={previewUrl} alt={previewFile.filename} style={{ display: 'block', maxWidth: '100%', maxHeight: '65vh', margin: '0 auto', objectFit: 'contain' }} />
+            ) : isPdf ? (
+              <iframe title={`Preview ${previewFile.filename}`} src={previewUrl} style={{ width: '100%', height: '65vh', border: '1px solid var(--border-color)', borderRadius: 8 }} />
+            ) : (
+              <div className="cp-empty">
+                This file type cannot be previewed here. <a href={previewFile.fileUrl} target="_blank" rel="noreferrer">Open the file</a> to view it.
+              </div>
+            )}
+          </Modal>
+        );
+      })()}
     </div>
   );
 }

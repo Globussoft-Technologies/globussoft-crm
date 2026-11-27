@@ -87,6 +87,34 @@ async function authDelete(request, path) {
 
 // ── cleanup tracking ────────────────────────────────────────────────
 const createdTaskIds = [];
+let taskAssigneeId = null;
+
+async function getTaskAssigneeId(request) {
+  if (taskAssigneeId) return taskAssigneeId;
+  const response = await authGet(request, '/api/staff?fields=summary&limit=100');
+  const payload = await response.json();
+  const staff = Array.isArray(payload) ? payload : (payload?.data || payload?.users || []);
+  const assignee = staff.find((member) => {
+    const role = String(member.role || '').toUpperCase();
+    return member.deactivatedAt == null && role !== 'ADMIN' && role !== 'CUSTOMER';
+  });
+  expect(assignee, 'an active non-admin staff member is required for Generic CRM task fixtures').toBeTruthy();
+  taskAssigneeId = assignee.id;
+  return taskAssigneeId;
+}
+
+async function requiredTaskFields(request, overrides = {}) {
+  return {
+    title: `${RUN_TAG} ${overrides.title || 'task'}`,
+    type: overrides.type || 'Task',
+    priority: overrides.priority === undefined ? 'Medium' : overrides.priority,
+    dueDate: overrides.dueDate || new Date(Date.now() + 7 * 86_400_000).toISOString(),
+    targetUserId: overrides.targetUserId ?? await getTaskAssigneeId(request),
+    contactId: overrides.contactId,
+    status: overrides.status,
+    notes: overrides.notes,
+  };
+}
 
 test.afterAll(async ({ request }) => {
   for (const id of createdTaskIds) {
@@ -96,15 +124,7 @@ test.afterAll(async ({ request }) => {
 
 // Helper: create a task and remember it for cleanup.
 async function createTask(request, overrides = {}) {
-  const res = await authPost(request, '/api/tasks', {
-    title: `${RUN_TAG} ${overrides.title || 'task'}`,
-    priority: overrides.priority,
-    status: overrides.status,
-    dueDate: overrides.dueDate,
-    contactId: overrides.contactId,
-    userId: overrides.userId,
-    notes: overrides.notes,
-  });
+  const res = await authPost(request, '/api/tasks', await requiredTaskFields(request, overrides));
   expect(res.status(), `task create: ${await res.text()}`).toBe(201);
   const t = await res.json();
   createdTaskIds.push(t.id);
@@ -126,7 +146,7 @@ test.describe('Tasks API — POST /', () => {
     expect(res.status()).toBe(400);
   });
 
-  test('201 with required title only — defaults priority="Medium", status="Pending"', async ({ request }) => {
+  test('201 with Generic CRM required fields — defaults priority="Medium", status="Pending"', async ({ request }) => {
     const t = await createTask(request, { title: 'minimal' });
     expect(t.priority).toBe('Medium');
     expect(t.status).toBe('Pending');
@@ -145,58 +165,55 @@ test.describe('Tasks API — POST /', () => {
   });
 
   test('400 INVALID_PRIORITY on bogus priority', async ({ request }) => {
-    const res = await authPost(request, '/api/tasks', {
-      title: `${RUN_TAG} bad-prio`,
+    const res = await authPost(request, '/api/tasks', await requiredTaskFields(request, {
+      title: 'bad-prio',
       priority: 'Urgent',
-    });
+    }));
     expect(res.status()).toBe(400);
     expect((await res.json()).code).toBe('INVALID_PRIORITY');
   });
 
-  test('priority=null falls through to default', async ({ request }) => {
-    // The validator skips null/undefined/'' so this is accepted and defaults.
-    const res = await authPost(request, '/api/tasks', {
-      title: `${RUN_TAG} null-prio`,
+  test('priority=null is rejected as a missing required field', async ({ request }) => {
+    const res = await authPost(request, '/api/tasks', await requiredTaskFields(request, {
+      title: 'null-prio',
       priority: null,
-    });
-    expect(res.status()).toBe(201);
-    const t = await res.json();
-    createdTaskIds.push(t.id);
-    expect(t.priority).toBe('Medium');
+    }));
+    expect(res.status()).toBe(400);
+    expect((await res.json()).code).toBe('REQUIRED_TASK_FIELDS_MISSING');
   });
 
   test('400 INVALID_STATUS on bogus status', async ({ request }) => {
-    const res = await authPost(request, '/api/tasks', {
-      title: `${RUN_TAG} bad-status`,
+    const res = await authPost(request, '/api/tasks', await requiredTaskFields(request, {
+      title: 'bad-status',
       status: 'NotAStatus',
-    });
+    }));
     expect(res.status()).toBe(400);
     expect((await res.json()).code).toBe('INVALID_STATUS');
   });
 
   test('400 INVALID_DUEDATE on year < 2000', async ({ request }) => {
-    const res = await authPost(request, '/api/tasks', {
-      title: `${RUN_TAG} ancient-due`,
+    const res = await authPost(request, '/api/tasks', await requiredTaskFields(request, {
+      title: 'ancient-due',
       dueDate: '1999-12-31',
-    });
+    }));
     expect(res.status()).toBe(400);
     expect((await res.json()).code).toBe('INVALID_DUEDATE');
   });
 
   test('400 INVALID_DUEDATE on year > 2100', async ({ request }) => {
-    const res = await authPost(request, '/api/tasks', {
-      title: `${RUN_TAG} far-future-due`,
+    const res = await authPost(request, '/api/tasks', await requiredTaskFields(request, {
+      title: 'far-future-due',
       dueDate: '2999-01-01',
-    });
+    }));
     expect(res.status()).toBe(400);
     expect((await res.json()).code).toBe('INVALID_DUEDATE');
   });
 
   test('400 INVALID_DUEDATE on unparseable string', async ({ request }) => {
-    const res = await authPost(request, '/api/tasks', {
-      title: `${RUN_TAG} junk-due`,
+    const res = await authPost(request, '/api/tasks', await requiredTaskFields(request, {
+      title: 'junk-due',
       dueDate: 'not-a-date',
-    });
+    }));
     expect(res.status()).toBe(400);
     expect((await res.json()).code).toBe('INVALID_DUEDATE');
   });
@@ -223,10 +240,10 @@ test.describe('Tasks API — POST /', () => {
     expect(t.notes).toBe('follow up next week');
   });
 
-  test('201 when contactId / userId are omitted (both nullable)', async ({ request }) => {
+  test('201 when contactId is omitted and the assignee is provided', async ({ request }) => {
     const t = await createTask(request, { title: 'no-fk' });
     expect(t.contactId).toBeNull();
-    expect(t.userId).toBeNull();
+    expect(t.userId).toBe(taskAssigneeId);
   });
 });
 
@@ -576,10 +593,9 @@ test.describe('Tasks API — cross-tenant isolation (#403)', () => {
     // Step 1: as generic admin (this spec's normal user), create a task
     // tagged so we can find it.
     const tag = `Tenant B scoped E2E_FLOW_${Date.now()}`;
-    const create = await authPost(request, '/api/tasks', {
+    const create = await authPost(request, '/api/tasks', await requiredTaskFields(request, {
       title: tag,
-      priority: 'Medium',
-    });
+    }));
     expect(create.status(), `create: ${await create.text()}`).toBe(201);
     const created = await create.json();
     createdTaskIds.push(created.id);
@@ -669,19 +685,19 @@ test.describe("Tasks API — dueDate + status validation pins (#163, #250, #313)
     // Route's actual lower bound is 2000 (validators.js ensureDateInRange).
     // The gap-card said "< 1990"; we test the tighter of actual/card so the
     // spec survives if the bound is later loosened to 1990.
-    const res = await authPost(request, "/api/tasks", {
-      title: `${RUN_TAG} year-too-old`,
+    const res = await authPost(request, "/api/tasks", await requiredTaskFields(request, {
+      title: "year-too-old",
       dueDate: "1985-06-15",
-    });
+    }));
     expect(res.status()).toBe(400);
     expect((await res.json()).code).toBe("INVALID_DUEDATE");
   });
 
   test("(#163, #250) dueDate year > 2100 → 400 INVALID_DUEDATE", async ({ request }) => {
-    const res = await authPost(request, "/api/tasks", {
-      title: `${RUN_TAG} year-too-future`,
+    const res = await authPost(request, "/api/tasks", await requiredTaskFields(request, {
+      title: "year-too-future",
       dueDate: "2150-01-01",
-    });
+    }));
     expect(res.status()).toBe(400);
     expect((await res.json()).code).toBe("INVALID_DUEDATE");
   });
@@ -698,10 +714,10 @@ test.describe("Tasks API — dueDate + status validation pins (#163, #250, #313)
     // (the original surface this gap-card targets) the route silently
     // accepted unknown values and stored them — or, worse, coerced them
     // to Pending after the fact, hiding bugs in callers.
-    const res = await authPost(request, "/api/tasks", {
-      title: `${RUN_TAG} bogus-status-pin`,
+    const res = await authPost(request, "/api/tasks", await requiredTaskFields(request, {
+      title: "bogus-status-pin",
       status: "WaitingForReview", // not in {Pending, In Progress, Completed, Cancelled}
-    });
+    }));
     expect(res.status()).toBe(400);
     const body = await res.json();
     expect(body.code).toBe("INVALID_STATUS");
@@ -716,10 +732,10 @@ test.describe("Tasks API — dueDate + status validation pins (#163, #250, #313)
     // 10:30 IST = 05:00 UTC. Pre-fix, naive `new Date(input)` on a UTC
     // server stored it as 10:30 UTC, drifting the task to 16:00 IST.
     const localInput = "2026-05-15T10:30";
-    const create = await authPost(request, "/api/tasks", {
-      title: `${RUN_TAG} ist-round-trip`,
+    const create = await authPost(request, "/api/tasks", await requiredTaskFields(request, {
+      title: "ist-round-trip",
       dueDate: localInput,
-    });
+    }));
     expect(create.status(), `create body: ${await create.text()}`).toBe(201);
     const t = await create.json();
     createdTaskIds.push(t.id);
@@ -742,10 +758,10 @@ test.describe("Tasks API — dueDate + status validation pins (#163, #250, #313)
     // route through parseDateTimeLocalInTZ" change accidentally double-
     // shifts ISO inputs.
     const isoInput = "2026-05-15T05:00:00.000Z";
-    const create = await authPost(request, "/api/tasks", {
-      title: `${RUN_TAG} iso-passthrough`,
+    const create = await authPost(request, "/api/tasks", await requiredTaskFields(request, {
+      title: "iso-passthrough",
       dueDate: isoInput,
-    });
+    }));
     expect(create.status(), `create body: ${await create.text()}`).toBe(201);
     const t = await create.json();
     createdTaskIds.push(t.id);

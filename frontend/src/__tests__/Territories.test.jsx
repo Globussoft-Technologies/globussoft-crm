@@ -105,6 +105,9 @@ function defaultFetchMock(url, opts) {
   if (url === '/api/staff' && (!opts || !opts.method || opts.method === 'GET')) {
     return Promise.resolve(sampleStaff);
   }
+  if (url === '/api/sales-teams' && (!opts || !opts.method || opts.method === 'GET')) {
+    return Promise.resolve([]);
+  }
   if (/^\/api\/territories\/\d+\/contacts$/.test(url)) {
     return Promise.resolve(sampleContacts);
   }
@@ -142,29 +145,86 @@ describe('<Territories /> — page surface', () => {
     expect(screen.getByRole('button', { name: /Add Territory/i })).toBeInTheDocument();
   });
 
-  it('renders one card per territory with name + regions/users/contacts counts', async () => {
+  it('renders generic territories in a table with all available fields', async () => {
     renderTerritories();
     expect(await screen.findByText('North America West')).toBeInTheDocument();
     expect(screen.getByText('EMEA Central')).toBeInTheDocument();
-    // Per-card counts render — North America West has 6 regions, 2 users, 42 contacts.
-    expect(screen.getByText('6')).toBeInTheDocument(); // regions count
+    expect(screen.getByText('Territory name')).toBeInTheDocument();
+    expect(screen.getByText('US-CA, US-OR, US-WA, US-NV, US-AZ, US-UT')).toBeInTheDocument();
+    expect(screen.getByText('Alice Reed, Bharat Singh')).toBeInTheDocument();
     expect(screen.getByText('42')).toBeInTheDocument(); // contacts count
-    // EMEA Central has 3 regions, 1 user, 17 contacts. "3" appears in regions
-    // tile; "17" appears in contacts tile. (1 may collide with other text;
-    // assert on the distinct values only.)
     expect(screen.getByText('17')).toBeInTheDocument();
   });
 
-  it('region chips render up to 4 + "+N more" suffix when >4', async () => {
+  it('opens the territory staff assignment editor from the Staff with access column', async () => {
     renderTerritories();
     await screen.findByText('North America West');
-    // First 4 chips render verbatim.
-    expect(screen.getByText('US-CA')).toBeInTheDocument();
-    expect(screen.getByText('US-OR')).toBeInTheDocument();
-    expect(screen.getByText('US-WA')).toBeInTheDocument();
-    expect(screen.getByText('US-NV')).toBeInTheDocument();
-    // 5th + 6th collapse into "+2 more".
-    expect(screen.getByText('+2 more')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Manage staff for North America West' }));
+    expect(screen.getByRole('heading', { name: /Assign staff/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Alice Reed.*alice@globussoft\.com.*Staff/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Bharat Singh.*bharat@globussoft\.com.*Staff/i })).toBeInTheDocument();
+  });
+
+  it('refreshes contact counts after saving staff assignment', async () => {
+    let territoryGets = 0;
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/territories' && opts?.method === 'PUT') return Promise.resolve({ id: 1 });
+      if (url === '/api/territories') {
+        territoryGets += 1;
+        return Promise.resolve(territoryGets === 1
+          ? sampleTerritories
+          : sampleTerritories.map((territory) => territory.id === 1 ? { ...territory, contactCount: 99 } : territory));
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderTerritories();
+    await screen.findByText('North America West');
+    fireEvent.click(screen.getByRole('button', { name: 'Manage staff for North America West' }));
+    fireEvent.click(screen.getByRole('button', { name: /Alice Reed.*alice@globussoft\.com.*Staff/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save assignment' }));
+    await waitFor(() => expect(screen.getByText('99')).toBeInTheDocument());
+    expect(territoryGets).toBe(2);
+  });
+
+  it('warns immediately when unselecting staff assigned through a team territory', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/sales-teams') return Promise.resolve([{
+        id: 50,
+        name: 'North Sales Team',
+        territoryMode: 'team',
+        territoryId: 1,
+        members: [{ userId: 10 }],
+      }]);
+      return defaultFetchMock(url, opts);
+    });
+    renderTerritories();
+    await screen.findByText('North America West');
+    fireEvent.click(screen.getByRole('button', { name: 'Manage staff for North America West' }));
+    const alice = screen.getByRole('button', { name: /Alice Reed.*alice@globussoft\.com.*Staff/i });
+    expect(alice).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(alice);
+    expect(await screen.findByText(/Cannot remove this staff member.*North Sales Team/i)).toBeInTheDocument();
+    expect(alice).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('renders all generic territory regions in the table', async () => {
+    renderTerritories();
+    await screen.findByText('North America West');
+    expect(screen.getByText('United States')).toBeInTheDocument();
+    expect(screen.getByText('US-CA, US-OR, US-WA, US-NV, US-AZ, US-UT')).toBeInTheDocument();
+  });
+
+  it('shows the current territory status instead of the opposite action', async () => {
+    fetchApiMock.mockImplementation((url, opts) => {
+      if (url === '/api/territories' && (!opts || !opts.method || opts.method === 'GET')) {
+        return Promise.resolve(sampleTerritories.map((territory, index) => ({ ...territory, isActive: index === 0 })));
+      }
+      return defaultFetchMock(url, opts);
+    });
+    renderTerritories();
+    await screen.findByText('North America West');
+    expect(screen.getByRole('button', { name: 'Activate North America West' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Disabled EMEA Central' })).toBeInTheDocument();
   });
 
   it('renders empty state + "Create First Territory" CTA when list is empty', async () => {
@@ -204,6 +264,26 @@ describe('<Territories /> — page surface', () => {
     expect(screen.getByText(/Select a country first/i)).toBeInTheDocument();
     // Primary CTA reads "Create Territory" (not "Save Changes").
     expect(screen.getByRole('button', { name: /Create Territory/i })).toBeInTheDocument();
+  });
+
+  it('shows Manage staff only when editing an existing territory', async () => {
+    renderTerritories();
+    await screen.findByText('North America West');
+    expect(screen.queryByRole('button', { name: 'Manage staff' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit North America West' }));
+    expect(await screen.findByRole('button', { name: 'Manage staff' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Close territory dialog/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Territory' }));
+    expect(screen.queryByRole('button', { name: 'Manage staff' })).not.toBeInTheDocument();
+  });
+
+  it('opens Territories information from the heading icon', async () => {
+    renderTerritories();
+    await screen.findByText('North America West');
+    fireEvent.click(screen.getByRole('button', { name: 'About Territories' }));
+    expect(screen.getByRole('dialog', { name: 'About Territories' })).toBeInTheDocument();
+    expect(screen.getByText(/A territory is an area/i)).toBeInTheDocument();
+    expect(screen.getByText(/Use Staff for individual access/i)).toBeInTheDocument();
   });
 
   it('saving with an empty name shows "Name is required" error toast and does NOT POST', async () => {
@@ -343,41 +423,11 @@ describe('<Territories /> — page surface', () => {
     expect(delCall).toBeUndefined();
   });
 
-  it('View Details navigates to detail view and fires GET /api/territories/<id>/contacts', async () => {
+  it('does not render a View Details action or detail page', async () => {
     renderTerritories();
     await screen.findByText('North America West');
-
-    const viewButtons = screen.getAllByRole('button', { name: /View Details/i });
-    fetchApiMock.mockClear();
-    // Re-establish the default mock for the post-click reads.
-    fetchApiMock.mockImplementation(defaultFetchMock);
-    fireEvent.click(viewButtons[0]);
-
-    // Back button appears (detail view chrome).
-    expect(await screen.findByRole('button', { name: /Back to Territories/i })).toBeInTheDocument();
-    // Contacts fetch fired against the right path.
-    await waitFor(() => {
-      const contactsCall = fetchApiMock.mock.calls.find(
-        ([u]) => u === '/api/territories/1/contacts',
-      );
-      expect(contactsCall).toBeTruthy();
-    });
-    // Contact row from sampleContacts renders.
-    expect(await screen.findByText('Wayne Industries')).toBeInTheDocument();
-    expect(screen.getByText('Stark Manufacturing')).toBeInTheDocument();
-  });
-
-  it('detail view renders empty-state when /contacts returns []', async () => {
-    fetchApiMock.mockImplementation((url, opts) => {
-      if (/^\/api\/territories\/\d+\/contacts$/.test(url)) return Promise.resolve([]);
-      return defaultFetchMock(url, opts);
-    });
-    renderTerritories();
-    await screen.findByText('North America West');
-
-    const viewButtons = screen.getAllByRole('button', { name: /View Details/i });
-    fireEvent.click(viewButtons[0]);
-
-    expect(await screen.findByText(/No contacts assigned to this territory yet/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /View Details/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /View details/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Back to Territories/i })).not.toBeInTheDocument();
   });
 });

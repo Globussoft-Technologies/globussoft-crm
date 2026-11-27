@@ -113,7 +113,7 @@ function decodeNotes(raw) {
 // the pre-existing "plain task" behaviour. "Meeting" / "Site Visit" are what
 // the Lead Reports meetings-and-visits and visited-but-not-booked reports read
 // (see backend/lib/leadReportMetrics.js).
-const TASK_TYPES = ['Task', 'Call', 'Meeting', 'Site Visit', 'Follow Up'];
+const TASK_TYPES = ['Task', 'Call', 'Follow Up', 'Meeting', 'Site Visit'];
 // Allowlist for the `?type=` deep-link param — an unrecognised value falls
 // back to a blank type rather than putting an unsaveable string in the form
 // (the backend rejects anything outside ALLOWED_TASK_TYPES with a 400).
@@ -129,6 +129,19 @@ const TASK_OUTCOMES = [
 const VISIT_TYPES = ['Meeting', 'Site Visit'];
 const TASK_ASSIGNMENT_RULES_KEY = 'generic.taskAssignmentRules';
 
+const normalizeTaskAssignmentRules = (rules, preferredRuleId = null) => {
+  if (!Array.isArray(rules) || rules.length === 0) return [];
+  const selectedId = preferredRuleId
+    || rules.find((rule) => rule?.isActive === true)?.id
+    || rules.find((rule) => rule?.isDefault === true)?.id
+    || rules[0]?.id;
+  return rules.map((rule) => ({
+    ...rule,
+    isActive: rule.id === selectedId,
+    isDefault: rule.id === selectedId,
+  }));
+};
+
 // Queue filters. All client-side: GET /api/tasks already returns the tenant's
 // queue in one payload, so filtering here is instant and costs no round-trip.
 const EMPTY_FILTERS = {
@@ -136,6 +149,7 @@ const EMPTY_FILTERS = {
   priority: '',
   type: '',
   assignee: '',
+  assignment: '',
   due: '',
   overdueOnly: false,
 };
@@ -171,7 +185,10 @@ export default function Tasks() {
   const { hasPermission, isReady: permsReady } = usePermissions();
   const [tasks, setTasks] = useState([]);
   const [staff, setStaff] = useState([]);
+  const [tenantRoles, setTenantRoles] = useState([]);
   const [taskContacts, setTaskContacts] = useState([]);
+  const [showContactPicker, setShowContactPicker] = useState(false);
+  const [taskContactSearch, setTaskContactSearch] = useState('');
   const [allTags, setAllTags] = useState([]);
   const [newTask, setNewTask] = useState(EMPTY_FORM);
   const travelTaskReturnToRef = useRef('');
@@ -212,12 +229,21 @@ export default function Tasks() {
           ? staff.filter((s) => accessibleSubBrands(s).includes(activeSubBrand))
           : staff);
   const genericRoleOptions = Array.from(new Set(
-    staff
-      .filter((member) => !member.deactivatedAt && String(member.userType || 'STAFF').toUpperCase() === 'STAFF' && String(member.role || '').toUpperCase() !== 'CUSTOMER')
-      .map((member) => String(member.role || '').toUpperCase())
+    tenantRoles
+      .filter((roleDefinition) => String(roleDefinition.userType || 'STAFF').toUpperCase() === 'STAFF')
+      .map((roleDefinition) => String(roleDefinition.key || '').toUpperCase())
       .filter(Boolean)
+      .concat(staff
+        .filter((member) => !member.deactivatedAt && String(member.userType || 'STAFF').toUpperCase() === 'STAFF' && String(member.role || '').toUpperCase() !== 'CUSTOMER')
+        .map((member) => String(member.primaryRole?.key || member.role || '').toUpperCase())
+        .filter(Boolean))
       .concat(['ADMIN', 'MANAGER', 'USER'])
   )).sort();
+  const genericRoleLabels = Object.fromEntries([
+    ...tenantRoles.map((roleDefinition) => [String(roleDefinition.key || '').toUpperCase(), roleDefinition.name || roleDefinition.key]),
+    ...staff.map((member) => [String(member.primaryRole?.key || member.role || '').toUpperCase(), member.primaryRole?.name || member.role]),
+  ].filter(([key]) => key));
+  const genericRoleLabel = (roleKey) => genericRoleLabels[roleKey] || roleKey;
   const genericTargetRoleOptions = genericRoleOptions.filter((option) => option !== 'ADMIN');
   const genericDefaultAssignmentRules = [
     { name: 'Default role assignments', mappings: [{ assignerRole: 'ADMIN', assigneeRole: 'MANAGER' }, { assignerRole: 'ADMIN', assigneeRole: 'USER' }, { assignerRole: 'MANAGER', assigneeRole: 'USER' }, { assignerRole: 'USER', assigneeRole: 'USER' }] },
@@ -300,14 +326,36 @@ export default function Tasks() {
       .catch(() => {});
   }, []);
 
+  useEffect(() => {
+    if (!isGeneric) return;
+    fetchApi('/api/roles?limit=100', { silent: true })
+      .then((d) => setTenantRoles(Array.isArray(d?.roles) ? d.roles : []))
+      .catch(() => setTenantRoles([]));
+  }, [isGeneric]);
+
   // Generic task-queue tasks can be linked to a lead/contact so the same task
   // appears in that lead's Activities timeline. Travel and wellness keep
   // their existing task creation flow unchanged.
   useEffect(() => {
     if (!isGeneric) return;
-    fetchApi('/api/contacts?fields=summary&limit=500&sortBy=name&sortDirection=asc')
-      .then((d) => setTaskContacts(Array.isArray(d) ? d : (Array.isArray(d?.data) ? d.data : [])))
-      .catch(() => setTaskContacts([]));
+    const loadAllTaskContacts = async () => {
+      try {
+        const allContacts = [];
+        let page = 1;
+        let totalPages = 1;
+        do {
+          const response = await fetchApi(`/api/contacts?fields=summary&limit=500&page=${page}&sortBy=name&sortDirection=asc`);
+          const pageContacts = Array.isArray(response) ? response : (Array.isArray(response?.data) ? response.data : []);
+          allContacts.push(...pageContacts);
+          totalPages = Number(response?.totalPages) || 1;
+          page += 1;
+        } while (page <= totalPages && page <= 100);
+        setTaskContacts(allContacts);
+      } catch {
+        setTaskContacts([]);
+      }
+    };
+    loadAllTaskContacts();
   }, [isGeneric]);
 
   useEffect(() => {
@@ -348,7 +396,7 @@ export default function Tasks() {
       const setting = await fetchApi(`/api/tenant-settings/${encodeURIComponent(TASK_ASSIGNMENT_RULES_KEY)}`, { silent: true });
       const raw = setting?.value || setting?.defaultValue || '[]';
       const parsed = JSON.parse(raw);
-      setTaskRules(Array.isArray(parsed) ? parsed : []);
+      setTaskRules(normalizeTaskAssignmentRules(Array.isArray(parsed) ? parsed : []));
     } catch {
       setTaskRules([]);
     }
@@ -361,7 +409,7 @@ export default function Tasks() {
   const saveTaskRules = async () => {
     setTaskRulesSaving(true);
     try {
-      let rulesToSave = taskRules;
+      let rulesToSave = normalizeTaskAssignmentRules(taskRules);
       const hasDraftContent = Boolean(
         taskRuleDraft.name.trim()
         || taskRules.some((rule) => rule.id === taskRuleDraft.id)
@@ -374,9 +422,12 @@ export default function Tasks() {
           return;
         }
         const nextRule = { ...taskRuleDraft, name: taskRuleDraft.name.trim() };
-        rulesToSave = taskRules.some((rule) => rule.id === nextRule.id)
-          ? taskRules.map((rule) => rule.id === nextRule.id ? nextRule : rule)
-          : [...taskRules, nextRule];
+        rulesToSave = normalizeTaskAssignmentRules(
+          taskRules.some((rule) => rule.id === nextRule.id)
+            ? taskRules.map((rule) => rule.id === nextRule.id ? nextRule : rule)
+            : [...taskRules, nextRule],
+          nextRule.isActive ? nextRule.id : null,
+        );
         setTaskRules(rulesToSave);
       }
       await fetchApi(`/api/tenant-settings/${encodeURIComponent(TASK_ASSIGNMENT_RULES_KEY)}`, {
@@ -399,8 +450,10 @@ export default function Tasks() {
     }
     setTaskRules((current) => {
       const nextRule = { ...taskRuleDraft, name: taskRuleDraft.name.trim() };
-      if (current.some((rule) => rule.id === nextRule.id)) return current.map((rule) => rule.id === nextRule.id ? nextRule : rule);
-      return [...current, nextRule];
+      const nextRules = current.some((rule) => rule.id === nextRule.id)
+        ? current.map((rule) => rule.id === nextRule.id ? nextRule : rule)
+        : [...current, nextRule];
+      return normalizeTaskAssignmentRules(nextRules, nextRule.isActive ? nextRule.id : null);
     });
     setTaskRuleDraft({
       id: `task-rule-${Date.now()}`,
@@ -416,8 +469,8 @@ export default function Tasks() {
     isDefault: rule.isDefault === true,
   });
 
-  const setTaskRuleDefault = (ruleId, isDefault) => {
-    setTaskRules((current) => current.map((rule) => ({ ...rule, isDefault: isDefault ? rule.id === ruleId : rule.id === ruleId ? false : rule.isDefault === true })));
+  const setTaskRuleActive = (ruleId) => {
+    setTaskRules((current) => normalizeTaskAssignmentRules(current, ruleId));
   };
 
   const updateTaskRuleMapping = (index, key, value) => {
@@ -463,6 +516,9 @@ export default function Tasks() {
         type: newTask.type || undefined,
         outcome: isGeneric ? undefined : (newTask.outcome || undefined),
         dueDate: newTask.dueDate ? new Date(newTask.dueDate).toISOString() : null,
+        completedAt: isGeneric && newTask.completedAt
+          ? new Date(newTask.completedAt).toISOString()
+          : undefined,
         // Tags + description are packed into the notes field using a sentinel
         // prefix so no schema migration is needed.
         notes: encodeNotes(newTask.tagIds, newTask.description, newTask.resolutionNote),
@@ -686,6 +742,14 @@ export default function Tasks() {
     if (filters.priority && normalizePriority(t.priority) !== filters.priority) return false;
     if (filters.overdueOnly && !isOverdue(t)) return false;
 
+    if (isGeneric && filters.assignment) {
+      const isAssignedToMe = Number(t.userId) === Number(currentUserId);
+      const isAssignedByMe = Number(t.createdById) === Number(currentUserId)
+        && Number(t.userId) !== Number(currentUserId);
+      if (filters.assignment === 'assigned-to-me' && !isAssignedToMe) return false;
+      if (filters.assignment === 'assigned-by-me' && !isAssignedByMe) return false;
+    }
+
     if (filters.type) {
       const type = t.type || '';
       // `__none` finds the legacy rows written before Type existed — the ones
@@ -735,7 +799,7 @@ export default function Tasks() {
   const completedTasks = allCompletedTasks.filter(matchesFilters);
 
   const filtersActive = Boolean(
-    filters.q || filters.priority || filters.type || filters.assignee || filters.due || filters.overdueOnly,
+    filters.q || filters.priority || filters.type || filters.assignee || filters.assignment || filters.due || filters.overdueOnly,
   );
   const clearFilters = () => setFilters(EMPTY_FILTERS);
   const togglePriority = (p) =>
@@ -1007,7 +1071,7 @@ export default function Tasks() {
           >
             <option value="">Any type</option>
             {TASK_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-            <option value="__none">No type set</option>
+            {!isGeneric && <option value="__none">No type set</option>}
           </select>
 
           <select
@@ -1018,6 +1082,19 @@ export default function Tasks() {
           >
             {DUE_FILTERS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
           </select>
+
+          {isGeneric && role === 'MANAGER' && (
+            <select
+              aria-label="Filter by task assignment"
+              className={`input-field${filters.assignment ? ' tasks-filterbar__field--active' : ''}`}
+              value={filters.assignment}
+              onChange={(e) => setFilters((f) => ({ ...f, assignment: e.target.value }))}
+            >
+              <option value="">All assignments</option>
+              <option value="assigned-to-me">Assigned to me</option>
+              <option value="assigned-by-me">Assigned to others</option>
+            </select>
+          )}
 
           {assigneeOptions.length > 1 && (
             <select
@@ -1274,7 +1351,7 @@ export default function Tasks() {
                 <strong style={{ display: 'block', marginBottom: '0.65rem', fontSize: '0.85rem' }}>{taskRules.some((rule) => rule.id === taskRuleDraft.id) ? 'Edit assignment rule' : 'Add assignment rule'}</strong>
                 <input value={taskRuleDraft.name} onChange={(e) => setTaskRuleDraft({ ...taskRuleDraft, name: e.target.value })} placeholder="Rule name" style={{ ...modalInputStyle, width: '100%', boxSizing: 'border-box', marginBottom: '0.6rem' }} />
                 <div className="task-rule-mapping-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '0.5rem', fontSize: '0.75rem', fontWeight: 700, marginBottom: '0.35rem' }}><span>Who can assign</span><span>Whom can assign</span><span /></div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>{taskRuleDraft.mappings.map((mapping, index) => <div className="task-rule-mapping-grid" key={`draft-mapping-${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '0.5rem', alignItems: 'center' }}><select value={mapping.assignerRole} onChange={(e) => updateTaskRuleMapping(index, 'assignerRole', e.target.value)} style={modalInputStyle}>{genericRoleOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><select value={mapping.assigneeRole} onChange={(e) => updateTaskRuleMapping(index, 'assigneeRole', e.target.value)} style={modalInputStyle}>{genericTargetRoleOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select><button type="button" onClick={() => removeTaskRuleMapping(index)} className="btn-secondary" aria-label="Remove role mapping" style={{ padding: '0.4rem', color: '#ef4444' }} disabled={taskRuleDraft.mappings.length === 1}><Trash2 size={13} /></button></div>)}</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>{taskRuleDraft.mappings.map((mapping, index) => <div className="task-rule-mapping-grid" key={`draft-mapping-${index}`} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: '0.5rem', alignItems: 'center' }}><select value={mapping.assignerRole} onChange={(e) => updateTaskRuleMapping(index, 'assignerRole', e.target.value)} style={modalInputStyle}>{genericRoleOptions.map((option) => <option key={option} value={option}>{genericRoleLabel(option)}</option>)}</select><select value={mapping.assigneeRole} onChange={(e) => updateTaskRuleMapping(index, 'assigneeRole', e.target.value)} style={modalInputStyle}>{genericTargetRoleOptions.map((option) => <option key={option} value={option}>{genericRoleLabel(option)}</option>)}</select><button type="button" onClick={() => removeTaskRuleMapping(index)} className="btn-secondary" aria-label="Remove role mapping" style={{ padding: '0.4rem', color: '#ef4444' }} disabled={taskRuleDraft.mappings.length === 1}><Trash2 size={13} /></button></div>)}</div>
                 <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', marginTop: '0.6rem' }}><button type="button" onClick={addTaskRuleMapping} className="btn-secondary" style={{ whiteSpace: 'nowrap' }}><Plus size={14} /> Add mapping</button><button type="button" onClick={addTaskRule} className="btn-secondary" style={{ whiteSpace: 'nowrap' }}>{taskRules.some((rule) => rule.id === taskRuleDraft.id) ? <><Save size={14} /> Update rule mapping</> : <><Save size={14} /> Save rule mapping</>}</button></div>
                 {taskRules.some((rule) => rule.id === taskRuleDraft.id) && <button type="button" onClick={() => setTaskRuleDraft({ id: `task-rule-${Date.now()}`, name: '', mappings: [{ assignerRole: 'ADMIN', assigneeRole: 'MANAGER' }], isActive: true, isDefault: false })} className="btn-secondary" style={{ marginTop: '0.55rem', fontSize: '0.75rem' }}>Cancel edit</button>}
               </div>
@@ -1290,7 +1367,7 @@ export default function Tasks() {
                 {taskRules.length === 0 ? <p style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>No dynamic rules created.</p> : taskRules.map((rule) => {
                   return <div key={rule.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', padding: '0.7rem 0.8rem', border: '1px solid var(--border-color)', borderRadius: 8 }}>
                     <div style={{ minWidth: 0, flex: 1 }}><strong style={{ fontSize: '0.82rem' }}>{rule.name}</strong><div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem', color: 'var(--text-secondary)', fontSize: '0.75rem', marginTop: '0.25rem' }}><span>Who can assign</span><span>Whom can assign</span>{(Array.isArray(rule.mappings) ? rule.mappings : [{ assignerRole: rule.assignerRole, assigneeRole: rule.assigneeRole }]).map((mapping, mappingIndex) => <React.Fragment key={`${rule.id}-${mappingIndex}`}><span>{mapping.assignerRole}</span><span>{mapping.assigneeRole}</span></React.Fragment>)}</div></div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}><button type="button" className="btn-secondary" onClick={() => setTaskRuleDefault(rule.id, !rule.isDefault)} style={{ padding: '0.35rem 0.55rem', fontSize: '0.72rem' }}>{rule.isDefault ? 'Default' : 'Set default'}</button><button type="button" className="btn-secondary" onClick={() => setTaskRules((current) => current.map((item) => item.id === rule.id ? { ...item, isActive: !item.isActive } : item))} style={{ padding: '0.35rem 0.55rem', fontSize: '0.72rem' }}>{rule.isActive ? 'Active' : 'Off'}</button><button type="button" className="btn-secondary" onClick={() => editTaskRule(rule)} aria-label={`Edit ${rule.name}`} style={{ padding: '0.35rem 0.55rem' }}><Edit3 size={13} /></button><button type="button" className="btn-secondary" onClick={() => setTaskRules((current) => current.filter((item) => item.id !== rule.id))} aria-label={`Remove ${rule.name}`} style={{ padding: '0.35rem 0.55rem', color: '#ef4444' }}><Trash2 size={13} /></button></div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}><button type="button" className="btn-secondary" onClick={() => setTaskRuleActive(rule.id)} style={{ padding: '0.35rem 0.55rem', fontSize: '0.72rem' }}>{rule.isActive ? 'Active' : 'Set active'}</button><button type="button" className="btn-secondary" onClick={() => editTaskRule(rule)} aria-label={`Edit ${rule.name}`} style={{ padding: '0.35rem 0.55rem' }}><Edit3 size={13} /></button><button type="button" className="btn-secondary" onClick={() => setTaskRules((current) => normalizeTaskAssignmentRules(current.filter((item) => item.id !== rule.id)))} aria-label={`Remove ${rule.name}`} style={{ padding: '0.35rem 0.55rem', color: '#ef4444' }}><Trash2 size={13} /></button></div>
                   </div>;
                 })}
               </div>
@@ -1301,6 +1378,16 @@ export default function Tasks() {
 
       </div>
 
+
+      {isGeneric && showContactPicker && (
+        <div role="dialog" aria-modal="true" aria-labelledby="task-contact-picker-title" onClick={(event) => { if (event.target === event.currentTarget) setShowContactPicker(false); }} style={{ position: 'fixed', inset: 0, zIndex: 1100, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem', background: 'rgba(15, 23, 42, 0.58)', backdropFilter: 'blur(3px)' }}>
+          <div className="card" style={{ width: 'min(620px, 100%)', maxHeight: '78vh', display: 'flex', flexDirection: 'column', boxSizing: 'border-box', padding: '1.25rem', background: 'var(--modal-bg, #fff)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', marginBottom: '0.9rem' }}><div><h2 id="task-contact-picker-title" style={{ margin: 0, fontSize: '1.15rem' }}>Select lead/contact</h2><p style={{ margin: '0.25rem 0 0', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>Choose a lead or contact to link to this task.</p></div><button type="button" className="btn-secondary" aria-label="Close lead/contact picker" onClick={() => setShowContactPicker(false)} style={{ padding: '0.4rem' }}><X size={16} /></button></div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: '0.75rem', border: '1px solid var(--border-color)', borderRadius: 8, padding: '0.45rem 0.65rem' }}><Search size={15} color="var(--text-secondary)" /><input autoFocus value={taskContactSearch} onChange={(event) => setTaskContactSearch(event.target.value)} placeholder="Search by name or email" aria-label="Search leads and contacts" style={{ flex: 1, minWidth: 0, border: 0, outline: 0, background: 'transparent', color: 'var(--text-primary)' }} /></div>
+            <div style={{ overflowY: 'auto', display: 'grid', gap: 5 }}><button type="button" onClick={() => { setNewTask({ ...newTask, contactId: '' }); setShowContactPicker(false); }} style={{ padding: '0.65rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 7, background: !newTask.contactId ? 'var(--accent-bg, rgba(79,70,229,.10))' : 'transparent', color: 'var(--text-primary)', textAlign: 'left', cursor: 'pointer' }}>No related lead/contact</button>{taskContacts.filter((contact) => { const query = taskContactSearch.trim().toLowerCase(); return !query || [contact.name, contact.email].filter(Boolean).join(' ').toLowerCase().includes(query); }).map((contact) => <button type="button" key={contact.id} onClick={() => { setNewTask({ ...newTask, contactId: String(contact.id) }); setShowContactPicker(false); }} style={{ padding: '0.65rem 0.75rem', border: '1px solid var(--border-color)', borderRadius: 7, background: String(newTask.contactId) === String(contact.id) ? 'var(--accent-bg, rgba(79,70,229,.10))' : 'transparent', color: 'var(--text-primary)', textAlign: 'left', cursor: 'pointer' }}><span style={{ display: 'block', fontWeight: 600 }}>{contact.name || contact.email || `Contact #${contact.id}`}</span>{contact.email && contact.name && <span style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '0.78rem', marginTop: 2 }}>{contact.email}</span>}</button>)}</div>
+          </div>
+        </div>
+      )}
 
       {selectedTask && (
         <div
@@ -1379,9 +1466,9 @@ export default function Tasks() {
                     "visited but did not book" recovery queue. */}
                 <div style={{ display: 'grid', gridTemplateColumns: isGeneric ? '1fr' : '1fr 1fr', gap: '0.75rem' }}>
                   <label style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
-                    Type
+                    {isGeneric ? 'Task type' : 'Type'}
                     <select value={editTask.type} onChange={(e) => setEditTask({ ...editTask, type: e.target.value })} style={modalInputStyle}>
-                      <option value="">General task</option>
+                      <option value="">{isGeneric ? 'Select task' : 'General task'}</option>
                       {TASK_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                     </select>
                   </label>
@@ -1586,11 +1673,24 @@ export default function Tasks() {
             </div>
 
             {/* Task Name */}
+            {isGeneric && (
+              <label
+                htmlFor="task-title-input"
+                style={{
+                  marginBottom: "-0.65rem",
+                  fontSize: "0.78rem",
+                  fontWeight: 600,
+                  color: "var(--text-secondary)",
+                }}
+              >
+                Task Name *
+              </label>
+            )}
             <input
               id="task-title-input"
               type="text"
               required
-              placeholder="Task Name"
+              placeholder={isGeneric ? "Task Name *" : "Task Name"}
               value={newTask.title}
               onChange={e => setNewTask({ ...newTask, title: e.target.value })}
               style={{
@@ -1642,9 +1742,10 @@ export default function Tasks() {
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" style={{ flexShrink: 0, color: 'var(--text-secondary)' }}>
                   <path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z" /><line x1="4" y1="22" x2="4" y2="15" />
                 </svg>
-                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flexShrink: 0, whiteSpace: 'nowrap' }}>Priority:</span>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flexShrink: 0, whiteSpace: 'nowrap' }}>Priority{isGeneric ? ' *' : ''}:</span>
                 <select
                   id="task-priority-select"
+                  required={isGeneric}
                   value={newTask.priority}
                   onChange={e => setNewTask({ ...newTask, priority: e.target.value })}
                   style={{
@@ -1671,10 +1772,11 @@ export default function Tasks() {
                 on a plain to-do. Both optional — blank keeps the old shape. */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', minWidth: 0 }}>
-                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flexShrink: 0, whiteSpace: 'nowrap' }}>Type:</span>
+                <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', flexShrink: 0, whiteSpace: 'nowrap' }}>{isGeneric ? 'Task type' : 'Type'}{isGeneric ? ' *' : ''}:</span>
                 <select
                   id="task-type-select"
                   aria-label="Task type"
+                  required={isGeneric}
                   value={newTask.type}
                   onChange={e => setNewTask({ ...newTask, type: e.target.value })}
                   style={{
@@ -1683,7 +1785,7 @@ export default function Tasks() {
                     border: '1px solid var(--border-color, rgba(0,0,0,0.15))', outline: 'none', cursor: 'pointer',
                   }}
                 >
-                  <option value="">General task</option>
+                  <option value="">{isGeneric ? 'Select task' : 'General task'}</option>
                   {TASK_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
@@ -1710,9 +1812,21 @@ export default function Tasks() {
             </div>
 
             {/* Due At + Completed At — stacked label above input, two columns */}
-            <div style={{ display: 'grid', gridTemplateColumns: isTravel ? '1fr' : '1fr 1fr', gap: '0.75rem' }}>
+            {isGeneric && (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', minWidth: 0, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                  <span>Due date *</span>
+                  <input type="date" required value={newTask.dueDate?.split('T')[0] || ''} onChange={e => setNewTask({ ...newTask, dueDate: `${e.target.value}T${newTask.dueDate?.split('T')[1] || '00:00'}` })} style={{ width: '100%', boxSizing: 'border-box', padding: '0.42rem 0.6rem', fontSize: '0.8rem', border: '1px solid var(--border-color, rgba(0,0,0,0.15))', borderRadius: 7, background: 'var(--surface-color, #fff)', color: 'var(--text-primary)', outline: 'none' }} />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', minWidth: 0, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                  <span>Due time *</span>
+                  <input type="time" required value={newTask.dueDate?.split('T')[1] || ''} onChange={e => setNewTask({ ...newTask, dueDate: `${newTask.dueDate?.split('T')[0] || ''}T${e.target.value}` })} style={{ width: '100%', boxSizing: 'border-box', padding: '0.42rem 0.6rem', fontSize: '0.8rem', border: '1px solid var(--border-color, rgba(0,0,0,0.15))', borderRadius: 7, background: 'var(--surface-color, #fff)', color: 'var(--text-primary)', outline: 'none' }} />
+                </label>
+              </div>
+            )}
+            {!isGeneric && <div style={{ display: 'grid', gridTemplateColumns: isGeneric || isTravel ? '1fr' : '1fr 1fr', gap: '0.75rem' }}>
               {/* Due At */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', minWidth: 0 }}>
+              {!isGeneric && <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', minWidth: 0 }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.78rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap' }}>
                   <Calendar size={12} style={{ flexShrink: 0 }} />
                   Due At:
@@ -1734,7 +1848,7 @@ export default function Tasks() {
                     outline: 'none',
                   }}
                 />
-              </div>
+              </div>}
 
               {!isTravel && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem', minWidth: 0 }}>
@@ -1758,9 +1872,9 @@ export default function Tasks() {
                   />
                 </div>
               )}
-            </div>
+            </div>}
 
-            {isPastDate(newTask.dueDate) && (
+            {!isGeneric && isPastDate(newTask.dueDate) && (
               <p
                 id="task-duedate-warning"
                 data-testid="task-past-date-warning"
@@ -1776,10 +1890,11 @@ export default function Tasks() {
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
                 </svg>
-                Assignees:
+                Assignees{isGeneric ? ': *' : ':'}
               </label>
               <select
                 value={newTask.assignedToId}
+                required={isGeneric}
                 onChange={e => setNewTask({ ...newTask, assignedToId: e.target.value })}
                 style={{
                   width: '100%', boxSizing: 'border-box',
@@ -1791,7 +1906,7 @@ export default function Tasks() {
                   outline: 'none', cursor: 'pointer',
                 }}
               >
-                <option value="">Select Assignees</option>
+                <option value="">{isGeneric ? 'Select assignee' : 'Select Assignees'}</option>
                 {assignableStaff.map(s => {
                   const brands = accessibleSubBrands(s);
                   const scope = isTravel && brands.length && brands.length < 4
@@ -1814,7 +1929,7 @@ export default function Tasks() {
                   value={newTask.contactId}
                   onChange={e => setNewTask({ ...newTask, contactId: e.target.value })}
                   style={{
-                    width: '100%', boxSizing: 'border-box',
+                    display: 'block', width: '100%', boxSizing: 'border-box',
                     padding: '0.5rem 0.75rem', fontSize: '0.875rem',
                     border: '1px solid var(--border-color, rgba(0,0,0,0.15))',
                     borderRadius: 8,

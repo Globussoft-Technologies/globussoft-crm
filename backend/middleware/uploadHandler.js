@@ -76,6 +76,11 @@ const documentFilter = (req, file, cb) => {
     ".xlsx",
     ".csv",
   ];
+  const isGenericCrm = String(req.user?.vertical || "").toLowerCase() === "generic";
+  if (isGenericCrm) {
+    allowedMimes.push("application/json");
+    allowedExts.push(".json");
+  }
 
   const ext = path.extname(file.originalname).toLowerCase();
   if (allowedMimes.includes(file.mimetype) && allowedExts.includes(ext)) {
@@ -83,7 +88,7 @@ const documentFilter = (req, file, cb) => {
   } else {
     cb(
       new Error(
-        "Invalid document format. Allowed: PDF, DOC, DOCX, XLS, XLSX, CSV"
+        `Invalid document format. Allowed: PDF, DOC, DOCX, XLS, XLSX, CSV${isGenericCrm ? ", JSON" : ""}`
       )
     );
   }

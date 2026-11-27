@@ -66,6 +66,8 @@ prisma.territory.findFirst = vi.fn();
 prisma.territory.create = vi.fn();
 prisma.territory.update = vi.fn();
 prisma.territory.delete = vi.fn();
+prisma.salesTeam = prisma.salesTeam || {};
+prisma.salesTeam.findMany = vi.fn();
 prisma.contact = prisma.contact || {};
 prisma.contact.groupBy = vi.fn();
 prisma.contact.findFirst = vi.fn();
@@ -108,11 +110,11 @@ const territoriesRouter = requireCJS('../../routes/territories');
 // only as documentation.)
 void originalVerifyToken;
 
-function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN' } = {}) {
+function makeApp({ tenantId = 1, userId = 7, role = 'ADMIN', vertical } = {}) {
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => {
-    req.user = { userId, tenantId, role };
+    req.user = { userId, tenantId, role, ...(vertical ? { vertical } : {}) };
     next();
   });
   app.use('/api/territories', territoriesRouter);
@@ -125,6 +127,7 @@ beforeEach(() => {
   prisma.territory.create.mockReset();
   prisma.territory.update.mockReset();
   prisma.territory.delete.mockReset();
+  prisma.salesTeam.findMany.mockReset();
   prisma.contact.groupBy.mockReset();
   prisma.contact.findFirst.mockReset();
   prisma.contact.findMany.mockReset();
@@ -137,6 +140,7 @@ beforeEach(() => {
   prisma.territory.create.mockResolvedValue({});
   prisma.territory.update.mockResolvedValue({});
   prisma.territory.delete.mockResolvedValue({});
+  prisma.salesTeam.findMany.mockResolvedValue([]);
   prisma.contact.groupBy.mockResolvedValue([]);
   prisma.contact.findFirst.mockResolvedValue(null);
   prisma.contact.findMany.mockResolvedValue([]);
@@ -545,6 +549,25 @@ describe('PUT /:id — update territory (admin-gated)', () => {
         assignedUserIds: JSON.stringify([9]),
       },
     });
+  });
+
+  test('409 + warning when removing staff assigned through a team territory', async () => {
+    prisma.territory.findFirst.mockResolvedValue({
+      id: 5, tenantId: 1, name: 'West India', regions: '[]', assignedUserIds: JSON.stringify([9]),
+    });
+    prisma.salesTeam.findMany.mockResolvedValue([{
+      name: 'West Sales Team',
+      members: [{ userId: 9, user: { name: 'Ava Sales', email: 'ava@example.com' } }],
+    }]);
+
+    const res = await request(makeApp({ tenantId: 1, role: 'ADMIN', vertical: 'generic' }))
+      .put('/api/territories/5')
+      .send({ assignedUserIds: [] });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('TERRITORY_TEAM_STAFF_LOCKED');
+    expect(res.body.error).toMatch(/Ava Sales.*West Sales Team.*remove the team territory assignment/i);
+    expect(prisma.territory.update).not.toHaveBeenCalled();
   });
 
   test('returns 404 when id belongs to a different tenant (cross-tenant isolation)', async () => {

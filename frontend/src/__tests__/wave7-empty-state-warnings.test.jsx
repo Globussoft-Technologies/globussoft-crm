@@ -176,7 +176,7 @@ describe('#608 Tasks — past dueDate shows non-blocking warning', () => {
   const renderTasks = (TasksComponent) =>
     render(
       <MemoryRouter>
-        <AuthContext.Provider value={{ user: { id: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'generic' } }}>
+        <AuthContext.Provider value={{ user: { id: 1, role: 'ADMIN' }, tenant: { id: 1, vertical: 'wellness' } }}>
           <TasksComponent />
         </AuthContext.Provider>
       </MemoryRouter>,

@@ -419,7 +419,7 @@ export default function Tickets() {
               <select
                 className="input-field" value={form.priority}
                 onChange={e => updateField('priority', e.target.value)}
-                style={{ background: 'var(--input-bg)' }}
+                style={{ width: '100%', background: 'var(--input-bg)' }}
               >
                 <option value="Low">Low</option>
                 <option value="Medium">Medium</option>
@@ -433,7 +433,7 @@ export default function Tickets() {
               <select
                 className="input-field" value={form.assigneeId}
                 onChange={e => updateField('assigneeId', e.target.value)}
-                style={{ background: 'var(--input-bg)' }}
+                style={{ width: '100%', background: 'var(--input-bg)' }}
               >
                 <option value="">-- Unassigned --</option>
                 {users.map(u => (

@@ -907,7 +907,14 @@ body[data-vertical="generic"] main.generic-page-content .reports-page__table-she
   .marketing-page--generic {
     min-height: 0;
     overflow-y: auto;
+    overflow-x: hidden;
     overscroll-behavior: contain;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  .marketing-page--generic::-webkit-scrollbar {
+    display: none;
   }
 
   .marketing-page--generic > .marketing-page__header {
@@ -3929,6 +3936,7 @@ aside.glass.app-sidebar {
 
 .app-sidebar {
   --sidebar-nav-font-size: 0.85rem;
+  box-sizing: border-box;
   contain: layout paint style;
   transition: none;
   /* NOTE: `will-change: transform` is intentionally NOT here on the outer
@@ -3942,6 +3950,15 @@ aside.glass.app-sidebar {
      .app-sidebar > nav below). This isolates the scrollable region from
      the rest of the sidebar so raster/paint work during scroll doesn't
      block the main thread. */
+}
+
+.generic-sequence-canvas {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.generic-sequence-canvas::-webkit-scrollbar {
+  display: none;
 }
 
 /* Travel CRM sidebar — reference-style navigation cards and timeline. */
@@ -4806,6 +4823,29 @@ table.stable-table tbody tr:hover td {
   padding: inherit;
   border-width: inherit;
   font-weight: inherit;
+}
+
+body[data-vertical="generic"] .territories-table-card table.stable-table tbody tr {
+  transition: none;
+}
+
+body[data-vertical="generic"] .territories-table-card table.stable-table tbody tr:hover {
+  background-color: transparent;
+}
+
+body[data-vertical="generic"] .territories-table-card table.stable-table th,
+body[data-vertical="generic"] .territories-table-card table.stable-table td {
+  border-right: 1px solid var(--border-color, #e5e7eb);
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+}
+
+body[data-vertical="generic"] .territories-table-card table.stable-table th:last-child,
+body[data-vertical="generic"] .territories-table-card table.stable-table td:last-child {
+  border-right: 0;
+}
+
+body[data-vertical="generic"] .territories-table-card table.stable-table tbody tr:last-child td {
+  border-bottom: 0;
 }
 
 /* Keep the Currencies page still while the pointer moves across its cards and table. */

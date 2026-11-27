@@ -12,6 +12,7 @@ authMw.verifyToken = (_req, _res, next) => next();
 
 prisma.salesTeam = prisma.salesTeam || {};
 prisma.salesTeamMember = prisma.salesTeamMember || {};
+prisma.territory = prisma.territory || {};
 prisma.user = prisma.user || {};
 prisma.salesTeam.findMany = vi.fn();
 prisma.salesTeam.findFirst = vi.fn();
@@ -20,6 +21,7 @@ prisma.salesTeam.update = vi.fn();
 prisma.salesTeam.deleteMany = vi.fn();
 prisma.salesTeamMember.deleteMany = vi.fn();
 prisma.salesTeamMember.createMany = vi.fn();
+prisma.salesTeamMember.findMany = vi.fn();
 prisma.user.findMany = vi.fn();
 prisma.user.findFirst = vi.fn();
 
@@ -44,6 +46,7 @@ beforeEach(() => {
   prisma.salesTeam.findMany.mockResolvedValue([]);
   prisma.user.findMany.mockResolvedValue([]);
   prisma.user.findFirst.mockResolvedValue(null);
+  prisma.salesTeamMember.findMany.mockResolvedValue([]);
 });
 
 describe('sales teams authorization and tenant isolation', () => {

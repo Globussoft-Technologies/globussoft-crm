@@ -1,10 +1,9 @@
 import { useContext, useEffect, useMemo, useState } from 'react';
-import { Network, Plus, Trash2, Edit2, X, MapPin, Users, Eye, ArrowLeft } from 'lucide-react';
+import { Network, Plus, Trash2, Edit2, X, Ban, Power, Info } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
-import TopScrollSync from '../components/TopScrollSync';
 import { AuthContext } from '../App';
-import { TERRITORY_COUNTRIES, statesForCountry } from '../data/territoryGeo';
+import { TERRITORY_COUNTRIES, countryName, statesForCountry } from '../data/territoryGeo';
 import SearchableSelect from '../components/ui/SearchableSelect';
 import MultiSelectDropdown from '../components/MultiSelectDropdown';
 
@@ -14,13 +13,16 @@ export default function Territories() {
   const isGeneric = (tenant?.vertical || user?.tenant?.vertical || user?.vertical || 'generic') === 'generic';
   const [territories, setTerritories] = useState([]);
   const [users, setUsers] = useState([]);
+  const [teamAssignments, setTeamAssignments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [assignmentTarget, setAssignmentTarget] = useState(null);
+  const [assignmentUserIds, setAssignmentUserIds] = useState([]);
+  const [assignmentWarning, setAssignmentWarning] = useState('');
+  const [savingAssignment, setSavingAssignment] = useState(false);
   const [toast, setToast] = useState(null);
-  const [viewing, setViewing] = useState(null);
-  const [viewContacts, setViewContacts] = useState([]);
-  const [viewLoading, setViewLoading] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
 
   const [form, setForm] = useState({
     name: '',
@@ -53,12 +55,14 @@ export default function Territories() {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [t, u] = await Promise.all([
+      const [t, u, teams] = await Promise.all([
         fetchApi('/api/territories').catch(() => []),
         fetchApi('/api/staff').catch(() => []),
+        fetchApi('/api/sales-teams').catch(() => []),
       ]);
       setTerritories(Array.isArray(t) ? t : []);
       setUsers(Array.isArray(u) ? u : []);
+      setTeamAssignments(Array.isArray(teams) ? teams : []);
     } catch (e) {
       console.error(e);
     }
@@ -106,6 +110,7 @@ export default function Territories() {
         states: form.selectedStates,
         city: form.city.trim(),
         isActive: form.isActive,
+        assignedUserIds: form.selectedUserIds,
       } : {}),
       regions: isGeneric
         ? form.selectedStates.map((state) => `${form.country}-${state}`)
@@ -138,24 +143,65 @@ export default function Territories() {
     }
   };
 
-  const view = async (t) => {
-    setViewing(t);
-    setViewLoading(true);
-    setViewContacts([]);
+  const changeStatus = async (territory, isActive) => {
     try {
-      const data = await fetchApi(`/api/territories/${t.id}/contacts`);
-      setViewContacts(Array.isArray(data) ? data : []);
+      await fetchApi(`/api/territories/${territory.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ isActive }),
+      });
+      setTerritories(current => current.map(t => t.id === territory.id ? { ...t, isActive } : t));
+      showToast('Territory status updated');
     } catch (e) {
-      showToast(e.message || 'Load contacts failed', 'error');
+      showToast(e.message || 'Status update failed', 'error');
     }
-    setViewLoading(false);
   };
 
-  const toggleUser = (uid) => {
-    setForm(f => {
-      const has = f.selectedUserIds.includes(uid);
-      return { ...f, selectedUserIds: has ? f.selectedUserIds.filter(x => x !== uid) : [...f.selectedUserIds, uid] };
+  const openAssignment = (territory) => {
+    setAssignmentTarget(territory);
+    setAssignmentUserIds(Array.isArray(territory.assignedUserIds) ? territory.assignedUserIds.map(Number) : []);
+    setAssignmentWarning('');
+  };
+
+  const toggleAssignmentUser = (uid) => {
+    setAssignmentUserIds((current) => {
+      if (!current.includes(uid)) {
+        setAssignmentWarning('');
+        return [...current, uid];
+      }
+      const lockedByTeams = teamAssignments.flatMap((team) => {
+        if (String(team.territoryId) !== String(assignmentTarget?.id) || team.territoryMode !== 'team') return [];
+        return (team.members || [])
+          .filter((member) => Number(member.userId || member.user?.id) === Number(uid))
+          .map(() => team.name || 'a team');
+      });
+      if (lockedByTeams.length) {
+        setAssignmentWarning(`Cannot remove this staff member. They are assigned through ${lockedByTeams.join(', ')}. Remove the team territory assignment first.`);
+        return current;
+      }
+      setAssignmentWarning('');
+      return current.filter((id) => id !== uid);
     });
+  };
+
+  const saveAssignment = async () => {
+    if (!assignmentTarget) return;
+    setSavingAssignment(true);
+    try {
+      await fetchApi(`/api/territories/${assignmentTarget.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ assignedUserIds: assignmentUserIds }),
+      });
+      // Re-fetch the list so the backend's contact rollup is recalculated
+      // immediately after staff assignment changes.
+      const refreshed = await fetchApi('/api/territories');
+      setTerritories(Array.isArray(refreshed) ? refreshed : []);
+      setAssignmentTarget(null);
+      showToast('Staff assignment updated');
+    } catch (e) {
+      showToast(e.message || 'Assignment update failed', 'error');
+    } finally {
+      setSavingAssignment(false);
+    }
   };
 
   const addCustomState = () => {
@@ -168,101 +214,6 @@ export default function Territories() {
     const u = users.find(x => x.id === Number(id));
     return u ? (u.name || u.email || `User #${id}`) : `User #${id}`;
   };
-
-  // Detail view
-  if (viewing) {
-    return (
-      <div className="territories-page" style={{ padding: '2rem', animation: 'fadeIn 0.4s ease-out' }}>
-        <button onClick={() => { setViewing(null); setViewContacts([]); }} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-          <ArrowLeft size={16} /> Back to Territories
-        </button>
-        <header style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
-          <div style={{
-            width: 44, height: 44, borderRadius: 12,
-            background: 'linear-gradient(135deg, #10b981, #06b6d4)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <Network size={22} color="white" />
-          </div>
-          <div>
-            <h1 style={{ fontSize: '1.7rem', fontWeight: 'bold', margin: 0 }}>{viewing.name}</h1>
-            <p style={{ color: 'var(--text-secondary)', margin: 0, marginTop: 4, fontSize: '0.9rem' }}>
-              {viewing.regions?.length || 0} regions · {viewing.assignedUserIds?.length || 0} users
-            </p>
-          </div>
-        </header>
-
-        <div className="card" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
-          <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <MapPin size={16} color="#10b981" /> Regions
-          </h3>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-            {(viewing.regions || []).map(r => (
-              <span key={r} style={{ background: 'rgba(16,185,129,0.15)', color: '#6ee7b7', padding: '0.25rem 0.6rem', borderRadius: 12, fontSize: '0.8rem', border: '1px solid rgba(16,185,129,0.3)' }}>{r}</span>
-            ))}
-            {(!viewing.regions || viewing.regions.length === 0) && <span style={{ opacity: 0.5 }}>No regions defined</span>}
-          </div>
-        </div>
-
-        <div className="card" style={{ padding: '1.25rem', marginBottom: '1rem' }}>
-          <h3 style={{ fontSize: '1rem', fontWeight: 700, marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Users size={16} color="#6366f1" /> Assigned Users
-          </h3>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-            {(viewing.assignedUserIds || []).map(uid => (
-              <span key={uid} style={{ background: 'rgba(99,102,241,0.15)', color: '#a5b4fc', padding: '0.25rem 0.6rem', borderRadius: 12, fontSize: '0.8rem', border: '1px solid rgba(99,102,241,0.3)' }}>{userName(uid)}</span>
-            ))}
-            {(!viewing.assignedUserIds || viewing.assignedUserIds.length === 0) && <span style={{ opacity: 0.5 }}>No users assigned</span>}
-          </div>
-        </div>
-
-        <div className="card" style={{ padding: 0, overflow: 'visible' }}>
-          <div style={{ padding: '1rem 1.25rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-            <h3 style={{ fontSize: '1rem', fontWeight: 700, margin: 0 }}>Contacts in this Territory ({viewContacts.length})</h3>
-          </div>
-          {viewLoading ? (
-            <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading...</div>
-          ) : viewContacts.length === 0 ? (
-            <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-secondary)' }}>No contacts assigned to this territory yet.</div>
-          ) : (
-            <TopScrollSync>
-            <table className="stable-table" style={{ borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ background: 'rgba(255,255,255,0.03)', textAlign: 'left' }}>
-                  <th style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Name</th>
-                  <th style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Email</th>
-                  <th style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Company</th>
-                  <th style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Status</th>
-                  <th style={{ padding: '0.75rem 1rem', fontSize: '0.75rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Owner</th>
-                </tr>
-              </thead>
-              <tbody>
-                {viewContacts.map(c => (
-                  <tr key={c.id} style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-                    <td style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>{c.name}</td>
-                    <td style={{ padding: '0.75rem 1rem', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>{c.email}</td>
-                    <td style={{ padding: '0.75rem 1rem', fontSize: '0.85rem' }}>{c.company || '—'}</td>
-                    <td style={{ padding: '0.75rem 1rem', fontSize: '0.8rem' }}>{c.status}</td>
-                    <td style={{ padding: '0.75rem 1rem', fontSize: '0.85rem' }}>{c.assignedToId ? userName(c.assignedToId) : '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            </TopScrollSync>
-          )}
-        </div>
-
-        {toast && (
-          <div style={{
-            position: 'fixed', top: 90, right: 24, zIndex: 300,
-            padding: '0.85rem 1.2rem', borderRadius: 10,
-            background: toast.type === 'error' ? 'rgba(239,68,68,0.9)' : 'rgba(16,185,129,0.9)',
-            color: 'white', fontWeight: 600,
-          }}>{toast.msg}</div>
-        )}
-      </div>
-    );
-  }
 
   return (
     <div className="territories-page" style={{ padding: '2rem', animation: 'fadeIn 0.5s ease-out' }}>
@@ -277,7 +228,7 @@ export default function Territories() {
             <Network size={22} color="white" />
           </div>
           <div className="territories-header-copy">
-            <h1 style={{ fontSize: '2rem', fontWeight: 'bold', margin: 0 }}>Territories</h1>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}><h1 style={{ fontSize: '2rem', fontWeight: 'bold', margin: 0 }}>Territories</h1><button type="button" aria-label="About Territories" title="About Territories" onClick={() => setShowHelp(true)} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 20, height: 20, padding: 0, border: 0, background: 'transparent', color: 'var(--accent-color)', cursor: 'pointer' }}><Info size={16} /></button></div>
             <p style={{ color: 'var(--text-secondary)', marginTop: '0.25rem', margin: 0 }}>
               Define geographic territories and assign sales teams. Used by routing rules with assignType "territory".
             </p>
@@ -307,6 +258,95 @@ export default function Territories() {
           <button onClick={openNew} className="btn-primary"><Plus size={16} /> Create First Territory</button>
         </div>
       ) : (
+        isGeneric ? (
+          <div className="card territories-table-card" style={{ padding: 0, overflow: 'hidden' }}>
+            <div style={{ overflowX: 'auto' }}>
+              <table className="stable-table" style={{ width: '100%', minWidth: 1120, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                <colgroup>
+                  <col style={{ width: 190 }} />
+                  <col style={{ width: 120 }} />
+                  <col style={{ width: 120 }} />
+                  <col style={{ width: 230 }} />
+                  <col style={{ width: 180 }} />
+                  <col style={{ width: 90 }} />
+                  <col style={{ width: 100 }} />
+                  <col style={{ width: 120 }} />
+                  <col style={{ width: 150 }} />
+                  <col style={{ width: 150 }} />
+                </colgroup>
+                <thead>
+                  <tr>
+                    {['Territory name', 'Code', 'Country', 'States / regions', 'Staff with access', 'Leads', 'Status', 'Created on', 'Last updated', 'Actions'].map(label => (
+                      <th key={label} style={{ padding: '0.75rem', textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: '0.75rem', textTransform: 'uppercase' }}>{label}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {territories.map(t => {
+                    const usersWithAccess = (t.assignedUserIds || []).map(userName);
+                    const regions = t.regions || [];
+                    const states = t.states || [];
+                    return (
+                      <tr key={t.id}>
+                        <td style={{ padding: '0.75rem', fontWeight: 700, color: 'var(--accent-color)' }}>{t.name}</td>
+                        <td style={{ padding: '0.75rem', color: 'var(--text-secondary)' }}>{t.code || '—'}</td>
+                        <td style={{ padding: '0.75rem' }}>{t.country ? countryName(t.country) : '—'}</td>
+                        <td style={{ padding: '0.75rem', whiteSpace: 'normal', overflowWrap: 'anywhere' }} title={[...regions, ...states].join(', ')}>
+                          {regions.length ? regions.join(', ') : '—'}
+                          {states.length > 0 && <div style={{ marginTop: 4, color: 'var(--text-secondary)', fontSize: '0.78rem' }}>States: {states.join(', ')}</div>}
+                        </td>
+                        <td style={{ padding: '0.75rem', whiteSpace: 'normal', overflowWrap: 'anywhere' }} title={usersWithAccess.join(', ')}>
+                          <div>{usersWithAccess.length ? usersWithAccess.join(', ') : '—'}</div>
+                          <button
+                            type="button"
+                            onClick={() => openAssignment(t)}
+                            aria-label={`${usersWithAccess.length ? 'Manage' : 'Assign'} staff for ${t.name}`}
+                            style={{ marginTop: 6, padding: '0.25rem 0.5rem', border: '1px solid var(--border-color)', borderRadius: 6, background: 'transparent', color: 'var(--accent-color)', cursor: 'pointer', fontSize: '0.75rem' }}
+                          >
+                            {usersWithAccess.length ? 'Manage staff' : 'Assign staff'}
+                          </button>
+                        </td>
+                        <td style={{ padding: '0.75rem' }}>{t.contactCount || 0}</td>
+                        <td style={{ padding: '0.75rem' }}>
+                          <button
+                            type="button"
+                            aria-label={`${t.isActive === false ? 'Disabled' : 'Activate'} ${t.name}`}
+                            onClick={() => changeStatus(t, t.isActive === false)}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 6,
+                              padding: '0.5rem 0.75rem',
+                              border: '1px solid transparent',
+                              borderRadius: 8,
+                              background: t.isActive === false ? '#fff0ee' : '#e6f8f2',
+                              color: t.isActive === false ? '#d92d20' : '#087f5b',
+                              font: 'inherit',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {t.isActive === false ? <Ban size={15} /> : <Power size={15} />}
+                            {t.isActive === false ? 'Disabled' : 'Activate'}
+                          </button>
+                        </td>
+                        <td style={{ padding: '0.75rem', whiteSpace: 'nowrap' }}>{t.createdAt ? new Date(t.createdAt).toLocaleDateString() : '—'}</td>
+                        <td style={{ padding: '0.75rem', whiteSpace: 'nowrap' }}>{t.updatedAt ? new Date(t.updatedAt).toLocaleDateString() : '—'}</td>
+                        <td style={{ padding: '0.75rem' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <button onClick={() => openEdit(t)} title="Edit" aria-label={`Edit ${t.name}`} style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer' }}><Edit2 size={15} /></button>
+                            <button onClick={() => remove(t)} title="Delete" aria-label={`Delete ${t.name}`} style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer' }}><Trash2 size={15} /></button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 280px), 1fr))', gap: '1rem' }}>
           {territories.map(t => (
             <div key={t.id} className="card" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
@@ -328,7 +368,7 @@ export default function Territories() {
                   <div style={{ fontWeight: 700, fontSize: '1.3rem', color: '#a5b4fc' }}>{t.assignedUserIds?.length || 0}</div>
                 </div>
                 <div style={{ flex: 1, minWidth: 80, background: 'rgba(236,72,153,0.1)', borderRadius: 8, padding: '0.6rem', border: '1px solid rgba(236,72,153,0.2)' }}>
-                  <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Contacts</div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Leads</div>
                   <div style={{ fontWeight: 700, fontSize: '1.3rem', color: '#f9a8d4' }}>{t.contactCount || 0}</div>
                 </div>
               </div>
@@ -342,12 +382,10 @@ export default function Territories() {
                 </div>
               )}
 
-              <button onClick={() => view(t)} className="btn-secondary" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem', fontSize: '0.85rem' }}>
-                <Eye size={14} /> View Details
-              </button>
             </div>
           ))}
         </div>
+        )
       )}
 
       {showModal && (
@@ -403,38 +441,58 @@ export default function Territories() {
               </div>
             )}
 
-            {!isGeneric && <div style={{ marginBottom: '1.25rem' }}>
-              <label style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 6 }}>Assigned Users</label>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', maxHeight: 180, overflowY: 'auto', padding: '0.4rem', border: '1px solid rgba(255,255,255,0.05)', borderRadius: 8 }}>
-                {users.length === 0 && <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', padding: '0.4rem' }}>No users available</span>}
-                {users.map(u => {
-                  const selected = form.selectedUserIds.includes(u.id);
-                  return (
-                    <button
-                      key={u.id}
-                      type="button"
-                      onClick={() => toggleUser(u.id)}
-                      style={{
-                        background: selected ? 'rgba(99,102,241,0.25)' : 'rgba(255,255,255,0.03)',
-                        color: selected ? '#a5b4fc' : 'var(--text-primary)',
-                        border: `1px solid ${selected ? 'rgba(99,102,241,0.5)' : 'rgba(255,255,255,0.08)'}`,
-                        padding: '0.35rem 0.7rem',
-                        borderRadius: 16,
-                        fontSize: '0.8rem',
-                        cursor: 'pointer',
-                        fontWeight: selected ? 600 : 400,
-                      }}
-                    >
-                      {u.name || u.email}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>}
-
+            {editing && <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: '0.25rem', marginBottom: '1rem' }}><button type="button" className="btn-secondary" onClick={() => { setShowModal(false); openAssignment(editing); }}>Manage staff</button></div>}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
               <button onClick={() => setShowModal(false)} className="btn-secondary">Cancel</button>
               <button onClick={save} className="btn-primary">{editing ? 'Save Changes' : 'Create Territory'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showHelp && (
+        <div role="dialog" aria-modal="true" aria-labelledby="territories-help-title" style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 240, padding: '1rem' }}>
+          <div className="card" style={{ boxSizing: 'border-box', width: '100%', maxWidth: 560, maxHeight: '85dvh', overflowY: 'auto', padding: '1.5rem', background: 'var(--modal-bg)', color: 'var(--text-primary)', backdropFilter: 'none' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: '1rem' }}><h2 id="territories-help-title" style={{ margin: 0, fontSize: '1.15rem' }}>About Territories</h2><button type="button" aria-label="Close Territories information" onClick={() => setShowHelp(false)} style={{ background: 'transparent', border: 0, color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.25rem' }}>×</button></div>
+            <div style={{ display: 'grid', gap: '0.9rem', fontSize: '0.88rem', lineHeight: 1.5 }}>
+              <section><strong>What is a territory?</strong><div style={{ color: 'var(--text-secondary)', marginTop: 3 }}>A territory is an area, such as a country, state, or region.</div></section>
+              <section><strong>What can I do here?</strong><div style={{ color: 'var(--text-secondary)', marginTop: 3 }}>Create areas, edit them, turn them on or off, and assign staff.</div></section>
+              <section><strong>Staff</strong><div style={{ color: 'var(--text-secondary)', marginTop: 3 }}>Use Manage staff to choose which staff members can work in each territory.</div></section>
+              <section><strong>Leads</strong><div style={{ color: 'var(--text-secondary)', marginTop: 3 }}>Leads can be sent to staff based on their territory. The Leads column shows how many leads are there.</div></section>
+              <section><strong>Teams</strong><div style={{ color: 'var(--text-secondary)', marginTop: 3 }}>A team can share one territory. Staff assigned through that team cannot be removed here until the team assignment is changed.</div></section>
+              <section><strong>Other pages</strong><div style={{ color: 'var(--text-secondary)', marginTop: 3 }}>Use Staff for individual access, Teams for shared access, and Leads to view the leads.</div></section>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {assignmentTarget && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(5px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 220, padding: '1rem' }}>
+          <div className="card" style={{ boxSizing: 'border-box', padding: '1.5rem', width: '100%', maxWidth: 520, maxHeight: '85dvh', overflowY: 'auto', background: 'var(--modal-bg)', color: 'var(--text-primary)', backdropFilter: 'none' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+              <div>
+                <h3 style={{ fontWeight: 'bold', fontSize: '1.15rem', margin: 0 }}>Assign staff</h3>
+                <div style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: 4 }}>{assignmentTarget.name}</div>
+              </div>
+              <button type="button" onClick={() => setAssignmentTarget(null)} aria-label="Close staff assignment dialog" style={{ background: 'transparent', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: '1.25rem' }}>×</button>
+            </div>
+            {assignmentWarning && <div role="alert" style={{ marginBottom: '0.75rem', padding: '0.65rem 0.8rem', border: '1px solid #f2c36b', borderRadius: 8, background: '#fff8e6', color: '#8a5a00', fontSize: '0.82rem', lineHeight: 1.4 }}>{assignmentWarning}</div>}
+            <div style={{ display: 'grid', gap: '0.45rem' }}>
+              {users.length === 0 && <div style={{ color: 'var(--text-secondary)', padding: '1rem 0' }}>No staff available.</div>}
+              {users.map((staffMember) => {
+                const selected = assignmentUserIds.includes(Number(staffMember.id));
+                const role = staffMember.primaryRole?.name || staffMember.primaryRole?.key || staffMember.role || 'Staff';
+                return (
+                  <button key={staffMember.id} type="button" onClick={() => toggleAssignmentUser(Number(staffMember.id))} aria-pressed={selected} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem', width: '100%', padding: '0.7rem 0.8rem', borderRadius: 8, border: `1px solid ${selected ? 'rgba(99,102,241,0.6)' : 'var(--border-color)'}`, background: selected ? 'rgba(99,102,241,0.14)' : 'transparent', color: 'var(--text-primary)', textAlign: 'left', cursor: 'pointer' }}>
+                    <span><span style={{ display: 'block', fontWeight: 600 }}>{staffMember.name || staffMember.email}</span><span style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>{staffMember.email}</span></span>
+                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', whiteSpace: 'nowrap' }}>{role}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginTop: '1.25rem' }}>
+              <button type="button" onClick={() => setAssignmentTarget(null)} className="btn-secondary">Cancel</button>
+              <button type="button" onClick={saveAssignment} className="btn-primary" disabled={savingAssignment}>{savingAssignment ? 'Saving…' : 'Save assignment'}</button>
             </div>
           </div>
         </div>

@@ -171,6 +171,20 @@ function renderTasks(initialEntry = '/tasks') {
   );
 }
 
+function chooseGenericAssignee() {
+  const option = screen.getByRole('option', { name: /Asha Agent/ });
+  fireEvent.change(option.closest('select'), { target: { value: '201' } });
+}
+
+function fillGenericRequiredFields({ type = 'Task', includeType = true } = {}) {
+  chooseGenericAssignee();
+  if (includeType) {
+    fireEvent.change(document.getElementById('task-type-select'), { target: { value: type } });
+  }
+  fireEvent.change(document.querySelector('input[type="date"]'), { target: { value: '2030-06-01' } });
+  fireEvent.change(document.querySelector('input[type="time"]'), { target: { value: '10:30' } });
+}
+
 // Travel-vertical render: wraps in the real AuthContext.Provider so
 // tenant.vertical === 'travel' lights up the "Assign to (staff)" dropdown.
 function renderTravelTasks() {
@@ -353,7 +367,7 @@ describe('<Tasks /> — page surface', () => {
     });
   });
 
-  it('submitting the drawer form POSTs /api/tasks with ISO dueDate then closes the drawer', async () => {
+  it('submitting the Generic CRM drawer POSTs /api/tasks with ISO dueDate then closes the drawer', async () => {
     renderTasks();
     await waitFor(() => {
       expect(screen.getByText('Q3 Renewal Call')).toBeInTheDocument();
@@ -362,16 +376,11 @@ describe('<Tasks /> — page surface', () => {
     fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
 
     const titleInput = document.getElementById('task-title-input');
+    fillGenericRequiredFields();
     fireEvent.change(titleInput, { target: { value: 'New follow-up call' } });
 
     const priorityInput = document.getElementById('task-priority-select');
     fireEvent.change(priorityInput, { target: { value: 'High' } });
-
-    // Due At datetime-local input — pick a future wall-clock time.
-    // The first datetime-local is the Due At field.
-    const dueDateInputs = document.querySelectorAll('input[type="datetime-local"]');
-    expect(dueDateInputs.length).toBeGreaterThanOrEqual(1);
-    fireEvent.change(dueDateInputs[0], { target: { value: '2030-06-01T10:30' } });
 
     fetchApiMock.mockClear();
     // Submit via the Save button.
@@ -400,26 +409,18 @@ describe('<Tasks /> — page surface', () => {
     });
   });
 
-  it('picking a past dueDate in the drawer renders the data-testid="task-past-date-warning"', async () => {
+  it('shows required Due date and Due time fields in the Generic CRM drawer', async () => {
     renderTasks();
     await waitFor(() => {
       expect(screen.getByText('Q3 Renewal Call')).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
-    const dueDateInputs = document.querySelectorAll('input[type="datetime-local"]');
-    const dueDateInput = dueDateInputs[0];
-
-    // Pre-input: no warning.
-    expect(screen.queryByTestId('task-past-date-warning')).not.toBeInTheDocument();
-
-    // Pick a clearly-past wall-clock time.
-    fireEvent.change(dueDateInput, { target: { value: '2020-01-01T08:00' } });
-    expect(screen.getByTestId('task-past-date-warning')).toBeInTheDocument();
-
-    // Switching to a future date removes the warning.
-    fireEvent.change(dueDateInput, { target: { value: '2030-06-01T10:30' } });
-    expect(screen.queryByTestId('task-past-date-warning')).not.toBeInTheDocument();
+    expect(screen.getByText('Due date *')).toBeInTheDocument();
+    expect(screen.getByText('Due time *')).toBeInTheDocument();
+    expect(document.querySelector('input[type="date"]')).toBeInTheDocument();
+    expect(document.querySelector('input[type="time"]')).toBeInTheDocument();
+    expect(document.querySelector('input[type="datetime-local"]')).not.toBeInTheDocument();
   });
 
   it('POST failure surfaces notify.error and keeps the drawer open', async () => {
@@ -436,6 +437,7 @@ describe('<Tasks /> — page surface', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
+    fillGenericRequiredFields();
     fireEvent.change(document.getElementById('task-title-input'), {
       target: { value: 'Will fail' },
     });
@@ -490,13 +492,14 @@ describe('<Tasks /> — page surface', () => {
     expect(within(statusSelect).getByRole('option', { name: 'In Progress' })).toBeInTheDocument();
   });
 
-  it('form has two datetime-local inputs for Due At and Completed At', async () => {
+  it('form has separate required date and time inputs for Generic CRM due date', async () => {
     renderTasks();
     await waitFor(() => screen.getByText('Q3 Renewal Call'));
     fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
 
-    const dtInputs = document.querySelectorAll('input[type="datetime-local"]');
-    expect(dtInputs.length).toBe(2);
+    expect(document.querySelectorAll('input[type="date"]').length).toBe(1);
+    expect(document.querySelectorAll('input[type="time"]').length).toBe(1);
+    expect(document.querySelectorAll('input[type="datetime-local"]').length).toBe(0);
   });
 
   it('form has Description textarea with correct placeholder', async () => {
@@ -512,6 +515,7 @@ describe('<Tasks /> — page surface', () => {
     renderTasks();
     await waitFor(() => screen.getByText('Q3 Renewal Call'));
     fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
+    fillGenericRequiredFields();
 
     fireEvent.change(document.getElementById('task-title-input'), { target: { value: 'Test task' } });
     const textarea = screen.getByPlaceholderText(/Write description or notes here/i);
@@ -811,6 +815,7 @@ describe('<Tasks /> — ?create deep link from Lead Reports', () => {
   it('sends the selected type without an outcome on the generic create POST', async () => {
     renderTasks('/tasks?create=1&type=Site%20Visit');
     await screen.findByRole('heading', { name: /Agent Task Queue/i });
+      fillGenericRequiredFields({ type: 'Site Visit' });
     fireEvent.change(document.getElementById('task-title-input'), {
       target: { value: 'Whitefield plot walkthrough' },
     });
@@ -824,18 +829,15 @@ describe('<Tasks /> — ?create deep link from Lead Reports', () => {
     });
   });
 
-  it('omits type/outcome entirely when they are left blank — the pre-existing POST shape', async () => {
+  it('does not submit a Generic CRM task while the required task type is blank', async () => {
     renderTasks('/tasks');
     await screen.findByRole('heading', { name: /Agent Task Queue/i });
     fireEvent.click(screen.getByRole('button', { name: /Create a new task/i }));
+    fillGenericRequiredFields({ includeType: false });
     fireEvent.change(document.getElementById('task-title-input'), { target: { value: 'Plain todo' } });
+    fetchApiMock.mockClear();
     fireEvent.click(screen.getByRole('button', { name: /^Save$/i }));
-    await waitFor(() => {
-      const post = fetchApiMock.mock.calls.find(([u, o]) => u === '/api/tasks' && o?.method === 'POST');
-      expect(post).toBeTruthy();
-      const body = JSON.parse(post[1].body);
-      expect('type' in body).toBe(false);
-      expect('outcome' in body).toBe(false);
-    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(fetchApiMock.mock.calls.some(([u, o]) => u === '/api/tasks' && o?.method === 'POST')).toBe(false);
   });
 });

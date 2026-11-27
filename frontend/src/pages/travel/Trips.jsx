@@ -32,6 +32,7 @@ import { useNotify } from "../../utils/notify";
 import TopScrollSync from "../../components/TopScrollSync";
 import CountBadge from "../../components/CountBadge";
 import { DashboardBackLink } from "../../components/PageHeader";
+import LocationAutocomplete from "../../components/travel/LocationAutocomplete";
 import TripPager from "./TripPager";
 import SearchHighlight from "../../components/ui/SearchHighlight";
 
@@ -48,6 +49,54 @@ const STATUSES = [
   { value: "completed", label: "Completed" },
   { value: "cancelled", label: "Cancelled" },
 ];
+const TRIP_TYPES = [
+  { value: "international", label: "International" },
+  { value: "domestic", label: "Domestic" },
+  { value: "day_trip", label: "Day trip" },
+];
+const EMPTY_TRIP_FILTERS = {
+  family: [],
+  tripType: [],
+  status: [],
+  departFrom: "",
+  departTo: "",
+};
+const TRIP_FILTER_KEYS = Object.keys(EMPTY_TRIP_FILTERS);
+const TRIP_MULTI_FILTER_KEYS = ["family", "tripType", "status"];
+const REMOVED_TRIP_FILTER_KEYS = [
+  "tripCode", "destination", "brand", "subBrand", "school", "minParticipants",
+  "maxParticipants", "minPerStudent", "maxPerStudent",
+];
+
+function readTripFilters(params) {
+  return Object.fromEntries(
+    TRIP_FILTER_KEYS.map((key) => [
+      key,
+      TRIP_MULTI_FILTER_KEYS.includes(key)
+        ? params.getAll(key)
+        : params.get(key) || "",
+    ]),
+  );
+}
+
+function tripFiltersEqual(left, right) {
+  return TRIP_FILTER_KEYS.every((key) => {
+    if (Array.isArray(left[key]) || Array.isArray(right[key])) {
+      return Array.isArray(left[key])
+        && Array.isArray(right[key])
+        && left[key].length === right[key].length
+        && left[key].every((value, index) => value === right[key][index]);
+    }
+    return left[key] === right[key];
+  });
+}
+
+function countSelectedTripFilters(filters) {
+  return Object.values(filters).reduce(
+    (count, value) => count + (Array.isArray(value) ? value.length : (value ? 1 : 0)),
+    0,
+  );
+}
 
 function openNativeDatePicker(event) {
   try {
@@ -105,7 +154,20 @@ const SUB_BRAND_LABEL = "School trips";
 const DEFAULT_PAGE_SIZE = 20;
 const PAGE_SIZE_OPTIONS = [10, 20, 50];
 const MAX_PAGE_SIZE = 200;
-const TRIPS_TABLE_MIN_WIDTH = 1900;
+const TRIPS_TABLE_COLUMNS = [
+  { key: "tripCode", label: "Trip code", defaultWidth: 190, minWidth: 150, maxWidth: 280, maxWidthRatio: 0.5 },
+  { key: "family", label: "Trip family", defaultWidth: 210, minWidth: 120 },
+  { key: "destination", label: "Destination", defaultWidth: 280, minWidth: 150 },
+  { key: "brand", label: "Brand", defaultWidth: 120, minWidth: 90 },
+  { key: "subBrand", label: "Sub-brand", defaultWidth: 150, minWidth: 100 },
+  { key: "dates", label: "Dates", defaultWidth: 240, minWidth: 180 },
+  { key: "school", label: "School", defaultWidth: 250, minWidth: 180 },
+  { key: "participants", label: "Participants", defaultWidth: 150, minWidth: 110 },
+  { key: "perStudent", label: "Per-student", defaultWidth: 145, minWidth: 105 },
+  { key: "tripType", label: "Trip type", defaultWidth: 160, minWidth: 110 },
+  { key: "status", label: "Status", defaultWidth: 120, minWidth: 90 },
+  { key: "actions", label: "Actions", defaultWidth: 140, minWidth: 110 },
+];
 const TRIPS_LAST_LIST_URL_KEY = "travel.trips.lastListUrl";
 const TRIP_SORT_KEYS = new Set([
   "tripCode", "destination", "dates", "school",
@@ -121,6 +183,19 @@ function readPageSizeParam(params) {
   return Math.min(MAX_PAGE_SIZE, Math.max(1, value || DEFAULT_PAGE_SIZE));
 }
 
+function getTripTableViewportWidth(element) {
+  const table = element?.closest?.("table");
+  const viewportWidth = table?.closest?.(".travel-trips-table-viewport")?.clientWidth;
+  if (viewportWidth > 0) return viewportWidth;
+  return typeof window !== "undefined" ? window.innerWidth : 0;
+}
+
+function getTripColumnMaxWidth(column, viewportWidth) {
+  if (!column.maxWidthRatio) return column.maxWidth;
+  const ratioWidth = Math.floor((viewportWidth || 0) * column.maxWidthRatio);
+  return Math.max(column.maxWidth || column.minWidth, ratioWidth);
+}
+
 function tripSortValue(trip, key) {
   if (key === "tripCode") return String(trip.tripCode || "").toLowerCase();
   if (key === "destination") return String(trip.destination || "").toLowerCase();
@@ -132,6 +207,86 @@ function tripSortValue(trip, key) {
   return "";
 }
 
+function MultiSelectFilter({ label, options, value, emptyLabel, onChange }) {
+  const selectedValues = Array.isArray(value) ? value : [];
+  const toggleOption = (optionValue) => {
+    onChange(selectedValues.includes(optionValue)
+      ? selectedValues.filter((selected) => selected !== optionValue)
+      : [...selectedValues, optionValue]);
+  };
+
+  return (
+    <div style={fieldLabel}>
+      <span>{label}</span>
+      <details style={{ position: "relative", minWidth: 0 }}>
+        <summary
+          aria-label={`Filter by ${label.toLowerCase()}`}
+          style={{
+            ...selectStyle,
+            width: "100%",
+            minWidth: 0,
+            boxSizing: "border-box",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            cursor: "pointer",
+            listStyle: "none",
+          }}
+        >
+          <span>{selectedValues.length ? `${selectedValues.length} selected` : emptyLabel}</span>
+          <ChevronDown size={14} aria-hidden />
+        </summary>
+        <div
+          role="group"
+          aria-label={`${label} options`}
+          style={{
+            position: "absolute",
+            top: "calc(100% + 4px)",
+            left: 0,
+            zIndex: 20,
+            width: "100%",
+            minWidth: 190,
+            maxHeight: 220,
+            overflowY: "auto",
+            padding: 6,
+            boxSizing: "border-box",
+            border: "1px solid var(--border-color)",
+            borderRadius: 8,
+            background: "var(--modal-bg, var(--surface-color))",
+            boxShadow: "0 8px 20px rgba(15, 23, 42, 0.16)",
+          }}
+        >
+          {options.map((option) => (
+            <label
+              key={option.value}
+              style={{
+                display: "flex",
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 8,
+                padding: "7px 6px",
+                borderRadius: 5,
+                color: "var(--text-primary)",
+                cursor: "pointer",
+                fontSize: 13,
+                fontWeight: 400,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={selectedValues.includes(option.value)}
+                onChange={() => toggleOption(option.value)}
+              />
+              {option.label}
+            </label>
+          ))}
+        </div>
+      </details>
+    </div>
+  );
+}
+
 export default function Trips() {
   const notify = useNotify();
   const location = useLocation();
@@ -139,8 +294,10 @@ export default function Trips() {
   const [loading, setLoading] = useState(true);
   const [searchParams, setSearchParams] = useSearchParams();
   const page = readPageParam(searchParams);
-  const [status, setStatus] = useState(searchParams.get("status") || "");
   const [search, setSearch] = useState(searchParams.get("search") || "");
+  const [filters, setFilters] = useState(() => readTripFilters(searchParams));
+  const [draftFilters, setDraftFilters] = useState(() => readTripFilters(searchParams));
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [total, setTotal] = useState(0);
   const [pageSize, setPageSize] = useState(() => readPageSizeParam(searchParams));
   const [isCustomPageSize, setIsCustomPageSize] = useState(false);
@@ -160,10 +317,115 @@ export default function Trips() {
   const [variantSource, setVariantSource] = useState(null);
   const [expandedFamilyIds, setExpandedFamilyIds] = useState(() => new Set());
   const [familyChildrenByParent, setFamilyChildrenByParent] = useState({});
+  const [columnWidths, setColumnWidths] = useState(() => Object.fromEntries(
+    TRIPS_TABLE_COLUMNS.map(({ key, defaultWidth }) => [key, defaultWidth]),
+  ));
   const reqIdRef = useRef(0);
+  const columnResizeRef = useRef(null);
+  const tripsTableRef = useRef(null);
+  const filtersPanelRef = useRef(null);
+  const filtersButtonRef = useRef(null);
   const fromReports = searchParams.get("from") === "reports";
   const tripsListPath = `${location.pathname}${location.search}`;
   const today = localDateKey();
+  const tripsTableWidth = useMemo(
+    () => TRIPS_TABLE_COLUMNS.reduce((width, column) => width + columnWidths[column.key], 0),
+    [columnWidths],
+  );
+
+  useEffect(() => {
+    const handlePointerMove = (event) => {
+      const resize = columnResizeRef.current;
+      if (!resize) return;
+      const column = TRIPS_TABLE_COLUMNS.find(({ key }) => key === resize.key);
+      if (!column) return;
+      const maxWidth = resize.maxWidth;
+      const requestedWidth = resize.startWidth + event.clientX - resize.startX;
+      const nextWidth = Math.round(Math.max(
+        column.minWidth,
+        maxWidth ? Math.min(requestedWidth, maxWidth) : requestedWidth,
+      ));
+      setColumnWidths((current) => current[resize.key] === nextWidth
+        ? current
+        : { ...current, [resize.key]: nextWidth });
+    };
+    const stopColumnResize = () => {
+      if (!columnResizeRef.current) return;
+      columnResizeRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopColumnResize);
+    window.addEventListener("pointercancel", stopColumnResize);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopColumnResize);
+      window.removeEventListener("pointercancel", stopColumnResize);
+      stopColumnResize();
+    };
+  }, []);
+
+  const startColumnResize = (event, key) => {
+    if (event.button > 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const column = TRIPS_TABLE_COLUMNS.find((item) => item.key === key);
+    columnResizeRef.current = {
+      key,
+      startX: event.clientX,
+      startWidth: columnWidths[key],
+      maxWidth: getTripColumnMaxWidth(column, getTripTableViewportWidth(event.currentTarget)),
+    };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  };
+
+  const handleColumnResizeKeyDown = (event, key) => {
+    const column = TRIPS_TABLE_COLUMNS.find((item) => item.key === key);
+    if (!column) return;
+    const maxWidth = getTripColumnMaxWidth(column, getTripTableViewportWidth(event.currentTarget));
+    let nextWidth;
+    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      nextWidth = columnWidths[key] + (event.key === "ArrowRight" ? 12 : -12);
+    } else if (event.key === "Home") {
+      nextWidth = column.defaultWidth;
+    } else if (event.key === "End" && maxWidth) {
+      nextWidth = maxWidth;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    setColumnWidths((current) => ({
+      ...current,
+      [key]: Math.round(Math.max(
+        column.minWidth,
+        maxWidth ? Math.min(nextWidth, maxWidth) : nextWidth,
+      )),
+    }));
+  };
+
+  const renderColumnResizeHandle = (key) => {
+    const column = TRIPS_TABLE_COLUMNS.find((item) => item.key === key);
+    const maxWidth = getTripColumnMaxWidth(column, getTripTableViewportWidth(tripsTableRef.current));
+    return (
+      <div
+        className="travel-trips-table__resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={`Resize ${column.label} column`}
+        aria-valuemin={column.minWidth}
+        aria-valuemax={maxWidth}
+        aria-valuenow={columnWidths[key]}
+        aria-valuetext={`${columnWidths[key]} pixels`}
+        title="Drag to resize; use arrow keys to adjust"
+        tabIndex={0}
+        onPointerDown={(event) => startColumnResize(event, key)}
+        onKeyDown={(event) => handleColumnResizeKeyDown(event, key)}
+      />
+    );
+  };
 
   useEffect(() => {
     if (location.state?.contactId != null) {
@@ -177,13 +439,20 @@ export default function Trips() {
     (patch, options = {}) => {
       const next = new URLSearchParams(searchParams);
       for (const [key, value] of Object.entries(patch)) {
+        next.delete(key);
         if (
           value === null ||
           value === undefined ||
           value === "" ||
           (Array.isArray(value) && !value.length)
         ) {
-          next.delete(key);
+          continue;
+        } else if (Array.isArray(value)) {
+          value.forEach((item) => {
+            if (item !== null && item !== undefined && item !== "") {
+              next.append(key, String(item));
+            }
+          });
         } else {
           next.set(key, String(value));
         }
@@ -194,13 +463,13 @@ export default function Trips() {
   );
 
   useEffect(() => {
-    const nextStatus = searchParams.get("status") || "";
     const nextSearch = searchParams.get("search") || "";
     const nextPageSize = readPageSizeParam(searchParams);
     const nextSortKey = searchParams.get("sortKey");
     const nextSortDirection = searchParams.get("sortDirection");
-    setStatus((current) => (current === nextStatus ? current : nextStatus));
     setSearch((current) => (current === nextSearch ? current : nextSearch));
+    const nextFilters = readTripFilters(searchParams);
+    setFilters((current) => (tripFiltersEqual(current, nextFilters) ? current : nextFilters));
     setPageSize((current) => (current === nextPageSize ? current : nextPageSize));
     setSortKey((current) => (
       current === (TRIP_SORT_KEYS.has(nextSortKey) ? nextSortKey : null)
@@ -215,9 +484,40 @@ export default function Trips() {
     });
   }, [searchParams]);
 
+  useEffect(() => {
+    setDraftFilters(filters);
+  }, [filters]);
+
+  useEffect(() => {
+    if (!filtersOpen) return undefined;
+    const closeWhenOutside = (event) => {
+      if (filtersPanelRef.current?.contains(event.target)) return;
+      if (filtersButtonRef.current?.contains(event.target)) return;
+      setFiltersOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") {
+        setFiltersOpen(false);
+        filtersButtonRef.current?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", closeWhenOutside);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeWhenOutside);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [filtersOpen]);
+
   const pageCount = Math.max(1, Math.ceil((total || 0) / pageSize));
   const safePage = Math.min(page, pageCount);
-  const hasActiveFilters = Boolean(status || search.trim());
+  const activeFilterCount = countSelectedTripFilters(filters);
+  const isDepartDateRangeInvalid = Boolean(
+    draftFilters.departFrom
+      && draftFilters.departTo
+      && draftFilters.departFrom > draftFilters.departTo,
+  );
+  const hasActiveFilters = Boolean(activeFilterCount || search.trim());
   const sortedTrips = useMemo(() => {
     if (!sortKey || !sortDirection) return trips;
     const direction = sortDirection === "asc" ? 1 : -1;
@@ -363,8 +663,14 @@ export default function Trips() {
         setLoading(true);
       }
       const qs = new URLSearchParams();
-      if (status) qs.set("status", status);
       if (search.trim()) qs.set("search", search.trim());
+      TRIP_FILTER_KEYS.forEach((key) => {
+        if (Array.isArray(filters[key])) {
+          filters[key].forEach((value) => qs.append(key, value));
+        } else if (filters[key]) {
+          qs.set(key, filters[key]);
+        }
+      });
       qs.set("limit", String(pageSize));
       qs.set("offset", String(Math.max(0, (page - 1) * pageSize)));
 
@@ -385,7 +691,7 @@ export default function Trips() {
         }
       }
     },
-    [page, pageSize, search, status, notify],
+    [filters, page, pageSize, search, notify],
   );
 
   useEffect(() => {
@@ -398,14 +704,45 @@ export default function Trips() {
     }
   }, [page, pageCount, total, updateParams]);
 
-  const handleStatusChange = (nextStatus) => {
-    setStatus(nextStatus);
-    updateParams({ status: nextStatus, page: 1 }, { replace: true });
-  };
-
   const handleSearchChange = (value) => {
     setSearch(value);
     updateParams({ search: value, page: 1 }, { replace: true });
+  };
+
+  const updateDraftFilter = (key, value) => {
+    setDraftFilters((current) => ({ ...current, [key]: value }));
+  };
+
+  const applyFilters = () => {
+    if (isDepartDateRangeInvalid) return;
+    const nextFilters = Object.fromEntries(
+      TRIP_FILTER_KEYS.map((key) => [
+        key,
+        Array.isArray(draftFilters[key])
+          ? draftFilters[key].map((value) => value.trim()).filter(Boolean)
+          : draftFilters[key].trim(),
+      ]),
+    );
+    setFilters(nextFilters);
+    setDraftFilters(nextFilters);
+    updateParams({
+      ...Object.fromEntries(REMOVED_TRIP_FILTER_KEYS.map((key) => [key, null])),
+      ...nextFilters,
+      page: 1,
+    }, { replace: true });
+    setFiltersOpen(false);
+  };
+
+  const clearAllFilters = () => {
+    setFilters(EMPTY_TRIP_FILTERS);
+    setDraftFilters(EMPTY_TRIP_FILTERS);
+    setSearch("");
+    updateParams({
+      ...Object.fromEntries(TRIP_FILTER_KEYS.map((key) => [key, null])),
+      ...Object.fromEntries(REMOVED_TRIP_FILTER_KEYS.map((key) => [key, null])),
+      search: null,
+      page: 1,
+    }, { replace: true });
   };
 
   const setPage = useCallback(
@@ -435,25 +772,6 @@ export default function Trips() {
     }
   }, [location.pathname, location.search]);
 
-  const resetFilters = useCallback(() => {
-    setStatus("");
-    setSearch("");
-    setPageSize(DEFAULT_PAGE_SIZE);
-    setIsCustomPageSize(false);
-    setCustomPageSize("");
-    setSortKey(null);
-    setSortDirection(null);
-    updateParams({
-      status: null,
-      search: null,
-      sortKey: null,
-      sortDirection: null,
-      pageSize: null,
-      page: 1,
-    });
-    setReloadTick((tick) => tick + 1);
-  }, [updateParams]);
-
   const toggleSort = useCallback((key) => {
     if (sortKey !== key) {
       setSortKey(key);
@@ -479,13 +797,14 @@ export default function Trips() {
     return (
       <button
         type="button"
+        className="travel-trips-table__sort-button"
         onClick={() => toggleSort(key)}
         aria-label={`Sort ${label} ${active ? sortDirection : "default"}`}
         style={{
           ...sortButtonStyle,
           background: active ? "var(--subtle-bg-3, var(--subtle-bg))" : "transparent",
           borderRadius: 6,
-          padding: "4px 6px",
+          padding: "4px 0",
         }}
       >
         <span>{label}</span><Icon size={14} aria-hidden />
@@ -539,7 +858,19 @@ export default function Trips() {
   };
 
   return (
-    <div className="travel-trips-page" style={{ padding: 24, maxWidth: 1480, margin: "0 auto" }}>
+    <div
+      className="travel-trips-page"
+      style={{
+        padding: 24,
+        maxWidth: 1480,
+        margin: "0 auto",
+        height: "100%",
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+      }}
+    >
       <DashboardBackLink />
       <div
         className="travel-trips-page__header"
@@ -599,25 +930,25 @@ export default function Trips() {
           borderRadius: 8,
           border: "1px solid var(--border-color)",
           marginBottom: 16,
+          position: "relative",
         }}
       >
-        <Filter
-          size={16}
-          aria-hidden
-          style={{ color: "var(--text-secondary)" }}
-        />
         <div
           className="travel-trips-page__search"
           style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 6,
-              paddingLeft: 10,
-              paddingRight: 8,
-              border: "1px solid var(--border-color)",
-              borderRadius: 8,
-              background: "var(--surface-color)",
-              boxSizing: "border-box",
+            width: "min(360px, 100%)",
+            minWidth: "min(240px, 100%)",
+            maxWidth: 360,
+            flex: "1 1 300px",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            paddingLeft: 10,
+            paddingRight: 8,
+            border: "1px solid var(--border-color)",
+            borderRadius: 8,
+            background: "var(--surface-color)",
+            boxSizing: "border-box",
           }}
         >
           <Search
@@ -630,29 +961,45 @@ export default function Trips() {
             }}
           />
           <input
-              type="search"
+            type="search"
             className="travel-trips-search-input"
             value={search}
             onChange={(e) => handleSearchChange(e.target.value)}
             placeholder="Search trip code or destination…"
             aria-label="Search trips"
-              style={{ ...selectStyle, padding: "6px 0", minWidth: 0, width: "100%", flex: "1 1 auto", border: 0, outline: 0, background: "transparent", boxShadow: "none" }}
+            style={{ ...selectStyle, padding: "6px 0", minWidth: 0, width: "100%", flex: "1 1 auto", border: 0, outline: 0, background: "transparent", boxShadow: "none" }}
           />
         </div>
-        <select
-          value={status}
-          onChange={(e) => handleStatusChange(e.target.value)}
-          style={selectStyle}
-          aria-label="Filter by status"
+        <button
+          ref={filtersButtonRef}
+          type="button"
+          onClick={() => {
+            if (!filtersOpen) setDraftFilters(filters);
+            setFiltersOpen((current) => !current);
+          }}
+          style={{ ...refreshBtn, display: "inline-flex", alignItems: "center", gap: 7 }}
+          aria-label="Filter trips"
+          aria-expanded={filtersOpen}
+          aria-controls="trip-filters-panel"
         >
-          {STATUSES.map((s) => (
-            <option key={s.value} value={s.value}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-        <button type="button" onClick={resetFilters} style={refreshBtn} aria-label="Reset filters">
-          Reset filters
+          <Filter size={15} aria-hidden /> Filter
+          {activeFilterCount > 0 && (
+            <span style={{
+              minWidth: 18,
+              height: 18,
+              padding: "0 5px",
+              borderRadius: 999,
+              background: "var(--primary-color, var(--accent-color))",
+              color: "var(--accent-text, #fff)",
+              fontSize: 11,
+              fontWeight: 700,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}>
+              {activeFilterCount}
+            </span>
+          )}
         </button>
         <button
           type="button"
@@ -664,11 +1011,140 @@ export default function Trips() {
         </button>
       </div>
 
+      {filtersOpen && (
+        <section
+          ref={filtersPanelRef}
+          id="trip-filters-panel"
+          className="travel-trips-page__filter-panel"
+          role="region"
+          aria-label="Trip filters"
+          style={{
+            position: "relative",
+            zIndex: 30,
+            width: "100%",
+            flex: "0 0 auto",
+            boxSizing: "border-box",
+            marginTop: -4,
+            marginBottom: 16,
+            padding: "16px 20px 14px",
+            border: "1px solid var(--border-color)",
+            borderRadius: 12,
+            background: "var(--surface-color)",
+            color: "var(--text-primary)",
+            boxShadow: "0 5px 18px rgba(15, 23, 42, 0.07)",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, paddingBottom: 12, borderBottom: "1px solid var(--border-color)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
+              <span style={{ width: 34, height: 34, borderRadius: 9, display: "inline-flex", alignItems: "center", justifyContent: "center", flex: "0 0 auto", color: "var(--primary-color, #4f46e5)", background: "rgba(79,70,229,0.1)" }}>
+                <Filter size={17} aria-hidden />
+              </span>
+              <div>
+                <h2 style={{ margin: 0, fontSize: 16, lineHeight: 1.25 }}>Filters</h2>
+                <p style={{ margin: "3px 0 0", color: "var(--text-secondary)", fontSize: 12 }}>
+                  Choose multiple values in a filter; different filters work together.
+                </p>
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flex: "0 0 auto" }}>
+              <button
+                type="button"
+                onClick={() => setDraftFilters(EMPTY_TRIP_FILTERS)}
+                style={{ background: "transparent", border: 0, padding: "6px 4px", color: "var(--primary-color, #4f46e5)", fontSize: 13, fontWeight: 600, cursor: "pointer" }}
+              >
+                Clear all
+              </button>
+              <button type="button" onClick={() => setFiltersOpen(false)} style={iconBtn} aria-label="Collapse filters">
+                <ChevronUp size={18} aria-hidden />
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 190px), 1fr))", gap: 16, padding: "16px 0" }}>
+            <MultiSelectFilter
+              label="Trip family"
+              emptyLabel="All trip families"
+              options={[
+                { value: "primary", label: "Primary" },
+                { value: "variant", label: "Variant" },
+                { value: "standalone", label: "Standalone" },
+              ]}
+              value={draftFilters.family}
+              onChange={(value) => updateDraftFilter("family", value)}
+            />
+            <MultiSelectFilter
+              label="Trip type"
+              emptyLabel="All trip types"
+              options={TRIP_TYPES}
+              value={draftFilters.tripType}
+              onChange={(value) => updateDraftFilter("tripType", value)}
+            />
+            <MultiSelectFilter
+              label="Status"
+              emptyLabel="All statuses"
+              options={STATUSES.filter((item) => item.value)}
+              value={draftFilters.status}
+              onChange={(value) => updateDraftFilter("status", value)}
+            />
+            <label style={fieldLabel}>
+              Depart from
+              <input
+                type="date"
+                value={draftFilters.departFrom}
+                max={draftFilters.departTo || undefined}
+                aria-invalid={isDepartDateRangeInvalid}
+                onChange={(event) => updateDraftFilter("departFrom", event.target.value)}
+                style={{ ...inputStyle, width: "100%", minWidth: 0, boxSizing: "border-box", borderColor: isDepartDateRangeInvalid ? "#dc2626" : undefined }}
+              />
+            </label>
+            <label style={fieldLabel}>
+              Depart to
+              <input
+                type="date"
+                value={draftFilters.departTo}
+                min={draftFilters.departFrom || undefined}
+                aria-invalid={isDepartDateRangeInvalid}
+                onChange={(event) => updateDraftFilter("departTo", event.target.value)}
+                style={{ ...inputStyle, width: "100%", minWidth: 0, boxSizing: "border-box", borderColor: isDepartDateRangeInvalid ? "#dc2626" : undefined }}
+              />
+            </label>
+          </div>
+          {isDepartDateRangeInvalid && (
+            <p role="alert" style={{ margin: "-6px 0 12px", color: "#dc2626", fontSize: 12 }}>
+              Depart from must be on or before Depart to.
+            </p>
+          )}
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", paddingTop: 12, borderTop: "1px solid var(--border-color)" }}>
+            <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>
+              {activeFilterCount} active filter{activeFilterCount === 1 ? "" : "s"}
+            </span>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" onClick={clearAllFilters} style={refreshBtn}>Reset</button>
+              <button
+                type="button"
+                onClick={applyFilters}
+                disabled={isDepartDateRangeInvalid}
+                style={{ ...primaryBtn, opacity: isDepartDateRangeInvalid ? 0.55 : 1, cursor: isDepartDateRangeInvalid ? "not-allowed" : "pointer" }}
+              >
+                Apply filters
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
       <div
+        className="travel-trips-page__table-card"
         style={{
           background: "var(--surface-color)",
           borderRadius: 8,
           border: "1px solid var(--border-color)",
+          flex: "1 1 auto",
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
         }}
       >
         {loading ? (
@@ -681,47 +1157,54 @@ export default function Trips() {
           </div>
         ) : (
           <>
-            <TopScrollSync forceScrollbar>
+            <TopScrollSync
+              forceScrollbar
+              hideTopBar
+              hideBottomHorizontalScrollbar
+              bottomBarLeadingWidth={columnWidths.tripCode}
+              scrollWidth={tripsTableWidth - columnWidths.tripCode}
+              verticalOverflow="auto"
+              contentClassName="travel-trips-table-viewport"
+            >
               <table
+                ref={tripsTableRef}
                 className="travel-trips-table"
                 style={{
-                  width: "100%",
-                  minWidth: TRIPS_TABLE_MIN_WIDTH,
-                  borderCollapse: "collapse",
+                  width: `${tripsTableWidth}px`,
+                  minWidth: `${tripsTableWidth}px`,
+                  borderCollapse: "separate",
+                  borderSpacing: 0,
                   tableLayout: "fixed",
                 }}
               >
                 <colgroup>
-                  <col style={{ width: 190 }} />
-                  <col style={{ width: 210 }} />
-                  <col style={{ width: 280 }} />
-                  <col style={{ width: 120 }} />
-                  <col style={{ width: 150 }} />
-                  <col style={{ width: 240 }} />
-                  <col style={{ width: 250 }} />
-                  <col style={{ width: 150 }} />
-                  <col style={{ width: 145 }} />
-                  <col style={{ width: 160 }} />
-                  <col style={{ width: 120 }} />
-                  <col style={{ width: 140 }} />
+                  {TRIPS_TABLE_COLUMNS.map(({ key }) => (
+                    <col key={key} style={{ width: `${columnWidths[key]}px` }} />
+                  ))}
                 </colgroup>
                 <thead>
                   <tr>
-                    <th style={th}>{sortButton("tripCode", "Trip code")}</th>
-                    <th style={th}>Trip family</th>
-                    <th style={th}>{sortButton("destination", "Destination")}</th>
-                    <th style={th}>Brand</th>
-                    <th style={th}>Sub-brand</th>
-                    <th style={th}>{sortButton("dates", "Dates")}</th>
-                    <th style={th}>{sortButton("school", "School")}</th>
-                    <th style={th}>{sortButton("participants", "Participants")}</th>
-                    <th style={th}>{sortButton("perStudent", "Per-student")}</th>
-                    <th style={th}>Trip type</th>
-                    <th style={th}>{sortButton("status", "Status")}</th>
+                    <th className="travel-trips-table__trip-code-header" style={th}>
+                      {sortButton("tripCode", "Trip code")}
+                      {renderColumnResizeHandle("tripCode")}
+                    </th>
+                    <th style={th}>Trip family{renderColumnResizeHandle("family")}</th>
+                    <th style={th}>{sortButton("destination", "Destination")}{renderColumnResizeHandle("destination")}</th>
+                    <th style={th}>Brand{renderColumnResizeHandle("brand")}</th>
+                    <th style={th}>Sub-brand{renderColumnResizeHandle("subBrand")}</th>
+                    <th style={th}>{sortButton("dates", "Dates")}{renderColumnResizeHandle("dates")}</th>
+                    <th style={th}>{sortButton("school", "School")}{renderColumnResizeHandle("school")}</th>
+                    <th style={th}>{sortButton("participants", "Participants")}{renderColumnResizeHandle("participants")}</th>
+                    <th style={th}>{sortButton("perStudent", "Per-student")}{renderColumnResizeHandle("perStudent")}</th>
+                    <th style={th}>Trip type{renderColumnResizeHandle("tripType")}</th>
+                    <th style={th}>{sortButton("status", "Status")}{renderColumnResizeHandle("status")}</th>
                     <th
-                      style={{ ...th, width: 140, textAlign: "right" }}
+                      style={{ ...th, width: columnWidths.actions, textAlign: "left" }}
                       aria-label="Actions"
-                    ></th>
+                    >
+                      Actions
+                      {renderColumnResizeHandle("actions")}
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -741,7 +1224,6 @@ export default function Trips() {
                             : "travel-trips-row"}
                         key={`${isFamilyChild ? "family-child" : "trip"}-${t.id}`}
                         style={{
-                          borderTop: "1px solid var(--border-light)",
                           background: isFamilyChild
                             ? "rgba(79,70,229,0.045)"
                             : canExpandFamily
@@ -754,7 +1236,7 @@ export default function Trips() {
                               : "none",
                         }}
                       >
-                        <td style={{ ...td, whiteSpace: "nowrap", paddingLeft: isFamilyChild ? 28 : 12 }}>
+                        <td className="travel-trips-table__trip-code-cell" style={{ ...td, whiteSpace: "nowrap", paddingLeft: isFamilyChild ? 28 : 12 }}>
                           <div style={familyCodeCell}>
                             {canExpandFamily && (
                               <button
@@ -895,7 +1377,7 @@ export default function Trips() {
                         <td
                           style={{
                             ...td,
-                            textAlign: "right",
+                            textAlign: "left",
                             whiteSpace: "nowrap",
                             overflow: "visible",
                           }}
@@ -947,20 +1429,22 @@ export default function Trips() {
                 </tbody>
               </table>
             </TopScrollSync>
-            <TripPager
-              total={total}
-              page={safePage}
-              pageSize={pageSize}
-              onPageChange={setPage}
-              onPageSizeChange={setPageSizeAndReset}
-              isCustomPageSize={isCustomPageSize}
-              setIsCustomPageSize={setIsCustomPageSize}
-              customPageSize={customPageSize}
-              setCustomPageSize={setCustomPageSize}
-              pageSizeOptions={PAGE_SIZE_OPTIONS}
-              maxPageSize={MAX_PAGE_SIZE}
-              entityLabel="trips"
-            />
+            <div className="travel-trips-page__pager">
+              <TripPager
+                total={total}
+                page={safePage}
+                pageSize={pageSize}
+                onPageChange={setPage}
+                onPageSizeChange={setPageSizeAndReset}
+                isCustomPageSize={isCustomPageSize}
+                setIsCustomPageSize={setIsCustomPageSize}
+                customPageSize={customPageSize}
+                setCustomPageSize={setCustomPageSize}
+                pageSizeOptions={PAGE_SIZE_OPTIONS}
+                maxPageSize={MAX_PAGE_SIZE}
+                entityLabel="trips"
+              />
+            </div>
           </>
         )}
       </div>
@@ -1057,19 +1541,19 @@ export default function Trips() {
                   placeholder='e.g. "TMC-AND-2026-MUMBAI-G7"'
                 />
               </label>
-              <label style={fieldLabel}>
-                Destination
-                <input
-                  required
-                  type="text"
+              <div style={{ ...fieldLabel, width: "100%" }}>
+                <label htmlFor="new-trip-destination">Destination</label>
+                <LocationAutocomplete
                   value={form.destination}
-                  onChange={(e) =>
-                    setForm({ ...form, destination: e.target.value })
+                  onChange={(destination) =>
+                    setForm((current) => ({ ...current, destination }))
                   }
-                  style={inputStyle}
-                  placeholder="Andaman"
+                  nameOnly
+                  limit={10}
+                  style={{ ...inputStyle, width: "100%", minWidth: 0, boxSizing: "border-box" }}
+                  inputProps={{ id: "new-trip-destination", required: true, placeholder: "Andaman" }}
                 />
-              </label>
+              </div>
               <label style={fieldLabel}>
                 School
                 <input
@@ -1206,7 +1690,7 @@ const sortButtonStyle = {
   alignItems: "center",
   justifyContent: "space-between",
   gap: 6,
-  width: "100%",
+  width: "calc(100% - 10px)",
   padding: 0,
   border: "none",
   background: "transparent",

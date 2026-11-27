@@ -62,6 +62,7 @@ const {
   projectTripDocumentRequirement,
 } = require("../lib/travelDocumentPolicy");
 const { parseConsentAnswers } = require("../lib/tmcDigitalConsent");
+const { loadBundledTmcConsentTerms } = require("../lib/tmcConsentTerms");
 const { sanitizeText } = require("../lib/sanitizeJson");
 const passportOcrClient = require("../services/passportOcrClient");
 const listProjection = require("../lib/listProjection");
@@ -164,6 +165,43 @@ function sendApprovalPaymentPortalEmail({ tenantId, trip, participant }) {
   });
 }
 const VALID_TRIP_STATUSES = ["confirmed", "in-trip", "completed", "cancelled"];
+const VALID_TRIP_TYPES = ["international", "domestic", "day_trip"];
+const VALID_TRIP_FAMILIES = ["primary", "variant", "standalone"];
+
+function getTripListQueryText(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getTripListQueryValues(value) {
+  const values = Array.isArray(value) ? value : [value];
+  return values
+    .filter((item) => typeof item === "string")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseTripListDate(value) {
+  const text = getTripListQueryText(value);
+  if (!text) return { value: null, valid: true };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return { value: null, valid: false };
+  const date = new Date(`${text}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== text) {
+    return { value: null, valid: false };
+  }
+  return { value: date, valid: true };
+}
+
+function getTripPerStudentAmount(paymentPlan) {
+  try {
+    const installments = JSON.parse(paymentPlan?.instalmentsJson || "[]");
+    return Array.isArray(installments)
+      ? installments.reduce((sum, installment) => sum + (Number(installment.amount) || 0), 0)
+      : 0;
+  } catch (_err) {
+    return 0;
+  }
+}
+
 const tripImportUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -264,14 +302,55 @@ router.get(
       };
       const searchRaw = req.query.search ?? req.query.q;
       const search = typeof searchRaw === "string" ? searchRaw.trim() : "";
-      if (req.query.status) {
-        if (!VALID_TRIP_STATUSES.includes(String(req.query.status))) {
-          return res
-            .status(400)
-            .json({ error: "invalid status", code: "INVALID_STATUS" });
-        }
-        where.status = String(req.query.status);
+      const orFilters = [];
+      const departFrom = parseTripListDate(req.query.departFrom);
+      const departTo = parseTripListDate(req.query.departTo);
+
+      if (!departFrom.valid || !departTo.valid) {
+        return res.status(400).json({ error: "date filters must use YYYY-MM-DD", code: "INVALID_DATE_FILTER" });
       }
+      if (departFrom.value && departTo.value && departFrom.value > departTo.value) {
+        return res.status(400).json({ error: "start date cannot be after end date", code: "INVERTED_DATE_FILTER" });
+      }
+
+      const statuses = getTripListQueryValues(req.query.status);
+      if (statuses.length) {
+        if (statuses.some((status) => !VALID_TRIP_STATUSES.includes(status))) {
+          return res.status(400).json({ error: "invalid status", code: "INVALID_STATUS" });
+        }
+        where.status = statuses.length === 1 ? statuses[0] : { in: statuses };
+      }
+      const tripTypes = getTripListQueryValues(req.query.tripType);
+      if (tripTypes.length) {
+        if (tripTypes.some((tripType) => !VALID_TRIP_TYPES.includes(tripType))) {
+          return res.status(400).json({ error: "invalid trip type", code: "INVALID_TRIP_TYPE" });
+        }
+        where.tripType = tripTypes.length === 1 ? tripTypes[0] : { in: tripTypes };
+      }
+      const families = getTripListQueryValues(req.query.family);
+      if (families.length) {
+        if (families.some((family) => !VALID_TRIP_FAMILIES.includes(family))) {
+          return res.status(400).json({ error: "invalid trip family", code: "INVALID_TRIP_FAMILY" });
+        }
+        const familyFilters = families.map((family) => {
+          if (family === "variant") return { familyParentId: { not: null } };
+          return {
+            familyParentId: null,
+            familyVariants: family === "primary"
+              ? { some: { tenantId: req.travelTenant.id } }
+              : { none: { tenantId: req.travelTenant.id } },
+          };
+        });
+        if (familyFilters.length === 1) Object.assign(where, familyFilters[0]);
+        else orFilters.push(familyFilters);
+      }
+      const departDate = {};
+      if (departFrom.value) departDate.gte = departFrom.value;
+      if (departTo.value) {
+        departDate.lte = new Date(departTo.value.getTime() + 24 * 60 * 60 * 1000 - 1);
+      }
+      if (Object.keys(departDate).length) where.departDate = departDate;
+
       if (req.query.schoolContactId) {
         const sid = parseInt(req.query.schoolContactId, 10);
         if (Number.isFinite(sid)) where.schoolContactId = sid;
@@ -289,7 +368,7 @@ router.get(
           // Registration contacts are parents, not the school contact. They
           // are linked through TmcParentTrip.parentContactId; retain the
           // legacy schoolContactId path for school/operator contacts.
-          where.OR = [
+          orFilters.push([
             { schoolContactId: cid },
             { teacherContactId: cid },
             { teacherAssignments: { some: { tenantId: req.travelTenant.id, teacherContactId: cid } } },
@@ -298,14 +377,19 @@ router.get(
               { participants: { some: { parentEmail: email } } },
               { pendingRegistrations: { some: { parentEmail: email } } },
             ] : []),
-          ];
+          ]);
         }
       }
       if (search) {
-        where.OR = [
+        orFilters.push([
           { tripCode: { contains: search } },
           { destination: { contains: search } },
-        ];
+        ]);
+      }
+      if (orFilters.length === 1) {
+        where.OR = orFilters[0];
+      } else if (orFilters.length > 1) {
+        where.AND = [...(where.AND || []), ...orFilters.map((OR) => ({ OR }))];
       }
 
       const take = Math.min(parseInt(req.query.limit, 10) || 50, 200);
@@ -333,7 +417,7 @@ router.get(
             select: { teacherContactId: true },
           },
           _count: {
-            select: { participants: true, documentRequirements: true, familyVariants: true },
+            select: { participants: true, documentRequirements: true, familyVariants: true, rooming: true },
           },
           paymentPlan: { select: { instalmentsJson: true } },
           familyParent: {
@@ -374,20 +458,7 @@ router.get(
       }
 
       const decoratedTrips = trips.map((trip) => {
-        let perStudentAmount = 0;
-        try {
-          const installments = JSON.parse(
-            trip.paymentPlan?.instalmentsJson || "[]",
-          );
-          if (Array.isArray(installments)) {
-            perStudentAmount = installments.reduce(
-              (sum, installment) => sum + (Number(installment.amount) || 0),
-              0,
-            );
-          }
-        } catch (_err) {
-          perStudentAmount = 0;
-        }
+        const perStudentAmount = getTripPerStudentAmount(trip.paymentPlan);
         return {
           ...trip,
           perStudentAmount,
@@ -1362,6 +1433,7 @@ router.get(
       const trip = await prisma.tmcTrip.findFirst({
         where: { id, tenantId: req.travelTenant.id },
         include: {
+          _count: { select: { rooming: true } },
           teacherAssignments: {
             orderBy: { id: "asc" },
             select: { teacherContactId: true },
@@ -1838,6 +1910,7 @@ router.patch(
         returnDate,
         legalEntity,
         pricePerStudent,
+        consentTerms,
         status,
         driveFolderId,
         tripType,
@@ -1847,6 +1920,13 @@ router.patch(
       } = req.body || {};
 
       if (destination !== undefined) data.destination = String(destination);
+      if (consentTerms !== undefined) {
+        const normalizedConsentTerms = sanitizeText(String(consentTerms || "").trim()).slice(0, 30000);
+        if (!normalizedConsentTerms) {
+          return res.status(400).json({ error: "consentTerms required", code: "CONSENT_TERMS_REQUIRED" });
+        }
+        data.consentTerms = normalizedConsentTerms;
+      }
       if (departDate !== undefined) {
         const d = new Date(departDate);
         if (!Number.isFinite(d.getTime()))
@@ -2451,7 +2531,7 @@ async function loadTrip(req) {
   }
   const trip = await prisma.tmcTrip.findFirst({
     where: { id, tenantId: req.travelTenant.id },
-    select: { id: true, tripType: true },
+    select: { id: true, tripType: true, consentTerms: true },
   });
   if (!trip) {
     const err = new Error("Trip not found");
@@ -4086,6 +4166,19 @@ router.post(
 
 // ─── Document requirements ────────────────────────────────────────────
 
+function normalizeDocumentRequirementName(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+async function getTripDocumentRequirementIndex(tripId) {
+  return prisma.tripDocumentRequirement.findMany({
+    // The trip was resolved by loadTrip() with the tenant scope before this lookup.
+    // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic
+    where: { tripId },
+    select: { id: true, docType: true, captureMode: true },
+  });
+}
+
 router.get(
   "/trips/:id/documents",
   verifyToken,
@@ -4094,11 +4187,20 @@ router.get(
   async (req, res) => {
     try {
       const trip = await loadTrip(req);
+      // Document requirements are trip-scoped and this parent trip was loaded with tenant scope.
       const rows = await prisma.tripDocumentRequirement.findMany({
+        // eslint-disable-next-line gbscrm/tenant-scope-finder-heuristic
         where: { tripId: trip.id },
         orderBy: { id: "asc" },
       });
-      res.json({ documents: rows.map(projectTripDocumentRequirement) });
+      const bundledTerms = await loadBundledTmcConsentTerms(trip.tripType);
+      const consentTermsSaved = String(trip.consentTerms || "").trim();
+      const consentTermsTemplate = consentTermsSaved || bundledTerms;
+      res.json({
+        documents: rows.map(projectTripDocumentRequirement),
+        consentTermsTemplate,
+        consentTermsSaved,
+      });
     } catch (e) {
       if (e.status)
         return res.status(e.status).json({ error: e.message, code: e.code });
@@ -4123,6 +4225,21 @@ router.post(
           .status(400)
           .json({ error: "docType required", code: "MISSING_FIELDS" });
       }
+      const existingRequirements = await getTripDocumentRequirementIndex(trip.id);
+      const normalizedName = normalizeDocumentRequirementName(normalizedDocType);
+      if (existingRequirements.some((requirement) => normalizeDocumentRequirementName(requirement.docType) === normalizedName)) {
+        return res.status(409).json({
+          error: "A document requirement with this name already exists",
+          code: "DUPLICATE_DOCUMENT_NAME",
+        });
+      }
+      if (normalizeCaptureMode(captureMode) === "digital_consent"
+        && existingRequirements.some((requirement) => normalizeCaptureMode(requirement.captureMode) === "digital_consent")) {
+        return res.status(409).json({
+          error: "A digital consent form is already configured for this trip",
+          code: "CONSENT_FORM_ALREADY_EXISTS",
+        });
+      }
       const created = await prisma.tripDocumentRequirement.create({
         data: {
           tripId: trip.id,
@@ -4131,7 +4248,7 @@ router.post(
           required: required !== false,
           captureMode: normalizeCaptureMode(captureMode),
           consentTerms: normalizeCaptureMode(captureMode) === "digital_consent"
-            ? sanitizeText(String(consentTerms || "").trim()).slice(0, 10000) || null
+            ? sanitizeText(String(consentTerms || "").trim()).slice(0, 30000) || null
             : null,
         },
       });
@@ -4170,6 +4287,30 @@ router.patch(
         if (!docType) return res.status(400).json({ error: "docType required", code: "MISSING_FIELDS" });
         data.docType = docType;
       }
+      const nextDocType = data.docType ?? existing.docType;
+      const nextCaptureMode = normalizeCaptureMode(body.captureMode ?? existing.captureMode);
+      if (Object.prototype.hasOwnProperty.call(body, "docType") || nextCaptureMode === "digital_consent") {
+        const existingRequirements = await getTripDocumentRequirementIndex(trip.id);
+        const normalizedName = normalizeDocumentRequirementName(nextDocType);
+        if (existingRequirements.some((requirement) => (
+          requirement.id !== existing.id
+          && normalizeDocumentRequirementName(requirement.docType) === normalizedName
+        ))) {
+          return res.status(409).json({
+            error: "A document requirement with this name already exists",
+            code: "DUPLICATE_DOCUMENT_NAME",
+          });
+        }
+        if (nextCaptureMode === "digital_consent" && existingRequirements.some((requirement) => (
+          requirement.id !== existing.id
+          && normalizeCaptureMode(requirement.captureMode) === "digital_consent"
+        ))) {
+          return res.status(409).json({
+            error: "A digital consent form is already configured for this trip",
+            code: "CONSENT_FORM_ALREADY_EXISTS",
+          });
+        }
+      }
       if (Object.prototype.hasOwnProperty.call(body, "acceptedFileTypes")) {
         data.acceptedFileTypes = JSON.stringify(normalizeAcceptedFileTypes(body.acceptedFileTypes));
       }
@@ -4179,7 +4320,7 @@ router.patch(
       }
       if (Object.prototype.hasOwnProperty.call(body, "consentTerms")) {
         data.consentTerms = normalizeCaptureMode(body.captureMode ?? existing.captureMode) === "digital_consent"
-          ? sanitizeText(String(body.consentTerms || "").trim()).slice(0, 10000) || null
+          ? sanitizeText(String(body.consentTerms || "").trim()).slice(0, 30000) || null
           : null;
       }
       if (!Object.keys(data).length) return res.status(400).json({ error: "No changes supplied", code: "MISSING_FIELDS" });

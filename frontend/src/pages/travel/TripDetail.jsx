@@ -6,14 +6,53 @@
 //   Rooming — assignment list with capacity guards
 //   Payment plan — upsert plan + materialised per-participant instalments
 
-import { createContext, useContext, useEffect, useRef, useState, useCallback, useMemo } from "react";
-import { useLocation, useNavigate, useParams, Link } from "react-router-dom";
 import {
-  Luggage, ChevronLeft, ChevronUp, ChevronDown, Users, BedDouble, Wallet, Globe,
-  ExternalLink, Plus, Trash2, Edit3, Calendar as CalendarIcon, Copy, Save,
-  Link2, Download,
-  MapPin, IndianRupee, FileText, CheckCircle2, AlertCircle, Clock, TrendingUp,
-  Sparkles, ArrowRight, X, Eye, Mail, Phone, GraduationCap, CalendarDays, UserRound,
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+  useMemo,
+} from "react";
+import { useLocation, useNavigate, useParams, Link } from "react-router-dom";
+import { createPortal } from "react-dom";
+import {
+  Luggage,
+  ChevronLeft,
+  ChevronUp,
+  ChevronDown,
+  Users,
+  BedDouble,
+  Wallet,
+  Globe,
+  ExternalLink,
+  Plus,
+  Trash2,
+  Edit3,
+  Calendar as CalendarIcon,
+  Copy,
+  Save,
+  Link2,
+  Download,
+  MapPin,
+  IndianRupee,
+  FileText,
+  CheckCircle2,
+  AlertCircle,
+  Clock,
+  TrendingUp,
+  Sparkles,
+  ArrowRight,
+  X,
+  Eye,
+  Mail,
+  Phone,
+  GraduationCap,
+  CalendarDays,
+  UserRound,
+  Layers,
+  Search,
 } from "lucide-react";
 import { fetchApi, getAuthToken } from "../../utils/api";
 import { useNotify } from "../../utils/notify";
@@ -22,9 +61,18 @@ import {
   formatAcceptedFileTypes,
   normalizeAcceptedFileTypes,
 } from "../../utils/travelDocumentPolicy";
-import { isDigitalConsentRequirement } from "../../utils/tmcDigitalConsent";
+import {
+  DEFAULT_TMC_CONSENT_TERMS,
+  TMC_DIGITAL_CONSENT_FIELDS,
+  formatConsentTermsForEditing,
+  isDigitalConsentRequirement,
+  parseConsentTermsForDisplay,
+} from "../../utils/tmcDigitalConsent";
 import { getTeacherRegistrationLink } from "../../utils/tmcLinks";
-import { TRAVEL_PAYMENT_SYNC_CHANNEL, TRAVEL_PAYMENT_SYNC_EVENT } from "../../utils/travelPaymentSync";
+import {
+  TRAVEL_PAYMENT_SYNC_CHANNEL,
+  TRAVEL_PAYMENT_SYNC_EVENT,
+} from "../../utils/travelPaymentSync";
 import TripFinancialSummary from "./TripFinancialSummary";
 import { AuthContext } from "../../App";
 
@@ -52,21 +100,50 @@ const TABS = [
 ];
 
 const PARTICIPANT_IMPORT_SCHEMA = [
-  { key: "fullName", required: true, description: "Student / participant name" },
-  { key: "parentName", required: true, description: "Parent or guardian full name" },
-  { key: "parentPhone", required: true, description: "10-digit Indian mobile or E.164 number; format as text in Excel" },
-  { key: "parentEmail", required: true, description: "Valid parent email; used when matching rows" },
-  { key: "applicationStatus", description: "pending, approved, rejected, or waitlisted" },
-  { key: "passportNumber", description: "Passport number (international trips)" },
+  {
+    key: "fullName",
+    required: true,
+    description: "Student / participant name",
+  },
+  {
+    key: "parentName",
+    required: true,
+    description: "Parent or guardian full name",
+  },
+  {
+    key: "parentPhone",
+    required: true,
+    description:
+      "10-digit Indian mobile or E.164 number; format as text in Excel",
+  },
+  {
+    key: "parentEmail",
+    required: true,
+    description: "Valid parent email; used when matching rows",
+  },
+  {
+    key: "applicationStatus",
+    description: "pending, approved, rejected, or waitlisted",
+  },
+  {
+    key: "passportNumber",
+    description: "Passport number (international trips)",
+  },
   { key: "passportExpiry", description: "ISO date, e.g. 2027-02-21" },
-  { key: "aadhaarLast4", description: "Exactly 4 digits; never upload full Aadhaar" },
+  {
+    key: "aadhaarLast4",
+    description: "Exactly 4 digits; never upload full Aadhaar",
+  },
   { key: "medicalNotes", description: "Medical notes" },
   { key: "reviewNotes", description: "Operator review notes" },
 ];
 
 function buildLandingPagesReturnState(trip, tripState = {}) {
   return {
-    returnTo: { label: "TMC Trips", path: `/travel/trips/${trip.id}?tab=overview` },
+    returnTo: {
+      label: "TMC Trips",
+      path: `/travel/trips/${trip.id}?tab=overview`,
+    },
     currentLabel: "Overview",
     currentPath: `/travel/trips/${trip.id}?tab=overview`,
     backTo: tripState.backTo || "/travel/trips",
@@ -110,7 +187,17 @@ function getPaymentPlanDateMinimum(index, instalments) {
   return previousDate > today ? previousDate : today;
 }
 
-import { SetupHeader, SetupNavigator, setupSteps, rememberParentLink, isPublishedTripPage, steps, stepTab, anchors, tripStepPath } from "./TripSetupNavigation";
+import {
+  SetupHeader,
+  SetupNavigator,
+  setupSteps,
+  rememberParentLink,
+  isPublishedTripPage,
+  steps,
+  stepTab,
+  anchors,
+  tripStepPath,
+} from "./TripSetupNavigation";
 
 const HighlightContext = createContext(null);
 
@@ -134,10 +221,9 @@ function TimedHighlight({ index }) {
     <span className="ts-highlight-chip">Step {index + 1} &middot; {steps[index]}</span>
   </span>;
 }
-
 export default function TripDetail() {
   const { id } = useParams();
-  return <SelectedTrip key={id}/>;
+  return <SelectedTrip key={id} />;
 }
 
 function SelectedTrip() {
@@ -145,10 +231,20 @@ function SelectedTrip() {
   const location = useLocation();
   const navigate = useNavigate();
   const notify = useNotify();
-  const requestedTab = new URLSearchParams(location.search).get("tab") || location.state?.tab || "overview";
-  const normalizedTab = requestedTab === "microsite" || !TABS.some((item) => item.key === requestedTab)
-    ? "overview"
-    : requestedTab;
+  const auth = useContext(AuthContext);
+  const canManageRoomInventory = ["ADMIN", "MANAGER"].includes(
+    auth?.user?.role,
+  );
+  const canDeleteRoomInventory = auth?.user?.role === "ADMIN";
+  const requestedTab =
+    new URLSearchParams(location.search).get("tab") ||
+    location.state?.tab ||
+    "overview";
+  const normalizedTab =
+    requestedTab === "microsite" ||
+    !TABS.some((item) => item.key === requestedTab)
+      ? "overview"
+      : requestedTab;
   const [tab, setTab] = useState(() => normalizedTab);
   const [savedListUrl] = useState(getTripsListUrl);
   const [trip, setTrip] = useState(null);
@@ -156,17 +252,36 @@ function SelectedTrip() {
   const [page, setPage] = useState(undefined);
   const [generated, setGenerated] = useState(null);
   const section = new URLSearchParams(location.search).get("setup");
-  const viewed = tab === "payment" ? 1 : tab === "documents" ? 2 : tab === "overview" ? ({landing:3,teacher:4,parent:5}[section] || 0) : -1;
+  const viewed =
+    tab === "payment"
+      ? 1
+      : tab === "documents"
+        ? 2
+        : tab === "rooming"
+          ? 6
+          : tab === "overview"
+            ? { landing: 3, teacher: 4, parent: 5 }[section] || 0
+            : -1;
   useEffect(() => {
     let active = true;
-    fetchApi(`/api/travel/trips/${id}/landing-page`, {silent:true}).then(p => { if(active) setPage(p); }).catch(e => {
-      if (!active) return;
-      if (e.status === 404 || e.body?.code === "NOT_LINKED") setPage(null);
-      else notify.error(e.body?.error || "Failed to load landing page");
-    });
-    return () => { active = false; };
+    fetchApi(`/api/travel/trips/${id}/landing-page`, { silent: true })
+      .then((p) => {
+        if (active) setPage(p);
+      })
+      .catch((e) => {
+        if (!active) return;
+        if (e.status === 404 || e.body?.code === "NOT_LINKED") setPage(null);
+        else notify.error(e.body?.error || "Failed to load landing page");
+      });
+    return () => {
+      active = false;
+    };
   }, [id, notify]);
-
+  useEffect(() => {
+    if (loading || tab !== "overview" || !section) return;
+    const target = section === "landing" ? "trip-landing" : "trip-access-title";
+    document.getElementById(target)?.scrollIntoView?.({ block: "start" });
+  }, [section, tab, loading]);
   const hasLoadedRef = useRef(false);
   const backTo = location.state?.backTo || savedListUrl;
   const backLabel = location.state?.backLabel || "Back to trips";
@@ -184,6 +299,17 @@ function SelectedTrip() {
       });
   }, [id, notify]);
 
+  const handleRoomingChange = useCallback((count) => {
+    setTrip((current) =>
+      current
+        ? {
+            ...current,
+            _count: { ...(current._count || {}), rooming: count },
+          }
+        : current,
+    );
+  }, []);
+
   useEffect(() => {
     hasLoadedRef.current = false;
   }, [id]);
@@ -195,33 +321,63 @@ function SelectedTrip() {
     const params = new URLSearchParams(location.search);
     if (params.get("tab") === normalizedTab) return;
     params.set("tab", normalizedTab);
-    navigate({ pathname: location.pathname, search: `?${params.toString()}` }, { replace: true, state: location.state });
-  }, [location.pathname, location.search, location.state, navigate, normalizedTab]);
+    navigate(
+      { pathname: location.pathname, search: `?${params.toString()}` },
+      { replace: true, state: location.state },
+    );
+  }, [
+    location.pathname,
+    location.search,
+    location.state,
+    navigate,
+    normalizedTab,
+  ]);
 
-  const selectTab = useCallback((nextTab, anchor) => {
-    const params = new URLSearchParams(location.search);
-    params.set("tab", nextTab);
-    if (anchor) params.set("setup", anchor); else params.delete("setup");
-    setTab(nextTab);
-    navigate({ pathname: location.pathname, search: `?${params.toString()}` }, { replace: true, state: location.state });
-  }, [location.pathname, location.search, location.state, navigate]);
+  const selectTab = useCallback(
+    (nextTab, anchor) => {
+      const params = new URLSearchParams(location.search);
+      params.set("tab", nextTab);
+      if (anchor) params.set("setup", anchor);
+      else params.delete("setup");
+      setTab(nextTab);
+      navigate(
+        { pathname: location.pathname, search: `?${params.toString()}` },
+        { replace: true, state: location.state },
+      );
+    },
+    [location.pathname, location.search, location.state, navigate],
+  );
 
-
-  const jump = index => {
+  const jump = (index) => {
     selectTab(stepTab[index], anchors[index]);
-    if (!anchors[index]) requestAnimationFrame(() => {
-      document.getElementById("trip-header")?.scrollIntoView?.({block:"start"});
+    requestAnimationFrame(() => {
+      const target =
+        index === 3
+          ? "trip-landing"
+          : index === 6
+            ? "trip-rooming"
+            : index >= 4
+              ? "trip-access-title"
+              : "trip-header";
+      document.getElementById(target)?.scrollIntoView?.({ block: "start" });
     });
   };
   if (loading) return <div style={{ padding: 24 }}>Loading&hellip;</div>;
-  if (!trip) return (
-    <div style={{ padding: 24 }}>
-      <Link to={backTo} style={backLink}><ChevronLeft size={16} /> {backLabel}</Link>
-      <p style={{ color: "var(--text-secondary)" }}>Trip not found.</p>
-    </div>
-  );
+  if (!trip)
+    return (
+      <div style={{ padding: 24 }}>
+        <Link to={backTo} style={backLink}>
+          <ChevronLeft size={16} /> {backLabel}
+        </Link>
+        <p style={{ color: "var(--text-secondary)" }}>Trip not found.</p>
+      </div>
+    );
 
-  const flags = setupSteps(trip, page === undefined ? undefined : isPublishedTripPage(page), generated);
+  const flags = setupSteps(
+    trip,
+    page === undefined ? undefined : isPublishedTripPage(page),
+    generated,
+  );
   return (
     <div className="travel-trip-detail-page ts-detail" style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
       <header id="trip-header" className="ts-trip-header">
@@ -230,16 +386,36 @@ function SelectedTrip() {
           <h1 style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 6px" }}>
             <Luggage size={28} aria-hidden /> {trip.tripCode}
           </h1>
-          <div style={{ color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 6 }}>
-            <CalendarIcon size={14} /> {fmt(trip.departDate)} → {fmt(trip.returnDate)} · {trip.destination}
+          <div
+            style={{
+              color: "var(--text-secondary)",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <CalendarIcon size={14} /> {fmt(trip.departDate)} →{" "}
+            {fmt(trip.returnDate)} · {trip.destination}
           </div>
         </div>
-        <SetupHeader flags={flags} viewed={viewed} jump={jump}/>
+        <SetupHeader flags={flags} viewed={viewed} jump={jump} />
         <StatusBadge status={trip.status} />
       </header>
 
       {/* Tab strip */}
-      <div className="travel-trip-detail-tabs" role="tablist" aria-label="Trip sections">
+      <div
+        className="travel-trip-detail-tabs"
+        role="tablist"
+        aria-label="Trip sections"
+        style={{
+          display: "flex",
+          gap: 4,
+          borderBottom: "1px solid var(--border-color)",
+          marginTop: 20,
+          marginBottom: 16,
+          flexWrap: "wrap",
+        }}
+      >
         {TABS.map((t) => {
           const Icon = t.icon;
           const active = tab === t.key;
@@ -250,6 +426,24 @@ function SelectedTrip() {
               role="tab"
               aria-selected={active}
               onClick={() => selectTab(t.key)}
+              style={{
+                padding: "8px 16px",
+                border: "none",
+                background: "transparent",
+                fontWeight: 600,
+                fontSize: 14,
+                cursor: "pointer",
+                borderBottom: active
+                  ? "2px solid var(--primary-color)"
+                  : "2px solid transparent",
+                color: active
+                  ? "var(--primary-color)"
+                  : "var(--text-secondary)",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                marginBottom: -1,
+              }}
             >
               <Icon size={16} aria-hidden /> {t.label}
             </button>
@@ -257,22 +451,68 @@ function SelectedTrip() {
         })}
       </div>
 
-      {tab === "overview" && <HighlightContext.Provider value={{anchor: section, visit: location.key}}><OverviewTab page={page} sharingChanged={(ids, link) => {
-        const teacherContactIds = ids.map(Number);
-        const saved = link ? trip : { ...trip, teacherContactIds, teacherContactId: teacherContactIds[0] ?? null,
-          teacherAssignments: teacherContactIds.map(teacherContactId => ({teacherContactId})) };
-        rememberParentLink(saved, link); setGenerated(link); setTrip(saved);
-      }} trip={trip} onJump={selectTab} notify={notify} /></HighlightContext.Provider>}
-      {tab === "participants" && <SimpleParticipantsTab trip={trip} onChange={load} notify={notify} />}
-      {tab === "documents" && <DocumentsTab trip={trip} onChange={load} notify={notify} />}
-      {tab === "rooming" && <RoomingTab trip={trip} notify={notify} readOnly showExports={false} />}
-      {tab === "payment" && <PaymentTab trip={trip} notify={notify} onChange={load} />}
-      <SetupNavigator trip={trip} flags={flags} viewed={viewed} jump={jump} tabLabel={TABS.find(t=>t.key===tab)?.label}
-        newTrip={()=>navigate("/travel/trips", {state:{createTrip:true}})}
-        switchTrip={(row,index)=>{
-          if (row.id===trip.id) return jump(index);
+      {tab === "overview" && (
+        <HighlightContext.Provider value={{ anchor: section, visit: location.key }}>
+          <OverviewTab
+            page={page}
+            sharingChanged={(ids, link) => {
+              const teacherContactIds = ids.map(Number);
+              const saved = link
+                ? trip
+                : {
+                    ...trip,
+                    teacherContactIds,
+                    teacherContactId: teacherContactIds[0] ?? null,
+                    teacherAssignments: teacherContactIds.map(
+                      (teacherContactId) => ({ teacherContactId }),
+                    ),
+                  };
+              rememberParentLink(saved, link);
+              setGenerated(link);
+              setTrip(saved);
+            }}
+            trip={trip}
+            onJump={selectTab}
+            notify={notify}
+          />
+        </HighlightContext.Provider>
+      )}
+      {tab === "participants" && (
+        <SimpleParticipantsTab trip={trip} onChange={load} notify={notify} />
+      )}
+      {tab === "documents" && (
+        <DocumentsTab trip={trip} onChange={load} notify={notify} />
+      )}
+      {tab === "rooming" && (
+        <div id="trip-rooming">
+          <RoomingTab
+            trip={trip}
+            notify={notify}
+            readOnly={!canManageRoomInventory}
+            canManageRooms={canManageRoomInventory}
+            canDeleteRooms={canDeleteRoomInventory}
+            onRoomingChange={handleRoomingChange}
+            showExports={false}
+          />
+        </div>
+      )}
+      {tab === "payment" && (
+        <PaymentTab trip={trip} notify={notify} onChange={load} />
+      )}
+      <SetupNavigator
+        trip={trip}
+        flags={flags}
+        viewed={viewed}
+        jump={jump}
+        tabLabel={TABS.find((t) => t.key === tab)?.label}
+        newTrip={() =>
+          navigate("/travel/trips", { state: { createTrip: true } })
+        }
+        switchTrip={(row, index) => {
+          if (row.id === trip.id) return jump(index);
           navigate(tripStepPath(row.id, index));
-        }}/>
+        }}
+      />
     </div>
   );
 }
@@ -327,110 +567,177 @@ function OverviewTab({ trip, onJump, notify, page, sharingChanged }) {
     <div data-testid="trip-overview" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr)", gap: 20 }}>
       {/* Hero band — destination + dates + readiness gauge */}
       <section style={overviewSectionCard} aria-label="Trip at a glance">
-        <div style={{
-        background: "transparent", border: "none",
-        borderRadius: 0, padding: 0,
-        display: "grid", gap: 16,
-        gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))",
-        alignItems: "center",
-        }}>
-        <div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text-secondary)", marginBottom: 6 }}>
-            <MapPin size={14} aria-hidden /> Destination
-          </div>
-          <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>{trip.destination || "—"}</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", fontSize: 13, color: "var(--text-secondary)" }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              <CalendarIcon size={13} aria-hidden /> {fmt(trip.departDate)} → {fmt(trip.returnDate)}
-            </span>
-            {trip.legalEntity && (
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                <FileText size={13} aria-hidden /> {trip.legalEntity}
+        <div
+          style={{
+            background: "transparent",
+            border: "none",
+            borderRadius: 0,
+            padding: 0,
+            display: "grid",
+            gap: 16,
+            gridTemplateColumns:
+              "repeat(auto-fit, minmax(min(100%, 280px), 1fr))",
+            alignItems: "center",
+          }}
+        >
+          <div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                fontSize: 13,
+                color: "var(--text-secondary)",
+                marginBottom: 6,
+              }}
+            >
+              <MapPin size={14} aria-hidden /> Destination
+            </div>
+            <div style={{ fontSize: 22, fontWeight: 700, marginBottom: 8 }}>
+              {trip.destination || "—"}
+            </div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 14,
+                flexWrap: "wrap",
+                fontSize: 13,
+                color: "var(--text-secondary)",
+              }}
+            >
+              <span
+                style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
+              >
+                <CalendarIcon size={13} aria-hidden /> {fmt(trip.departDate)} →{" "}
+                {fmt(trip.returnDate)}
               </span>
-            )}
-            {trip.pricePerStudent != null && (
-              <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontVariantNumeric: "tabular-nums" }}>
-                <IndianRupee size={13} aria-hidden /> {Number(trip.pricePerStudent).toLocaleString()} / student
-              </span>
-            )}
+              {trip.legalEntity && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
+                >
+                  <FileText size={13} aria-hidden /> {trip.legalEntity}
+                </span>
+              )}
+              {trip.pricePerStudent != null && (
+                <span
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  <IndianRupee size={13} aria-hidden />{" "}
+                  {Number(trip.pricePerStudent).toLocaleString()} / student
+                </span>
+              )}
+            </div>
           </div>
+          <ReadinessGauge score={score} components={comp} />
         </div>
-        <ReadinessGauge score={score} components={comp} />
-      </div>
       </section>
 
       {/* KPI strip — participants / docs / status */}
-      <section style={overviewSectionCard} aria-labelledby="trip-operations-title">
+      <section
+        style={overviewSectionCard}
+        aria-labelledby="trip-operations-title"
+      >
         <OverviewSectionHeader
           eyebrow="MONITOR"
           title="Trip operations"
           titleId="trip-operations-title"
           description="Track the work that needs attention before departure."
         />
-      <div style={{ display: "grid", gap: 12, minWidth: 0, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 200px), 1fr))" }}>
-        <KpiCard
-          icon={Users}
-          label="Participants"
-          value={partCount}
-          hint={participantHint}
-          onClick={() => onJump?.("participants")}
-        />
-        <KpiCard
-          icon={FileText}
-          label="Required docs"
-          value={docCount}
-          hint={docCount === 0 ? "None required yet" : `${ops?.documents?.submittedCount ?? 0} submitted`}
-          onClick={() => onJump?.("documents")}
-        />
-        <KpiCard
-          icon={CheckCircle2}
-          label="Trip status"
-          value={(trip.status || "—").toUpperCase()}
-          hint={ops?.computedAt ? "Live rollup" : "—"}
-          tone={trip.status}
-        />
-      </div>
+        <div
+          style={{
+            display: "grid",
+            gap: 12,
+            minWidth: 0,
+            gridTemplateColumns:
+              "repeat(auto-fit, minmax(min(100%, 200px), 1fr))",
+          }}
+        >
+          <KpiCard
+            icon={Users}
+            label="Participants"
+            value={partCount}
+            hint={participantHint}
+            onClick={() => onJump?.("participants")}
+          />
+          <KpiCard
+            icon={FileText}
+            label="Required docs"
+            value={docCount}
+            hint={
+              docCount === 0
+                ? "None required yet"
+                : `${ops?.documents?.submittedCount ?? 0} submitted`
+            }
+            onClick={() => onJump?.("documents")}
+          />
+          <KpiCard
+            icon={CheckCircle2}
+            label="Trip status"
+            value={(trip.status || "—").toUpperCase()}
+            hint={ops?.computedAt ? "Live rollup" : "—"}
+            tone={trip.status}
+          />
+        </div>
 
-      <div style={overviewTwoColumnGrid}>
+        <div style={overviewTwoColumnGrid}>
+          {/* Payment band — wider visualisation */}
+          <SummaryBand
+            icon={Wallet}
+            title="Payment plan"
+            onClick={() => onJump?.("payment")}
+            status={trip.paymentPlan ? "Configured" : "Not set yet"}
+            statusTone={trip.paymentPlan ? "good" : "warn"}
+          >
+            {pay && pay.expectedTotalRupees > 0 && partCount > 0 ? (
+              <PaymentBand pay={pay} />
+            ) : (
+              <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+                {trip.paymentPlan
+                  ? "Plan set — instalments will materialise once participants are linked."
+                  : "No payment plan yet. Open Payment plan tab to create one."}
+              </div>
+            )}
+          </SummaryBand>
 
-      {/* Payment band — wider visualisation */}
-      <SummaryBand
-        icon={Wallet}
-        title="Payment plan"
-        onClick={() => onJump?.("payment")}
-        status={trip.paymentPlan ? "Configured" : "Not set yet"}
-        statusTone={trip.paymentPlan ? "good" : "warn"}
-      >
-        {pay && pay.expectedTotalRupees > 0 && partCount > 0 ? (
-          <PaymentBand pay={pay} />
-        ) : (
-          <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-            {trip.paymentPlan
-              ? "Plan set — instalments will materialise once participants are linked."
-              : "No payment plan yet. Open Payment plan tab to create one."}
-          </div>
-        )}
-      </SummaryBand>
+          {/* Rooming band */}
+          <SummaryBand
+            icon={BedDouble}
+            title="Rooming"
+            onClick={() => onJump?.("rooming")}
+            status={
+              room?.assignmentCount
+                ? `${room.assignmentCount} room${room.assignmentCount === 1 ? "" : "s"}`
+                : "No rooms yet"
+            }
+            statusTone={room?.assignmentCount ? "good" : "muted"}
+          >
+            {room && partCount > 0 ? (
+              <RoomingBand
+                room={room}
+                totalParticipants={partCount}
+                pct={comp.roomingPct}
+              />
+            ) : (
+              <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+                {partCount === 0
+                  ? "Add participants first, then assign rooms."
+                  : "No rooming assignments yet."}
+              </div>
+            )}
+          </SummaryBand>
 
-      {/* Rooming band */}
-      <SummaryBand
-        icon={BedDouble}
-        title="Rooming"
-        onClick={() => onJump?.("rooming")}
-        status={room?.assignmentCount ? `${room.assignmentCount} room${room.assignmentCount === 1 ? "" : "s"}` : "No rooms yet"}
-        statusTone={room?.assignmentCount ? "good" : "muted"}
-      >
-        {room && partCount > 0 ? (
-          <RoomingBand room={room} totalParticipants={partCount} pct={comp.roomingPct} />
-        ) : (
-          <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-            {partCount === 0 ? "Add participants first, then assign rooms." : "No rooming assignments yet."}
-          </div>
-        )}
-      </SummaryBand>
-
-      {/* Public Experience band — landing page and registration entry point. */}
-      </div>
+          {/* Public Experience band — landing page and registration entry point. */}
+        </div>
       </section>
 
       <TripFinancialSummary trip={trip} />
@@ -441,26 +748,58 @@ function OverviewTab({ trip, onJump, notify, page, sharingChanged }) {
           title="Access and sharing"
           titleId="trip-access-title"
           description="Control who can manage this trip and how parents enter the registration flow."
-          trailing={isAdmin ? <CopyTeacherPortalLinkButton notify={notify} /> : null}
+          trailing={
+            isAdmin ? <CopyTeacherPortalLinkButton notify={notify} /> : null
+          }
         />
-        <TeacherAssignment sharingChanged={sharingChanged} trip={trip} notify={notify} isAdmin={isAdmin} embedded />
+        <TeacherAssignment
+          sharingChanged={sharingChanged}
+          trip={trip}
+          notify={notify}
+          isAdmin={isAdmin}
+          embedded
+        />
       </section>
 
       <div style={overviewSupportGrid}>
-        {(trip.familyParent || (trip.familyVariants || []).length > 0) && <TripFamilyCard trip={trip} />}
-      <LandingPageCard trip={trip} page={page} loading={page === undefined} />
+        {(trip.familyParent || (trip.familyVariants || []).length > 0) && (
+          <TripFamilyCard trip={trip} />
+        )}
+        <LandingPageCard trip={trip} page={page} loading={page === undefined} />
       </div>
     </div>
   );
 }
 
-function OverviewSectionHeader({ eyebrow, title, description, trailing, titleId }) {
+function OverviewSectionHeader({
+  eyebrow,
+  title,
+  description,
+  trailing,
+  titleId,
+}) {
   return (
     <div style={overviewSectionHeader}>
       <div style={{ minWidth: 0 }}>
         <div style={overviewEyebrow}>{eyebrow}</div>
-        <h2 id={titleId} style={{ margin: "5px 0 0", fontSize: 17, lineHeight: 1.25 }}>{title}</h2>
-        {description && <p style={{ margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.45 }}>{description}</p>}
+        <h2
+          id={titleId}
+          style={{ margin: "5px 0 0", fontSize: 17, lineHeight: 1.25 }}
+        >
+          {title}
+        </h2>
+        {description && (
+          <p
+            style={{
+              margin: "5px 0 0",
+              color: "var(--text-secondary)",
+              fontSize: 12,
+              lineHeight: 1.45,
+            }}
+          >
+            {description}
+          </p>
+        )}
       </div>
       {trailing}
     </div>
@@ -476,14 +815,28 @@ function CopyTeacherPortalLinkButton({ notify }) {
       await navigator.clipboard.writeText(getTeacherRegistrationLink());
       notify.success("Teacher registration link copied");
     } catch {
-      notify.error("Copy was not available. Select and copy the link manually.");
+      notify.error(
+        "Copy was not available. Select and copy the link manually.",
+      );
     } finally {
       setCopying(false);
     }
   };
 
   return (
-    <button type="button" className="btn-secondary" onClick={copyLink} disabled={copying} style={{ display: "inline-flex", alignItems: "center", alignSelf: "center", gap: 6, flexShrink: 0 }}>
+    <button
+      type="button"
+      className="btn-secondary"
+      onClick={copyLink}
+      disabled={copying}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        alignSelf: "center",
+        gap: 6,
+        flexShrink: 0,
+      }}
+    >
       <Copy size={14} /> {copying ? "Copying..." : "Copy teacher portal link"}
     </button>
   );
@@ -491,7 +844,9 @@ function CopyTeacherPortalLinkButton({ notify }) {
 
 function TripFamilyCard({ trip }) {
   const primary = trip.familyParent || trip;
-  const variants = Array.isArray(trip.familyVariants) ? trip.familyVariants : [];
+  const variants = Array.isArray(trip.familyVariants)
+    ? trip.familyVariants
+    : [];
 
   return (
     <section
@@ -502,15 +857,36 @@ function TripFamilyCard({ trip }) {
         padding: 14,
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: 12,
+          flexWrap: "wrap",
+        }}
+      >
         <div>
           <h2 style={{ margin: 0, fontSize: 16 }}>Trip family</h2>
-          <p style={{ margin: "6px 0 0", color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.45 }}>
+          <p
+            style={{
+              margin: "6px 0 0",
+              color: "var(--text-secondary)",
+              fontSize: 12,
+              lineHeight: 1.45,
+            }}
+          >
             Shared itinerary grouping only. Teacher assignments, landing pages,
-            parent links, registrations, participants, and payments remain separate.
+            parent links, registrations, participants, and payments remain
+            separate.
           </p>
         </div>
-        <span style={{ color: "var(--text-secondary)", fontSize: 12, alignSelf: "center" }}>
+        <span
+          style={{
+            color: "var(--text-secondary)",
+            fontSize: 12,
+            alignSelf: "center",
+          }}
+        >
           {trip.familyParent
             ? "School variant"
             : `${variants.length} school variant${variants.length === 1 ? "" : "s"}`}
@@ -519,7 +895,11 @@ function TripFamilyCard({ trip }) {
       <div style={{ display: "grid", gap: 8, marginTop: 12 }}>
         <Link
           to={`/travel/trips/${primary.id}`}
-          style={{ color: "var(--primary-color, var(--accent-color))", fontWeight: 600, textDecoration: "none" }}
+          style={{
+            color: "var(--primary-color, var(--accent-color))",
+            fontWeight: 600,
+            textDecoration: "none",
+          }}
         >
           Primary trip: {primary.tripCode}
         </Link>
@@ -527,7 +907,11 @@ function TripFamilyCard({ trip }) {
           <Link
             key={variant.id}
             to={`/travel/trips/${variant.id}`}
-            style={{ color: "var(--text-primary)", textDecoration: "none", fontSize: 13 }}
+            style={{
+              color: "var(--text-primary)",
+              textDecoration: "none",
+              fontSize: 13,
+            }}
           >
             {variant.tripCode} · {variant.destination}
           </Link>
@@ -539,7 +923,9 @@ function TripFamilyCard({ trip }) {
 
 function getAssignedTeacherIds(trip) {
   const idsFromAssignments = Array.isArray(trip.teacherAssignments)
-    ? trip.teacherAssignments.map((assignment) => assignment?.teacherContactId).filter(Boolean)
+    ? trip.teacherAssignments
+        .map((assignment) => assignment?.teacherContactId)
+        .filter(Boolean)
     : [];
   const ids = idsFromAssignments.length
     ? idsFromAssignments
@@ -551,23 +937,35 @@ function getAssignedTeacherIds(trip) {
   return [...new Set(ids.map((id) => String(id)))];
 }
 
-function TeacherAssignment({ trip, notify, isAdmin, sharingChanged, embedded = false }) {
+function TeacherAssignment({
+  trip,
+  notify,
+  isAdmin,
+  sharingChanged,
+  embedded = false,
+}) {
   const [teachers, setTeachers] = useState([]);
   const assignmentKey = getAssignedTeacherIds(trip).join(",");
-  const [teacherIds, setTeacherIds] = useState(() => assignmentKey ? assignmentKey.split(",") : []);
-  const [savedTeacherIds, setSavedTeacherIds] = useState(() => assignmentKey ? assignmentKey.split(",") : []);
+  const [teacherIds, setTeacherIds] = useState(() =>
+    assignmentKey ? assignmentKey.split(",") : [],
+  );
+  const [savedTeacherIds, setSavedTeacherIds] = useState(() =>
+    assignmentKey ? assignmentKey.split(",") : [],
+  );
   const [parentLink, setParentLink] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [generatingLink, setGeneratingLink] = useState(false);
   const [teacherPickerOpen, setTeacherPickerOpen] = useState(false);
   const teacherPickerRef = useRef(null);
+  const teacherPickerMenuRef = useRef(null);
 
   useEffect(() => {
     let active = true;
     fetchApi("/api/portal/tmc/staff/teachers", { silent: true })
       .then((result) => {
-        if (active) setTeachers(Array.isArray(result?.teachers) ? result.teachers : []);
+        if (active)
+          setTeachers(Array.isArray(result?.teachers) ? result.teachers : []);
       })
       .catch(() => {
         if (active) setTeachers([]);
@@ -575,7 +973,9 @@ function TeacherAssignment({ trip, notify, isAdmin, sharingChanged, embedded = f
       .finally(() => {
         if (active) setLoading(false);
       });
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -588,10 +988,18 @@ function TeacherAssignment({ trip, notify, isAdmin, sharingChanged, embedded = f
   useEffect(() => {
     if (!teacherPickerOpen) return undefined;
     const closeOnOutsideClick = (event) => {
-      if (!teacherPickerRef.current?.contains(event.target)) setTeacherPickerOpen(false);
+      if (
+        !teacherPickerRef.current?.contains(event.target) &&
+        !teacherPickerMenuRef.current?.contains(event.target)
+      ) {
+        setTeacherPickerOpen(false);
+      }
     };
     const closeOnEscape = (event) => {
-      if (event.key === "Escape") setTeacherPickerOpen(false);
+      if (event.key === "Escape") {
+        setTeacherPickerOpen(false);
+        teacherPickerRef.current?.querySelector("button")?.focus();
+      }
     };
     document.addEventListener("pointerdown", closeOnOutsideClick);
     document.addEventListener("keydown", closeOnEscape);
@@ -603,12 +1011,14 @@ function TeacherAssignment({ trip, notify, isAdmin, sharingChanged, embedded = f
 
   const toggleTeacher = (teacherId, checked) => {
     setTeacherIds((current) => {
-      if (checked) return current.includes(teacherId) ? current : [...current, teacherId];
+      if (checked)
+        return current.includes(teacherId) ? current : [...current, teacherId];
       return current.filter((id) => id !== teacherId);
     });
   };
   const normalizeIds = (ids) => [...ids].sort().join(",");
-  const assignmentSaved = normalizeIds(teacherIds) === normalizeIds(savedTeacherIds);
+  const assignmentSaved =
+    normalizeIds(teacherIds) === normalizeIds(savedTeacherIds);
   const selectedTeacherNames = teachers
     .filter((teacher) => teacherIds.includes(String(teacher.id)))
     .map((teacher) => teacher.name || teacher.email || "Teacher");
@@ -623,12 +1033,22 @@ function TeacherAssignment({ trip, notify, isAdmin, sharingChanged, embedded = f
         method: "PATCH",
         body: JSON.stringify({ teacherContactIds: teacherIds.map(Number) }),
       });
-      if (!assignmentSaved || Number(teacherIds[0] || 0) !== Number(trip.teacherContactId || 0)) sharingChanged(teacherIds, false);
+      if (
+        !assignmentSaved ||
+        Number(teacherIds[0] || 0) !== Number(trip.teacherContactId || 0)
+      )
+        sharingChanged(teacherIds, false);
       setSavedTeacherIds(teacherIds);
       setParentLink("");
-      notify.success(teacherIds.length ? "Teachers assigned to this trip" : "Teacher assignments removed");
+      notify.success(
+        teacherIds.length
+          ? "Teachers assigned to this trip"
+          : "Teacher assignments removed",
+      );
     } catch (error) {
-      notify.error(error?.body?.error || "Could not update the teacher assignment");
+      notify.error(
+        error?.body?.error || "Could not update the teacher assignment",
+      );
     } finally {
       setSaving(false);
     }
@@ -638,12 +1058,17 @@ function TeacherAssignment({ trip, notify, isAdmin, sharingChanged, embedded = f
     if (!isAdmin || !teacherIds.length || !assignmentSaved) return;
     setGeneratingLink(true);
     try {
-      const result = await fetchApi(`/api/portal/tmc/staff/trips/${trip.id}/parent-link`, { method: "POST" });
+      const result = await fetchApi(
+        `/api/portal/tmc/staff/trips/${trip.id}/parent-link`,
+        { method: "POST" },
+      );
       setParentLink(result?.link || "");
       if (result?.link) sharingChanged(savedTeacherIds, true);
       notify.success("Parent registration link generated");
     } catch (error) {
-      notify.error(error?.body?.error || "Could not generate the parent registration link");
+      notify.error(
+        error?.body?.error || "Could not generate the parent registration link",
+      );
     } finally {
       setGeneratingLink(false);
     }
@@ -655,51 +1080,154 @@ function TeacherAssignment({ trip, notify, isAdmin, sharingChanged, embedded = f
       await navigator.clipboard.writeText(parentLink);
       notify.success("Parent registration link copied");
     } catch {
-      notify.error("Copy was not available. Select and copy the link manually.");
+      notify.error(
+        "Copy was not available. Select and copy the link manually.",
+      );
     }
   };
 
   return (
-    <section style={{
-      background: embedded ? "transparent" : "var(--bg-color, #111318)",
-      border: embedded ? 0 : "1px solid var(--border-color)",
-      borderRadius: 10,
-      padding: embedded ? 0 : 14,
-    }}>
-      <div className="ts-highlight-target" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", zIndex: teacherPickerOpen ? 1 : undefined }}>
-        <div>
-          <div style={{ fontSize: 14, fontWeight: 600 }}>Teacher portal access</div>
-          <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
-            Assign one or more teachers. Each assigned teacher sees the same trip details and registrations.
+    <section
+      style={{
+        background: embedded ? "transparent" : "var(--bg-color, #111318)",
+        border: embedded ? 0 : "1px solid var(--border-color)",
+        borderRadius: 10,
+        padding: embedded ? 0 : 14,
+      }}
+    >
+      <div
+        className="ts-highlight-target"
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 12,
+          flexWrap: "wrap",
+          zIndex: teacherPickerOpen ? 1 : undefined,
+        }}
+      >
+        <div style={{ minWidth: 0, flex: "1 1 320px" }}>
+          <div style={{ fontSize: 14, fontWeight: 600 }}>
+            Teacher portal access
+          </div>
+          <div
+            style={{
+              fontSize: 12,
+              color: "var(--text-secondary)",
+              marginTop: 4,
+            }}
+          >
+            Assign one or more teachers. Each assigned teacher sees the same
+            trip details and registrations.
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 8,
+            flexWrap: "wrap",
+          }}
+        >
           {teachers.length > 0 && (
-            <div className="ts-teacher-picker" ref={teacherPickerRef} style={{ position: "relative", width: 230, maxWidth: "100%", minWidth: 0 }}>
+            <div
+              className="ts-teacher-picker"
+              ref={teacherPickerRef}
+              style={{
+                position: "relative",
+                minWidth: "min(230px, calc(100vw - 40px))",
+                flex: "0 1 230px",
+              }}
+            >
               <button
                 type="button"
                 className="btn-secondary"
-                aria-label={selectedTeacherNames.length ? `Assigned teachers: ${selectedTeacherNames.join(", ")}` : "Select teachers"}
+                aria-controls={`tmc-teacher-picker-${trip.id}`}
+                aria-label={
+                  selectedTeacherNames.length
+                    ? `Assigned teachers: ${selectedTeacherNames.join(", ")}`
+                    : "Select teachers"
+                }
                 aria-haspopup="true"
                 aria-expanded={teacherPickerOpen}
                 onClick={() => setTeacherPickerOpen((open) => !open)}
                 disabled={loading || saving}
-                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, width: "100%", minWidth: 0, overflowWrap: "anywhere", textAlign: "left" }}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  width: "100%",
+                  minWidth: "min(230px, calc(100vw - 40px))",
+                  maxWidth: 300,
+                  overflowWrap: "anywhere",
+                  textAlign: "left",
+                }}
               >
-                <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{teacherPickerLabel}</span>
-                <ChevronDown size={15} style={{ flexShrink: 0, transform: teacherPickerOpen ? "rotate(180deg)" : undefined }} />
+                <span
+                  style={{
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {teacherPickerLabel}
+                </span>
+                <ChevronDown
+                  size={15}
+                  style={{
+                    flexShrink: 0,
+                    transform: teacherPickerOpen ? "rotate(180deg)" : undefined,
+                  }}
+                />
               </button>
               {teacherPickerOpen && (
-                <div role="group" aria-label="Available TMC teachers" style={{ position: "absolute", zIndex: 30, top: "calc(100% + 6px)", right: 0, minWidth: "100%", maxHeight: 240, overflowY: "auto", padding: 8, border: "1px solid var(--border-color)", borderRadius: 8, background: "var(--popover-bg, #fff)", boxShadow: "0 10px 24px rgba(20, 24, 35, 0.16)" }}>
+                <div
+                  ref={teacherPickerMenuRef}
+                  id={`tmc-teacher-picker-${trip.id}`}
+                  role="group"
+                  aria-label="Available TMC teachers"
+                  style={{
+                    width: "100%",
+                    minWidth: "min(230px, calc(100vw - 40px))",
+                    boxSizing: "border-box",
+                    maxWidth: "min(300px, calc(100vw - 40px))",
+                    maxHeight: 240,
+                    overflowY: "auto",
+                    overscrollBehavior: "contain",
+                    padding: 8,
+                    border: "1px solid var(--border-color)",
+                    borderRadius: 8,
+                    background: "var(--surface-color, #fff)",
+                    color: "var(--text-primary)",
+                    boxShadow: "0 6px 16px rgba(20, 24, 35, 0.12)",
+                    marginTop: 6,
+                  }}
+                >
                   {teachers.map((teacher) => {
                     const id = String(teacher.id);
                     return (
-                      <label key={teacher.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", fontSize: 13, color: "var(--text-primary)", cursor: "pointer", whiteSpace: "nowrap" }}>
+                      <label
+                        key={teacher.id}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          padding: "7px 4px",
+                          fontSize: 13,
+                          color: "var(--text-primary)",
+                          cursor: "pointer",
+                          overflowWrap: "anywhere",
+                        }}
+                      >
                         <input
                           type="checkbox"
                           aria-label={teacher.name || teacher.email}
                           checked={teacherIds.includes(id)}
-                          onChange={(event) => toggleTeacher(id, event.target.checked)}
+                          onChange={(event) =>
+                            toggleTeacher(id, event.target.checked)
+                          }
                         />
                         <span>{teacher.name || teacher.email}</span>
                       </label>
@@ -709,36 +1237,154 @@ function TeacherAssignment({ trip, notify, isAdmin, sharingChanged, embedded = f
               )}
             </div>
           )}
-          <button type="button" className="btn-secondary" onClick={save} disabled={loading || saving}>{saving ? "Saving…" : "Save teachers"}</button>
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={save}
+            disabled={loading || saving}
+          >
+            {saving ? "Saving…" : "Save teachers"}
+          </button>
         </div>
         <StepHighlight anchor="teacher" />
       </div>
-      {!loading && teachers.length === 0 && <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)" }}>No TMC teachers have registered yet. Copy the teacher portal link to invite them.</div>}
-      {!loading && teachers.length === 0 && teacherIds.length > 0 && <button type="button" className="btn-secondary" onClick={() => setTeacherIds([])}>Clear unavailable assignments</button>}
-      {isAdmin && teachers.length > 0 && teacherIds.length > 0 && assignmentSaved && (
-        <div className="ts-highlight-target" style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border-color)" }}>
-          <StepHighlight anchor="parent" />
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>Parent registration</div>
-              <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 3 }}>
-                Generate the trip-specific link to share with parents.
-              </div>
-            </div>
-            <button type="button" className="btn-secondary" onClick={generateParentLink} disabled={generatingLink} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <Link2 size={14} /> {generatingLink ? "Generating..." : "Generate parent link"}
-            </button>
-          </div>
-          {parentLink && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-              <input aria-label="Parent registration link" readOnly value={parentLink} onFocus={(event) => event.target.select()} style={{ flex: "1 1 300px", minWidth: 0, width: "auto", boxSizing: "border-box", padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border-color)", background: "var(--input-bg)", color: "var(--text-secondary)", fontSize: 12 }} />
-              <button type="button" className="btn-secondary" onClick={copyParentLink} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><Copy size={14} /> Copy link</button>
-              <a href={parentLink} target="_blank" rel="noreferrer" className="btn-secondary" aria-label="Open parent registration link" style={{ display: "inline-flex", alignItems: "center", padding: "8px 10px" }}><ExternalLink size={14} /></a>
-            </div>
-          )}
+      {!loading && teachers.length === 0 && (
+        <div
+          style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)" }}
+        >
+          No TMC teachers have registered yet. Copy the teacher portal link to
+          invite them.
         </div>
       )}
-      {isAdmin && teachers.length > 0 && teacherIds.length > 0 && !assignmentSaved && <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-secondary)" }}>Save the teacher assignments before generating the parent registration link.</div>}
+      {!loading && teachers.length === 0 && teacherIds.length > 0 && (
+        <button
+          type="button"
+          className="btn-secondary"
+          onClick={() => setTeacherIds([])}
+        >
+          Clear unavailable assignments
+        </button>
+      )}
+      {isAdmin &&
+        teachers.length > 0 &&
+        teacherIds.length > 0 &&
+        assignmentSaved && (
+          <div
+            className="ts-highlight-target"
+            style={{
+              marginTop: 12,
+              paddingTop: 12,
+              borderTop: "1px solid var(--border-color)",
+            }}
+          >
+            <StepHighlight anchor="parent" />
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 10,
+                flexWrap: "wrap",
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>
+                  Parent registration
+                </div>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "var(--text-secondary)",
+                    marginTop: 3,
+                  }}
+                >
+                  Generate the trip-specific link to share with parents.
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={generateParentLink}
+                disabled={generatingLink}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+              >
+                <Link2 size={14} />{" "}
+                {generatingLink ? "Generating..." : "Generate parent link"}
+              </button>
+            </div>
+            {parentLink && (
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  flexWrap: "wrap",
+                  marginTop: 10,
+                }}
+              >
+                <input
+                  aria-label="Parent registration link"
+                  readOnly
+                  value={parentLink}
+                  onFocus={(event) => event.target.select()}
+                  style={{
+                    flex: "1 1 300px",
+                    minWidth: 0,
+                    width: "auto",
+                    boxSizing: "border-box",
+                    padding: "8px 10px",
+                    borderRadius: 8,
+                    border: "1px solid var(--border-color)",
+                    background: "var(--input-bg)",
+                    color: "var(--text-secondary)",
+                    fontSize: 12,
+                  }}
+                />
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={copyParentLink}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  <Copy size={14} /> Copy link
+                </button>
+                <a
+                  href={parentLink}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="btn-secondary"
+                  aria-label="Open parent registration link"
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    padding: "8px 10px",
+                  }}
+                >
+                  <ExternalLink size={14} />
+                </a>
+              </div>
+            )}
+          </div>
+        )}
+      {isAdmin &&
+        teachers.length > 0 &&
+        teacherIds.length > 0 &&
+        !assignmentSaved && (
+          <div
+            style={{
+              marginTop: 8,
+              fontSize: 12,
+              color: "var(--text-secondary)",
+            }}
+          >
+            Save the teacher assignments before generating the parent
+            registration link.
+          </div>
+        )}
     </section>
   );
 }
@@ -747,32 +1393,68 @@ function ReadinessGauge({ score, components }) {
   // score === null when insufficient data (no participants OR no expected
   // payments). Show "Insufficient data" rather than a fabricated 0%.
   const hasScore = typeof score === "number";
-  const color = !hasScore ? "var(--text-secondary)"
-    : score >= 80 ? "#2F7A4D"
-    : score >= 50 ? "#9A6F2E"
-    : "#A8323F";
+  const color = !hasScore
+    ? "var(--text-secondary)"
+    : score >= 80
+      ? "#2F7A4D"
+      : score >= 50
+        ? "#9A6F2E"
+        : "#A8323F";
   const ringPct = hasScore ? score : 0;
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-      <div style={{
-        position: "relative", width: 96, height: 96, flexShrink: 0,
-        borderRadius: "50%",
-        background: `conic-gradient(${color} ${ringPct * 3.6}deg, var(--subtle-bg) 0)`,
-      }}>
-        <div style={{
-          position: "absolute", inset: 6, borderRadius: "50%",
-          background: "var(--bg-color, #111318)",
-          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-        }}>
-          <div style={{ fontSize: 22, fontWeight: 700, color, lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>
+      <div
+        style={{
+          position: "relative",
+          width: 96,
+          height: 96,
+          flexShrink: 0,
+          borderRadius: "50%",
+          background: `conic-gradient(${color} ${ringPct * 3.6}deg, var(--subtle-bg) 0)`,
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            inset: 6,
+            borderRadius: "50%",
+            background: "var(--bg-color, #111318)",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 22,
+              fontWeight: 700,
+              color,
+              lineHeight: 1,
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
             {hasScore ? score : "—"}
           </div>
-          {hasScore && <div style={{ fontSize: 10, color: "var(--text-secondary)" }}>%</div>}
+          {hasScore && (
+            <div style={{ fontSize: 10, color: "var(--text-secondary)" }}>
+              %
+            </div>
+          )}
         </div>
       </div>
       <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ fontSize: 13, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 4, marginBottom: 6 }}>
+        <div
+          style={{
+            fontSize: 13,
+            color: "var(--text-secondary)",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            marginBottom: 6,
+          }}
+        >
           <TrendingUp size={13} aria-hidden /> Departure readiness
         </div>
         {hasScore ? (
@@ -795,12 +1477,41 @@ function ReadinessGauge({ score, components }) {
 function MiniBar({ label, pct }) {
   const v = typeof pct === "number" ? pct : 0;
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "60px 1fr 32px", alignItems: "center", gap: 6 }}>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "60px 1fr 32px",
+        alignItems: "center",
+        gap: 6,
+      }}
+    >
       <span style={{ color: "var(--text-secondary)" }}>{label}</span>
-      <span style={{ background: "var(--subtle-bg)", borderRadius: 3, height: 6, overflow: "hidden" }}>
-        <span style={{ display: "block", width: `${v}%`, height: "100%", background: "var(--primary-color)" }} />
+      <span
+        style={{
+          background: "var(--subtle-bg)",
+          borderRadius: 3,
+          height: 6,
+          overflow: "hidden",
+        }}
+      >
+        <span
+          style={{
+            display: "block",
+            width: `${v}%`,
+            height: "100%",
+            background: "var(--primary-color)",
+          }}
+        />
       </span>
-      <span style={{ textAlign: "right", color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums" }}>{v}%</span>
+      <span
+        style={{
+          textAlign: "right",
+          color: "var(--text-secondary)",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {v}%
+      </span>
     </div>
   );
 }
@@ -808,11 +1519,15 @@ function MiniBar({ label, pct }) {
 function KpiCard({ icon: Icon, label, value, hint, onClick, tone }) {
   const interactive = typeof onClick === "function";
   const toneColor =
-    tone === "completed" ? "#265855" :
-    tone === "confirmed" ? "#2F7A4D" :
-    tone === "in-trip" ? "#9A6F2E" :
-    tone === "cancelled" ? "#A8323F" :
-    "var(--text-primary)";
+    tone === "completed"
+      ? "#265855"
+      : tone === "confirmed"
+        ? "#2F7A4D"
+        : tone === "in-trip"
+          ? "#9A6F2E"
+          : tone === "cancelled"
+            ? "#A8323F"
+            : "var(--text-primary)";
   return (
     <button
       className="trip-overview-kpi-card"
@@ -820,62 +1535,159 @@ function KpiCard({ icon: Icon, label, value, hint, onClick, tone }) {
       onClick={interactive ? onClick : undefined}
       disabled={!interactive}
       style={{
-        textAlign: "left", width: "100%", minWidth: 0,
-        background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
-        borderRadius: 10, padding: 14,
+        textAlign: "left",
+        width: "100%",
+        minWidth: 0,
+        background: "var(--bg-color, #111318)",
+        border: "1px solid var(--border-color)",
+        borderRadius: 10,
+        padding: 14,
         cursor: interactive ? "pointer" : "default",
         transition: "border-color 120ms, transform 120ms",
         color: "inherit",
       }}
       onMouseEnter={(e) => {
-        if (interactive) e.currentTarget.style.borderColor = "var(--primary-color)";
+        if (interactive)
+          e.currentTarget.style.borderColor = "var(--primary-color)";
       }}
       onMouseLeave={(e) => {
-        if (interactive) e.currentTarget.style.borderColor = "var(--border-color)";
+        if (interactive)
+          e.currentTarget.style.borderColor = "var(--border-color)";
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", color: "var(--text-secondary)", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          color: "var(--text-secondary)",
+          fontSize: 11,
+          textTransform: "uppercase",
+          letterSpacing: 0.6,
+          marginBottom: 6,
+        }}
+      >
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <Icon size={13} aria-hidden /> {label}
         </span>
-        {interactive && <ArrowRight size={12} aria-hidden style={{ opacity: 0.5 }} />}
+        {interactive && (
+          <ArrowRight size={12} aria-hidden style={{ opacity: 0.5 }} />
+        )}
       </div>
-      <div style={{ minWidth: 0, overflowWrap: "anywhere", fontSize: 20, fontWeight: 700, color: toneColor, lineHeight: 1.1 }}>{value}</div>
-      {hint && <div style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 4 }}>{hint}</div>}
+      <div
+        style={{
+          minWidth: 0,
+          overflowWrap: "anywhere",
+          fontSize: 20,
+          fontWeight: 700,
+          color: toneColor,
+          lineHeight: 1.1,
+        }}
+      >
+        {value}
+      </div>
+      {hint && (
+        <div
+          style={{ fontSize: 11, color: "var(--text-secondary)", marginTop: 4 }}
+        >
+          {hint}
+        </div>
+      )}
     </button>
   );
 }
 
-function SummaryBand({ icon: Icon, title, status, statusTone, children, onClick }) {
+function SummaryBand({
+  icon: Icon,
+  title,
+  status,
+  statusTone,
+  children,
+  onClick,
+}) {
   const interactive = typeof onClick === "function";
   const bg =
-    statusTone === "good" ? "rgba(47,122,77,0.14)" :
-    statusTone === "warn" ? "rgba(200,154,78,0.18)" :
-    "var(--subtle-bg)";
+    statusTone === "good"
+      ? "rgba(47,122,77,0.14)"
+      : statusTone === "warn"
+        ? "rgba(200,154,78,0.18)"
+        : "var(--subtle-bg)";
   const fg =
-    statusTone === "good" ? "#2F7A4D" :
-    statusTone === "warn" ? "#9A6F2E" :
-    "var(--text-secondary)";
+    statusTone === "good"
+      ? "#2F7A4D"
+      : statusTone === "warn"
+        ? "#9A6F2E"
+        : "var(--text-secondary)";
   return (
     <div
       onClick={interactive ? onClick : undefined}
       role={interactive ? "button" : undefined}
       tabIndex={interactive ? 0 : undefined}
-      onKeyDown={interactive ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
+      onKeyDown={
+        interactive
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onClick();
+              }
+            }
+          : undefined
+      }
       style={{
-        background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
-        borderRadius: 10, padding: 14,
+        background: "var(--bg-color, #111318)",
+        border: "1px solid var(--border-color)",
+        borderRadius: 10,
+        padding: 14,
         cursor: interactive ? "pointer" : "default",
         transition: "border-color 120ms",
       }}
-      onMouseEnter={(e) => { if (interactive) e.currentTarget.style.borderColor = "var(--primary-color)"; }}
-      onMouseLeave={(e) => { if (interactive) e.currentTarget.style.borderColor = "var(--border-color)"; }}
+      onMouseEnter={(e) => {
+        if (interactive)
+          e.currentTarget.style.borderColor = "var(--primary-color)";
+      }}
+      onMouseLeave={(e) => {
+        if (interactive)
+          e.currentTarget.style.borderColor = "var(--border-color)";
+      }}
     >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
-        <div style={{ display: "inline-flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600 }}>
-          <Icon size={16} aria-hidden style={{ color: "var(--primary-color)" }} /> {title}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 10,
+          gap: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <div
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            fontSize: 14,
+            fontWeight: 600,
+          }}
+        >
+          <Icon
+            size={16}
+            aria-hidden
+            style={{ color: "var(--primary-color)" }}
+          />{" "}
+          {title}
         </div>
-        <span style={{ background: bg, color: fg, padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4 }}>
+        <span
+          style={{
+            background: bg,
+            color: fg,
+            padding: "3px 10px",
+            borderRadius: 12,
+            fontSize: 11,
+            fontWeight: 600,
+            textTransform: "uppercase",
+            letterSpacing: 0.4,
+          }}
+        >
           {status}
         </span>
       </div>
@@ -885,25 +1697,74 @@ function SummaryBand({ icon: Icon, title, status, statusTone, children, onClick 
 }
 
 function PaymentBand({ pay }) {
-  const pct = pay.expectedTotalRupees > 0
-    ? Math.min(100, Math.round((pay.receivedRupees / pay.expectedTotalRupees) * 100))
-    : 0;
+  const pct =
+    pay.expectedTotalRupees > 0
+      ? Math.min(
+          100,
+          Math.round((pay.receivedRupees / pay.expectedTotalRupees) * 100),
+        )
+      : 0;
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          fontSize: 13,
+          marginBottom: 6,
+          flexWrap: "wrap",
+          gap: 8,
+        }}
+      >
         <span style={{ color: "var(--text-secondary)" }}>
-          ₹{pay.receivedRupees.toLocaleString()} <span style={{ opacity: 0.7 }}>of</span> ₹{pay.expectedTotalRupees.toLocaleString()} received
+          ₹{pay.receivedRupees.toLocaleString()}{" "}
+          <span style={{ opacity: 0.7 }}>of</span> ₹
+          {pay.expectedTotalRupees.toLocaleString()} received
         </span>
         <strong style={{ fontVariantNumeric: "tabular-nums" }}>{pct}%</strong>
       </div>
-      <div style={{ background: "var(--subtle-bg)", borderRadius: 4, height: 8, overflow: "hidden", marginBottom: 10 }}>
-        <div style={{ width: `${pct}%`, height: "100%", background: "var(--primary-color)" }} />
+      <div
+        style={{
+          background: "var(--subtle-bg)",
+          borderRadius: 4,
+          height: 8,
+          overflow: "hidden",
+          marginBottom: 10,
+        }}
+      >
+        <div
+          style={{
+            width: `${pct}%`,
+            height: "100%",
+            background: "var(--primary-color)",
+          }}
+        />
       </div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", fontSize: 11 }}>
-        <PayChip icon={CheckCircle2} count={pay.paidCount} label="paid" color="#2F7A4D" />
-        <PayChip icon={Clock} count={pay.partialCount} label="partial" color="#9A6F2E" />
-        <PayChip icon={Clock} count={pay.pendingCount} label="pending" color="var(--text-secondary)" />
-        <PayChip icon={AlertCircle} count={pay.overdueCount} label="overdue" color="#A8323F" />
+        <PayChip
+          icon={CheckCircle2}
+          count={pay.paidCount}
+          label="paid"
+          color="#2F7A4D"
+        />
+        <PayChip
+          icon={Clock}
+          count={pay.partialCount}
+          label="partial"
+          color="#9A6F2E"
+        />
+        <PayChip
+          icon={Clock}
+          count={pay.pendingCount}
+          label="pending"
+          color="var(--text-secondary)"
+        />
+        <PayChip
+          icon={AlertCircle}
+          count={pay.overdueCount}
+          label="overdue"
+          color="#A8323F"
+        />
       </div>
     </div>
   );
@@ -912,12 +1773,20 @@ function PaymentBand({ pay }) {
 function PayChip({ icon: Icon, count, label, color }) {
   if (!count) return null;
   return (
-    <span style={{
-      display: "inline-flex", alignItems: "center", gap: 4,
-      padding: "3px 8px", borderRadius: 10, fontSize: 11, fontWeight: 600,
-      border: `1px solid ${color}`, color,
-      background: "var(--bg-color, #111318)",
-    }}>
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        padding: "3px 8px",
+        borderRadius: 10,
+        fontSize: 11,
+        fontWeight: 600,
+        border: `1px solid ${color}`,
+        color,
+        background: "var(--bg-color, #111318)",
+      }}
+    >
       <Icon size={11} aria-hidden /> {count} {label}
     </span>
   );
@@ -926,18 +1795,56 @@ function PayChip({ icon: Icon, count, label, color }) {
 function RoomingBand({ room, totalParticipants, pct }) {
   const roomed = room.participantsRoomed || 0;
   const unroomed = room.participantsUnroomed || 0;
-  const ringPct = typeof pct === "number" ? pct : (totalParticipants > 0 ? Math.round((roomed / totalParticipants) * 100) : 0);
+  const ringPct =
+    typeof pct === "number"
+      ? pct
+      : totalParticipants > 0
+        ? Math.round((roomed / totalParticipants) * 100)
+        : 0;
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 6, flexWrap: "wrap", gap: 8 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          fontSize: 13,
+          marginBottom: 6,
+          flexWrap: "wrap",
+          gap: 8,
+        }}
+      >
         <span style={{ color: "var(--text-secondary)" }}>
-          {roomed} <span style={{ opacity: 0.7 }}>of</span> {totalParticipants} participant{totalParticipants === 1 ? "" : "s"} assigned
-          {unroomed > 0 && <> · <strong style={{ color: "#9A6F2E" }}>{unroomed} unassigned</strong></>}
+          {roomed} <span style={{ opacity: 0.7 }}>of</span> {totalParticipants}{" "}
+          participant{totalParticipants === 1 ? "" : "s"} assigned
+          {unroomed > 0 && (
+            <>
+              {" "}
+              ·{" "}
+              <strong style={{ color: "#9A6F2E" }}>
+                {unroomed} unassigned
+              </strong>
+            </>
+          )}
         </span>
-        <strong style={{ fontVariantNumeric: "tabular-nums" }}>{ringPct}%</strong>
+        <strong style={{ fontVariantNumeric: "tabular-nums" }}>
+          {ringPct}%
+        </strong>
       </div>
-      <div style={{ background: "var(--subtle-bg)", borderRadius: 4, height: 8, overflow: "hidden" }}>
-        <div style={{ width: `${ringPct}%`, height: "100%", background: "var(--primary-color)" }} />
+      <div
+        style={{
+          background: "var(--subtle-bg)",
+          borderRadius: 4,
+          height: 8,
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            width: `${ringPct}%`,
+            height: "100%",
+            background: "var(--primary-color)",
+          }}
+        />
       </div>
     </div>
   );
@@ -950,13 +1857,23 @@ function StatusBadge({ status }) {
     completed: { bg: "rgba(38,88,85,0.16)", color: "#265855" },
     cancelled: { bg: "rgba(168,50,63,0.14)", color: "#A8323F" },
   };
-  const sc = colors[status] || { bg: "var(--subtle-bg)", color: "var(--text-secondary)" };
+  const sc = colors[status] || {
+    bg: "var(--subtle-bg)",
+    color: "var(--text-secondary)",
+  };
   return (
-    <span style={{
-      background: sc.bg, color: sc.color,
-      padding: "6px 14px", borderRadius: 20, fontSize: 13, fontWeight: 600,
-      textTransform: "uppercase", letterSpacing: 0.5,
-    }}>
+    <span
+      style={{
+        background: sc.bg,
+        color: sc.color,
+        padding: "6px 14px",
+        borderRadius: 20,
+        fontSize: 13,
+        fontWeight: 600,
+        textTransform: "uppercase",
+        letterSpacing: 0.5,
+      }}
+    >
       {status}
     </span>
   );
@@ -967,26 +1884,46 @@ function StatusBadge({ status }) {
 // Application-status pill colours mirror the Overview KPI hint colours so an
 // operator's eye can track a single visual language across both surfaces.
 const APP_STATUS_STYLES = {
-  pending:    { label: "PENDING REVIEW", bg: "rgba(200,154,78,0.18)", color: "#9A6F2E" },
-  approved:   { label: "APPROVED",       bg: "rgba(47,122,77,0.14)",  color: "#2F7A4D" },
-  rejected:   { label: "REJECTED",       bg: "rgba(168,50,63,0.14)",  color: "#A8323F" },
-  waitlisted: { label: "WAITLISTED",     bg: "rgba(38,88,85,0.16)",   color: "#265855" },
+  pending: {
+    label: "PENDING REVIEW",
+    bg: "rgba(200,154,78,0.18)",
+    color: "#9A6F2E",
+  },
+  approved: { label: "APPROVED", bg: "rgba(47,122,77,0.14)", color: "#2F7A4D" },
+  rejected: { label: "REJECTED", bg: "rgba(168,50,63,0.14)", color: "#A8323F" },
+  waitlisted: {
+    label: "WAITLISTED",
+    bg: "rgba(38,88,85,0.16)",
+    color: "#265855",
+  },
 };
 
 function StatusPill({ hasFirstPayment }) {
   const paid = Boolean(hasFirstPayment);
   return (
-    <span style={{
-      background: paid ? "rgba(47,122,77,0.14)" : "rgba(200,154,78,0.18)",
-      color: paid ? "#2F7A4D" : "#9A6F2E",
-      padding: "3px 10px", borderRadius: 12, fontSize: 11, fontWeight: 600,
-      letterSpacing: 0.4, whiteSpace: "nowrap",
-    }}>{paid ? "REGISTERED" : "AWAITING FIRST PAYMENT"}</span>
+    <span
+      style={{
+        background: paid ? "rgba(47,122,77,0.14)" : "rgba(200,154,78,0.18)",
+        color: paid ? "#2F7A4D" : "#9A6F2E",
+        padding: "3px 10px",
+        borderRadius: 12,
+        fontSize: 11,
+        fontWeight: 600,
+        letterSpacing: 0.4,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {paid ? "REGISTERED" : "AWAITING FIRST PAYMENT"}
+    </span>
   );
 }
 
 function normalizedDocumentName(value) {
-  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 function documentMatchesRequirement(document, requirement) {
@@ -994,43 +1931,74 @@ function documentMatchesRequirement(document, requirement) {
   if (document.documentRequirementId && requirement.id) {
     return Number(document.documentRequirementId) === Number(requirement.id);
   }
-  return normalizedDocumentName(document.documentType) === normalizedDocumentName(requirement.docType);
+  return (
+    normalizedDocumentName(document.documentType) ===
+    normalizedDocumentName(requirement.docType)
+  );
 }
 
 function documentRequirementLabel(requirement) {
   return String(requirement?.docType || "Document").trim() || "Document";
 }
 
-function DocumentStatusChips({ requirements, documents, onView, testIdPrefix }) {
+function DocumentStatusChips({
+  requirements,
+  documents,
+  onView,
+  testIdPrefix,
+}) {
   if (!requirements.length) {
-    return <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>No documents requested</span>;
+    return (
+      <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+        No documents requested
+      </span>
+    );
   }
   const chipBase = {
-    display: "inline-flex", alignItems: "center", gap: 4, padding: "5px 8px",
-    borderRadius: 6, border: "1px solid transparent", fontSize: 11, fontWeight: 650,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+    padding: "5px 8px",
+    borderRadius: 6,
+    border: "1px solid transparent",
+    fontSize: 11,
+    fontWeight: 650,
   };
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
       {requirements.map((requirement) => {
-        const document = [...documents].find((candidate) => documentMatchesRequirement(candidate, requirement));
+        const document = [...documents].find((candidate) =>
+          documentMatchesRequirement(candidate, requirement),
+        );
         return document ? (
           <button
             key={requirement.id}
             type="button"
-            style={{ ...chipBase, background: "rgba(47,122,77,0.12)", color: "#2F7A4D", cursor: "pointer" }}
+            style={{
+              ...chipBase,
+              background: "rgba(47,122,77,0.12)",
+              color: "#2F7A4D",
+              cursor: "pointer",
+            }}
             onClick={() => onView(document)}
             title={`View uploaded ${documentRequirementLabel(requirement)}`}
             data-testid={`view-${testIdPrefix}-${requirement.id}`}
           >
-            <FileText size={11} aria-hidden /> {documentRequirementLabel(requirement)} · View
+            <FileText size={11} aria-hidden />{" "}
+            {documentRequirementLabel(requirement)} · View
           </button>
         ) : (
           <span
             key={requirement.id}
-            style={{ ...chipBase, background: "rgba(100,116,139,0.10)", color: "var(--text-secondary)" }}
+            style={{
+              ...chipBase,
+              background: "rgba(100,116,139,0.10)",
+              color: "var(--text-secondary)",
+            }}
             data-testid={`missing-${testIdPrefix}-${requirement.id}`}
           >
-            <FileText size={11} aria-hidden /> {documentRequirementLabel(requirement)} · Pending
+            <FileText size={11} aria-hidden />{" "}
+            {documentRequirementLabel(requirement)} · Pending
           </span>
         );
       })}
@@ -1047,12 +2015,18 @@ const CONSENT_ANSWER_LABELS = {
 };
 
 function consentAnswerLabel(key) {
-  return CONSENT_ANSWER_LABELS[key]
-    || String(key || "Field").replace(/([A-Z])/g, " $1").replace(/^./, (letter) => letter.toUpperCase());
+  return (
+    CONSENT_ANSWER_LABELS[key] ||
+    String(key || "Field")
+      .replace(/([A-Z])/g, " $1")
+      .replace(/^./, (letter) => letter.toUpperCase())
+  );
 }
 
 function consentTermSections(value) {
-  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  const normalized = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!normalized) return [];
 
   return normalized
@@ -1060,13 +2034,21 @@ function consentTermSections(value) {
     .filter(Boolean)
     .map((chunk, index) => {
       if (index === 0) {
-        const introMatch = chunk.match(/^(TERMS AND CONDITIONS(?: FOR)?[A-Z0-9 &'()/,-]*?)(?=\s+[A-Z][a-z])\s+([\s\S]+)$/);
-        if (introMatch) return { heading: introMatch[1].trim(), body: introMatch[2].trim() };
+        const introMatch = chunk.match(
+          /^(TERMS AND CONDITIONS(?: FOR)?[A-Z0-9 &'()/,-]*?)(?=\s+[A-Z][a-z])\s+([\s\S]+)$/,
+        );
+        if (introMatch)
+          return { heading: introMatch[1].trim(), body: introMatch[2].trim() };
 
-        const titleOnlyMatch = chunk.match(/^(TERMS AND CONDITIONS(?: FOR)?[A-Z0-9 &'()/,-]*?)\s*$/);
-        if (titleOnlyMatch) return { heading: titleOnlyMatch[1].trim(), body: "" };
+        const titleOnlyMatch = chunk.match(
+          /^(TERMS AND CONDITIONS(?: FOR)?[A-Z0-9 &'()/,-]*?)\s*$/,
+        );
+        if (titleOnlyMatch)
+          return { heading: titleOnlyMatch[1].trim(), body: "" };
       }
-      const match = chunk.match(/^(\d+\.\s+[A-Z][A-Z0-9 &'()/,-]*?)(?=\s+(?:[A-Z]\.|[A-Z][a-z]))\s+([\s\S]+)$/);
+      const match = chunk.match(
+        /^(\d+\.\s+[A-Z][A-Z0-9 &'()/,-]*?)(?=\s+(?:[A-Z]\.|[A-Z][a-z]))\s+([\s\S]+)$/,
+      );
       return match
         ? { heading: match[1].trim(), body: match[2].trim() }
         : { heading: "", body: chunk.trim() };
@@ -1075,13 +2057,23 @@ function consentTermSections(value) {
 
 function ConsentTermsPreview({ terms }) {
   const sections = consentTermSections(terms);
-  if (!sections.length) return <p style={consentReviewStyles.emptyTerms}>No terms were recorded with this submission.</p>;
+  if (!sections.length)
+    return (
+      <p style={consentReviewStyles.emptyTerms}>
+        No terms were recorded with this submission.
+      </p>
+    );
 
   return (
     <div style={consentReviewStyles.termsContent}>
       {sections.map((section, index) => (
-        <div key={`${section.heading || "introduction"}-${index}`} style={consentReviewStyles.termSection}>
-          {section.heading && <h4 style={consentReviewStyles.termHeading}>{section.heading}</h4>}
+        <div
+          key={`${section.heading || "introduction"}-${index}`}
+          style={consentReviewStyles.termSection}
+        >
+          {section.heading && (
+            <h4 style={consentReviewStyles.termHeading}>{section.heading}</h4>
+          )}
           <p style={consentReviewStyles.termBody}>{section.body}</p>
         </div>
       ))}
@@ -1090,9 +2082,12 @@ function ConsentTermsPreview({ terms }) {
 }
 
 function DigitalConsentReviewModal({ person, document, onClose }) {
-  const answerEntries = Object.entries(document?.answers || {})
-    .filter(([key]) => !["parentEmail", "parentPhone"].includes(key));
-  const submittedAt = document?.agreedAt ? new Date(document.agreedAt).toLocaleString() : "-";
+  const answerEntries = Object.entries(document?.answers || {}).filter(
+    ([key]) => !["parentEmail", "parentPhone"].includes(key),
+  );
+  const submittedAt = document?.agreedAt
+    ? new Date(document.agreedAt).toLocaleString()
+    : "-";
 
   return (
     <div
@@ -1102,30 +2097,63 @@ function DigitalConsentReviewModal({ person, document, onClose }) {
       onClick={onClose}
       style={consentReviewStyles.overlay}
     >
-      <div onClick={(event) => event.stopPropagation()} style={consentReviewStyles.modal}>
+      <div
+        onClick={(event) => event.stopPropagation()}
+        style={consentReviewStyles.modal}
+      >
         <div style={consentReviewStyles.header}>
           <div style={consentReviewStyles.headerCopy}>
             <div style={consentReviewStyles.titleRow}>
-              <span style={consentReviewStyles.titleIcon}><CheckCircle2 size={18} aria-hidden /></span>
+              <span style={consentReviewStyles.titleIcon}>
+                <CheckCircle2 size={18} aria-hidden />
+              </span>
               <div>
-                <h2 id="digital-consent-details-title" style={consentReviewStyles.title}>Digital consent submission</h2>
-                <p style={consentReviewStyles.subtitle}>{person?.name || "Participant"} - {documentRequirementLabel(document)}</p>
+                <h2
+                  id="digital-consent-details-title"
+                  style={consentReviewStyles.title}
+                >
+                  Digital consent submission
+                </h2>
+                <p style={consentReviewStyles.subtitle}>
+                  {person?.name || "Participant"} -{" "}
+                  {documentRequirementLabel(document)}
+                </p>
               </div>
             </div>
             <div style={consentReviewStyles.submissionMeta}>
-              <span style={consentReviewStyles.acceptedBadge}><CheckCircle2 size={13} aria-hidden /> Submitted</span>
+              <span style={consentReviewStyles.acceptedBadge}>
+                <CheckCircle2 size={13} aria-hidden /> Submitted
+              </span>
               <span>Submitted {submittedAt}</span>
             </div>
           </div>
-          <button type="button" onClick={onClose} style={iconBtn} aria-label="Close digital consent details"><X size={17} /></button>
+          <button
+            type="button"
+            onClick={onClose}
+            style={iconBtn}
+            aria-label="Close digital consent details"
+          >
+            <X size={17} />
+          </button>
         </div>
 
-        <section style={consentReviewStyles.termsCard} aria-labelledby="digital-consent-terms-title">
+        <section
+          style={consentReviewStyles.termsCard}
+          aria-labelledby="digital-consent-terms-title"
+        >
           <div style={consentReviewStyles.sectionHeader}>
             <div>
               <span style={consentReviewStyles.sectionEyebrow}>Step 1</span>
-              <h3 id="digital-consent-terms-title" style={consentReviewStyles.sectionTitle}>Terms and conditions</h3>
-              <p style={consentReviewStyles.sectionHint}>The exact terms accepted by the parent at the time of submission.</p>
+              <h3
+                id="digital-consent-terms-title"
+                style={consentReviewStyles.sectionTitle}
+              >
+                Terms and conditions
+              </h3>
+              <p style={consentReviewStyles.sectionHint}>
+                The exact terms accepted by the parent at the time of
+                submission.
+              </p>
             </div>
             <span style={consentReviewStyles.termsBadge}>Terms accepted</span>
           </div>
@@ -1134,25 +2162,49 @@ function DigitalConsentReviewModal({ person, document, onClose }) {
           </div>
         </section>
 
-        <section style={consentReviewStyles.detailsCard} aria-labelledby="digital-consent-submitted-details-title">
+        <section
+          style={consentReviewStyles.detailsCard}
+          aria-labelledby="digital-consent-submitted-details-title"
+        >
           <div style={consentReviewStyles.sectionHeader}>
             <div>
               <span style={consentReviewStyles.sectionEyebrow}>Step 2</span>
-              <h3 id="digital-consent-submitted-details-title" style={consentReviewStyles.sectionTitle}>Submitted details</h3>
-              <p style={consentReviewStyles.sectionHint}>Information provided and signed by the parent or guardian.</p>
+              <h3
+                id="digital-consent-submitted-details-title"
+                style={consentReviewStyles.sectionTitle}
+              >
+                Submitted details
+              </h3>
+              <p style={consentReviewStyles.sectionHint}>
+                Information provided and signed by the parent or guardian.
+              </p>
             </div>
           </div>
           {answerEntries.length ? (
             <div style={consentReviewStyles.detailsGrid}>
               {answerEntries.map(([key, value]) => (
-                <div key={key} style={{ ...consentReviewStyles.detailItem, ...(key === "notes" ? consentReviewStyles.detailItemWide : {}) }}>
-                  <span style={consentReviewStyles.detailLabel}>{consentAnswerLabel(key)}</span>
-                  <span style={consentReviewStyles.detailValue}>{String(value || "-")}</span>
+                <div
+                  key={key}
+                  style={{
+                    ...consentReviewStyles.detailItem,
+                    ...(key === "notes"
+                      ? consentReviewStyles.detailItemWide
+                      : {}),
+                  }}
+                >
+                  <span style={consentReviewStyles.detailLabel}>
+                    {consentAnswerLabel(key)}
+                  </span>
+                  <span style={consentReviewStyles.detailValue}>
+                    {String(value || "-")}
+                  </span>
                 </div>
               ))}
             </div>
           ) : (
-            <p style={consentReviewStyles.emptyDetails}>No submitted details are available.</p>
+            <p style={consentReviewStyles.emptyDetails}>
+              No submitted details are available.
+            </p>
           )}
         </section>
       </div>
@@ -1170,35 +2222,73 @@ function formatParticipantStatus(value) {
 function formatParticipantDate(value) {
   if (!value) return "";
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleDateString();
+  return Number.isNaN(date.getTime())
+    ? String(value)
+    : date.toLocaleDateString();
 }
 
 function participantDetailsRows(person, trip) {
-  const school = person?.studentSchool || trip?.schoolName || (trip?.schoolContactId ? `School contact #${trip.schoolContactId}` : "");
+  const school =
+    person?.studentSchool ||
+    trip?.schoolName ||
+    (trip?.schoolContactId ? `School contact #${trip.schoolContactId}` : "");
   const rows = [
-    { label: "Participant name", value: person?.name || person?.fullName || person?.studentName, icon: UserRound },
+    {
+      label: "Participant name",
+      value: person?.name || person?.fullName || person?.studentName,
+      icon: UserRound,
+    },
     { label: "Parent / guardian", value: person?.parentName },
     { label: "Email", value: person?.parentEmail, icon: Mail },
-    { label: "Phone", value: person?.parentPhone || person?.otpPhone, icon: Phone },
+    {
+      label: "Phone",
+      value: person?.parentPhone || person?.otpPhone,
+      icon: Phone,
+    },
     { label: "School", value: school, icon: GraduationCap },
     { label: "Class / grade", value: person?.studentClass },
-    { label: "Date of birth", value: formatParticipantDate(person?.studentDob), icon: CalendarDays },
+    {
+      label: "Date of birth",
+      value: formatParticipantDate(person?.studentDob),
+      icon: CalendarDays,
+    },
     { label: "Gender", value: person?.studentGender },
     { label: "Parent relationship", value: person?.parentRelation },
-    { label: "Application status", value: formatParticipantStatus(person?.applicationStatus || person?.status) },
+    {
+      label: "Application status",
+      value: formatParticipantStatus(
+        person?.applicationStatus || person?.status,
+      ),
+    },
     { label: "Passport number", value: person?.passportNumber },
-    { label: "Passport expiry", value: formatParticipantDate(person?.passportExpiry) },
+    {
+      label: "Passport expiry",
+      value: formatParticipantDate(person?.passportExpiry),
+    },
     { label: "Passport nationality", value: person?.passportNationality },
     { label: "Passport place of issue", value: person?.passportPlaceOfIssue },
-    { label: "Review date", value: formatParticipantDate(person?.reviewedAt || person?.approvedAt || person?.rejectedAt) },
-    { label: "Consent captured", value: formatParticipantDate(person?.consentCapturedAt) },
+    {
+      label: "Review date",
+      value: formatParticipantDate(
+        person?.reviewedAt || person?.approvedAt || person?.rejectedAt,
+      ),
+    },
+    {
+      label: "Consent captured",
+      value: formatParticipantDate(person?.consentCapturedAt),
+    },
     { label: "Trip", value: trip?.tripCode },
     { label: "Destination", value: trip?.destination, icon: MapPin },
     { label: "Departure", value: formatParticipantDate(trip?.departDate) },
     { label: "Return", value: formatParticipantDate(trip?.returnDate) },
     { label: "Review notes", value: person?.reviewNotes, wide: true },
   ];
-  return rows.filter((row) => row.value !== null && row.value !== undefined && String(row.value).trim() !== "");
+  return rows.filter(
+    (row) =>
+      row.value !== null &&
+      row.value !== undefined &&
+      String(row.value).trim() !== "",
+  );
 }
 
 function ParticipantDetailsModal({ person, trip, onClose }) {
@@ -1220,28 +2310,59 @@ function ParticipantDetailsModal({ person, trip, onClose }) {
       onClick={onClose}
       style={participantDetailsStyles.overlay}
     >
-      <div onClick={(event) => event.stopPropagation()} style={participantDetailsStyles.modal}>
+      <div
+        onClick={(event) => event.stopPropagation()}
+        style={participantDetailsStyles.modal}
+      >
         <div style={participantDetailsStyles.header}>
           <div style={participantDetailsStyles.titleRow}>
-            <span style={participantDetailsStyles.titleIcon}><UserRound size={18} aria-hidden /></span>
+            <span style={participantDetailsStyles.titleIcon}>
+              <UserRound size={18} aria-hidden />
+            </span>
             <div>
-              <h2 id="participant-details-title" style={participantDetailsStyles.title}>Participant details</h2>
-              <p style={participantDetailsStyles.subtitle}>{person?.name || "Participant"}</p>
+              <h2
+                id="participant-details-title"
+                style={participantDetailsStyles.title}
+              >
+                Participant details
+              </h2>
+              <p style={participantDetailsStyles.subtitle}>
+                {person?.name || "Participant"}
+              </p>
             </div>
           </div>
-          <button type="button" onClick={onClose} style={iconBtn} aria-label="Close participant details">
+          <button
+            type="button"
+            onClick={onClose}
+            style={iconBtn}
+            aria-label="Close participant details"
+          >
             <X size={17} />
           </button>
         </div>
 
         <div style={participantDetailsStyles.detailsGrid}>
-          {details.length ? details.map(({ label, value, icon: Icon, wide }) => (
-            <div key={label} style={{ ...participantDetailsStyles.detailItem, ...(wide ? participantDetailsStyles.detailItemWide : {}) }}>
-              <span style={participantDetailsStyles.detailLabel}>{Icon && <Icon size={12} aria-hidden />} {label}</span>
-              <span style={participantDetailsStyles.detailValue}>{String(value)}</span>
-            </div>
-          )) : (
-            <p style={participantDetailsStyles.empty}>No additional participant details are available.</p>
+          {details.length ? (
+            details.map(({ label, value, icon: Icon, wide }) => (
+              <div
+                key={label}
+                style={{
+                  ...participantDetailsStyles.detailItem,
+                  ...(wide ? participantDetailsStyles.detailItemWide : {}),
+                }}
+              >
+                <span style={participantDetailsStyles.detailLabel}>
+                  {Icon && <Icon size={12} aria-hidden />} {label}
+                </span>
+                <span style={participantDetailsStyles.detailValue}>
+                  {String(value)}
+                </span>
+              </div>
+            ))
+          ) : (
+            <p style={participantDetailsStyles.empty}>
+              No additional participant details are available.
+            </p>
           )}
         </div>
       </div>
@@ -1256,39 +2377,68 @@ function SimpleParticipantsTab({ trip, onChange, notify }) {
   const [bulkImportModalOpen, setBulkImportModalOpen] = useState(false);
   const [viewingParticipant, setViewingParticipant] = useState(null);
   const importInputRef = useRef(null);
-  const requirements = Array.isArray(trip.documentRequirements) ? trip.documentRequirements : [];
-  const participants = Array.isArray(trip.participants) ? trip.participants : [];
-  const parentDocumentsByEmail = useMemo(() => new Map(
-    (trip.parentDocuments || []).map((row) => [
-      String(row.parentEmail || "").trim().toLowerCase(),
-      Array.isArray(row.documents) ? row.documents : [],
-    ]),
-  ), [trip.parentDocuments]);
+  const requirements = Array.isArray(trip.documentRequirements)
+    ? trip.documentRequirements
+    : [];
+  const participants = Array.isArray(trip.participants)
+    ? trip.participants
+    : [];
+  const parentDocumentsByEmail = useMemo(
+    () =>
+      new Map(
+        (trip.parentDocuments || []).map((row) => [
+          String(row.parentEmail || "")
+            .trim()
+            .toLowerCase(),
+          Array.isArray(row.documents) ? row.documents : [],
+        ]),
+      ),
+    [trip.parentDocuments],
+  );
 
-  const getDocuments = (participant) => participant.parentDocuments?.length
-    ? participant.parentDocuments
-    : parentDocumentsByEmail.get(String(participant.parentEmail || "").trim().toLowerCase()) || [];
+  const getDocuments = (participant) =>
+    participant.parentDocuments?.length
+      ? participant.parentDocuments
+      : parentDocumentsByEmail.get(
+          String(participant.parentEmail || "")
+            .trim()
+            .toLowerCase(),
+        ) || [];
 
   const getDocumentStatus = (participant) => {
-    const requiredRequirements = requirements.filter((requirement) => requirement.required !== false);
+    const requiredRequirements = requirements.filter(
+      (requirement) => requirement.required !== false,
+    );
     if (requiredRequirements.length === 0) {
-      return { completed: false, label: "Not configured", detail: "No required documents" };
+      return {
+        completed: false,
+        label: "Not configured",
+        detail: "No required documents",
+      };
     }
     const documents = getDocuments(participant);
     const completedCount = requiredRequirements.filter((requirement) => {
-      const document = documents.find((candidate) => documentMatchesRequirement(candidate, requirement));
-      return document && String(document.status || "").toLowerCase() !== "rejected";
+      const document = documents.find((candidate) =>
+        documentMatchesRequirement(candidate, requirement),
+      );
+      return (
+        document && String(document.status || "").toLowerCase() !== "rejected"
+      );
     }).length;
     return {
       completed: completedCount === requiredRequirements.length,
-      label: completedCount === requiredRequirements.length ? "Completed" : "Pending",
+      label:
+        completedCount === requiredRequirements.length
+          ? "Completed"
+          : "Pending",
       detail: `${completedCount}/${requiredRequirements.length} documents`,
     };
   };
 
   const getPaymentStatus = (participant) => {
-    const completed = String(participant.paymentStatus || "").toLowerCase() === "completed"
-      || (!participant.paymentStatus && Boolean(participant.hasFirstPayment));
+    const completed =
+      String(participant.paymentStatus || "").toLowerCase() === "completed" ||
+      (!participant.paymentStatus && Boolean(participant.hasFirstPayment));
     const summary = participant.paymentSummary;
     return {
       completed,
@@ -1314,13 +2464,18 @@ function SimpleParticipantsTab({ trip, onChange, notify }) {
       );
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        throw new Error(payload?.error || "Failed to download participant template");
+        throw new Error(
+          payload?.error || "Failed to download participant template",
+        );
       }
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = format === "xlsx" ? "travel-participants-template.xlsx" : "travel-participants-template.csv";
+      anchor.download =
+        format === "xlsx"
+          ? "travel-participants-template.xlsx"
+          : "travel-participants-template.csv";
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -1342,21 +2497,31 @@ function SimpleParticipantsTab({ trip, onChange, notify }) {
     setBulkImporting(true);
     try {
       const token = getAuthToken();
-      const response = await fetch(`/api/travel/trips/${trip.id}/participants/import`, {
-        method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: formData,
-      });
+      const response = await fetch(
+        `/api/travel/trips/${trip.id}/participants/import`,
+        {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: formData,
+        },
+      );
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
-        throw Object.assign(new Error(payload?.error || "Failed to import participants"), { body: payload });
+        throw Object.assign(
+          new Error(payload?.error || "Failed to import participants"),
+          { body: payload },
+        );
       }
       setBulkImportResult(payload || null);
       closeBulkImportModal();
-      notify.success(`Imported ${payload?.inserted || 0}, updated ${payload?.updated || 0}`);
+      notify.success(
+        `Imported ${payload?.inserted || 0}, updated ${payload?.updated || 0}`,
+      );
       onChange();
     } catch (error) {
-      notify.error(error?.body?.error || error?.message || "Failed to import participants");
+      notify.error(
+        error?.body?.error || error?.message || "Failed to import participants",
+      );
     } finally {
       setBulkImporting(false);
     }
@@ -1371,58 +2536,113 @@ function SimpleParticipantsTab({ trip, onChange, notify }) {
           onClose={() => setViewingParticipant(null)}
         />
       )}
-      <section className="glass" data-testid="participant-bulk-import" style={{ padding: 14 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      <section
+        className="glass"
+        data-testid="participant-bulk-import"
+        style={{ padding: 14 }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap",
+          }}
+        >
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>Import participants</div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>
+              Import participants
+            </div>
             <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-              Download the database-aligned template, complete one participant per row, and upload CSV or XLSX.
+              Download the database-aligned template, complete one participant
+              per row, and upload CSV or XLSX.
             </div>
           </div>
-          <button type="button" onClick={() => setBulkImportModalOpen(true)} style={{ ...secondaryBtn, alignSelf: "center" }}>
+          <button
+            type="button"
+            onClick={() => setBulkImportModalOpen(true)}
+            style={{ ...secondaryBtn, alignSelf: "center" }}
+          >
             <Download size={14} /> Import participants
           </button>
         </div>
         {bulkImportResult && (
-          <div style={{ marginTop: 10, display: "grid", gap: 6 }} data-testid="participant-bulk-import-result">
+          <div
+            style={{ marginTop: 10, display: "grid", gap: 6 }}
+            data-testid="participant-bulk-import-result"
+          >
             <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-              Imported {bulkImportResult.inserted || 0}, updated {bulkImportResult.updated || 0}, skipped {bulkImportResult.skipped || 0}, errors {bulkImportResult.errors?.length || 0}.
+              Imported {bulkImportResult.inserted || 0}, updated{" "}
+              {bulkImportResult.updated || 0}, skipped{" "}
+              {bulkImportResult.skipped || 0}, errors{" "}
+              {bulkImportResult.errors?.length || 0}.
             </div>
             {bulkImportResult.warnings?.length > 0 && (
               <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
                 Payment setup warnings: {bulkImportResult.warnings.length}
               </div>
             )}
-            {Array.isArray(bulkImportResult.errors) && bulkImportResult.errors.length > 0 && (
-              <div style={{ fontSize: 12, color: "var(--danger-color, #b91c1c)" }}>
-                <strong>Rows with errors</strong>
-                <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
-                  {bulkImportResult.errors.map((item, index) => <li key={`${item.row}-${index}`}>Row {item.row || "?"}: {item.reason || "Unknown error"}</li>)}
-                </ul>
-              </div>
-            )}
+            {Array.isArray(bulkImportResult.errors) &&
+              bulkImportResult.errors.length > 0 && (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "var(--danger-color, #b91c1c)",
+                  }}
+                >
+                  <strong>Rows with errors</strong>
+                  <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+                    {bulkImportResult.errors.map((item, index) => (
+                      <li key={`${item.row}-${index}`}>
+                        Row {item.row || "?"}: {item.reason || "Unknown error"}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
           </div>
         )}
       </section>
 
-      <section style={documentAdminCard} data-testid="registered-participants-list">
+      <section
+        style={documentAdminCard}
+        data-testid="registered-participants-list"
+      >
         <div style={documentAdminHeader}>
           <div>
             <h2 style={{ margin: 0, fontSize: 17 }}>Participant status</h2>
-            <p style={{ margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 13 }}>
-              Track whether each participant has completed the required documents and payment instalments.
+            <p
+              style={{
+                margin: "5px 0 0",
+                color: "var(--text-secondary)",
+                fontSize: 13,
+              }}
+            >
+              Track whether each participant has completed the required
+              documents and payment instalments.
             </p>
           </div>
           <span data-testid="participants-list-count" style={countBadge}>
-            {participants.length} participant{participants.length === 1 ? "" : "s"}
+            {participants.length} participant
+            {participants.length === 1 ? "" : "s"}
           </span>
         </div>
         {participants.length === 0 ? (
-          <div style={empty}>No registered participants yet. Use the import option above to add the roster.</div>
+          <div style={empty}>
+            No registered participants yet. Use the import option above to add
+            the roster.
+          </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <div style={{ minWidth: 620 }}>
-              <div style={{ ...documentMatrixGrid, gridTemplateColumns: "minmax(240px, 1.5fr) minmax(170px, 1fr) minmax(170px, 1fr)" }}>
+              <div
+                style={{
+                  ...documentMatrixGrid,
+                  gridTemplateColumns:
+                    "minmax(240px, 1.5fr) minmax(170px, 1fr) minmax(170px, 1fr)",
+                }}
+              >
                 <strong>Participant</strong>
                 <strong>Documents</strong>
                 <strong>Payment</strong>
@@ -1431,7 +2651,14 @@ function SimpleParticipantsTab({ trip, onChange, notify }) {
                 const documentStatus = getDocumentStatus(participant);
                 const paymentStatus = getPaymentStatus(participant);
                 return (
-                  <div key={participant.id} style={{ ...documentMatrixGrid, gridTemplateColumns: "minmax(240px, 1.5fr) minmax(170px, 1fr) minmax(170px, 1fr)" }}>
+                  <div
+                    key={participant.id}
+                    style={{
+                      ...documentMatrixGrid,
+                      gridTemplateColumns:
+                        "minmax(240px, 1.5fr) minmax(170px, 1fr) minmax(170px, 1fr)",
+                    }}
+                  >
                     <button
                       type="button"
                       onClick={() => setViewingParticipant(participant)}
@@ -1439,16 +2666,59 @@ function SimpleParticipantsTab({ trip, onChange, notify }) {
                       aria-label={`View details for ${participant.fullName || "participant"}`}
                       data-testid={`participant-details-trigger-${participant.id}`}
                     >
-                      <strong style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis" }}>{participant.fullName || "Participant"}</strong>
-                      <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>{participant.parentName || participant.parentEmail || "Parent details unavailable"}</span>
+                      <strong
+                        style={{
+                          display: "block",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {participant.fullName || "Participant"}
+                      </strong>
+                      <span
+                        style={{ color: "var(--text-secondary)", fontSize: 11 }}
+                      >
+                        {participant.parentName ||
+                          participant.parentEmail ||
+                          "Parent details unavailable"}
+                      </span>
                     </button>
                     {[documentStatus, paymentStatus].map((status, index) => (
-                      <div key={index} style={{ display: "grid", gap: 3, justifyItems: "start" }}>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: 5, color: status.completed ? "#2F7A4D" : "var(--text-secondary)", fontWeight: 650, fontSize: 12 }}>
-                          {status.completed ? <CheckCircle2 size={14} aria-hidden /> : <Clock size={14} aria-hidden />}
+                      <div
+                        key={index}
+                        style={{
+                          display: "grid",
+                          gap: 3,
+                          justifyItems: "start",
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 5,
+                            color: status.completed
+                              ? "#2F7A4D"
+                              : "var(--text-secondary)",
+                            fontWeight: 650,
+                            fontSize: 12,
+                          }}
+                        >
+                          {status.completed ? (
+                            <CheckCircle2 size={14} aria-hidden />
+                          ) : (
+                            <Clock size={14} aria-hidden />
+                          )}
                           {status.label}
                         </span>
-                        <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>{status.detail}</span>
+                        <span
+                          style={{
+                            color: "var(--text-secondary)",
+                            fontSize: 11,
+                          }}
+                        >
+                          {status.detail}
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -1460,30 +2730,181 @@ function SimpleParticipantsTab({ trip, onChange, notify }) {
       </section>
 
       {bulkImportModalOpen && (
-        <div role="dialog" aria-modal="true" aria-labelledby="participant-import-modal-title" data-testid="participant-bulk-import-modal" style={{ position: "fixed", inset: 0, zIndex: 1000, display: "grid", placeItems: "center", padding: 16, background: "rgba(6, 10, 18, 0.78)" }}>
-          <div style={{ width: "min(760px, 100%)", maxHeight: "90vh", overflowY: "auto", display: "grid", gap: 16, padding: 20, border: "1px solid var(--border-color)", borderRadius: 14, background: "var(--bg-color, #111318)", boxShadow: "0 24px 64px rgba(0, 0, 0, 0.35)" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="participant-import-modal-title"
+          data-testid="participant-bulk-import-modal"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1000,
+            display: "grid",
+            placeItems: "center",
+            padding: 16,
+            background: "rgba(6, 10, 18, 0.78)",
+          }}
+        >
+          <div
+            style={{
+              width: "min(760px, 100%)",
+              maxHeight: "90vh",
+              overflowY: "auto",
+              display: "grid",
+              gap: 16,
+              padding: 20,
+              border: "1px solid var(--border-color)",
+              borderRadius: 14,
+              background: "var(--bg-color, #111318)",
+              boxShadow: "0 24px 64px rgba(0, 0, 0, 0.35)",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 12,
+                alignItems: "flex-start",
+              }}
+            >
               <div>
-                <h2 id="participant-import-modal-title" style={{ margin: 0, fontSize: 19 }}>Import registered participants</h2>
-                <p style={{ margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 12 }}>Use the exact headers in the template. The first four columns are required; optional fields are applied when provided.</p>
+                <h2
+                  id="participant-import-modal-title"
+                  style={{ margin: 0, fontSize: 19 }}
+                >
+                  Import registered participants
+                </h2>
+                <p
+                  style={{
+                    margin: "5px 0 0",
+                    color: "var(--text-secondary)",
+                    fontSize: 12,
+                  }}
+                >
+                  Use the exact headers in the template. The first four columns
+                  are required; optional fields are applied when provided.
+                </p>
               </div>
-              <button type="button" onClick={closeBulkImportModal} style={iconBtn} aria-label="Close import modal"><X size={17} /></button>
+              <button
+                type="button"
+                onClick={closeBulkImportModal}
+                style={iconBtn}
+                aria-label="Close import modal"
+              >
+                <X size={17} />
+              </button>
             </div>
-            <div data-testid="participant-import-schema" style={{ border: "1px solid var(--border-color)", borderRadius: 10, padding: 12, display: "grid", gap: 10, background: "var(--surface-color, var(--subtle-bg))" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                <strong style={{ fontSize: 13 }}>Download a starter template</strong>
+            <div
+              data-testid="participant-import-schema"
+              style={{
+                border: "1px solid var(--border-color)",
+                borderRadius: 10,
+                padding: 12,
+                display: "grid",
+                gap: 10,
+                background: "var(--surface-color, var(--subtle-bg))",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                }}
+              >
+                <strong style={{ fontSize: 13 }}>
+                  Download a starter template
+                </strong>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <button type="button" onClick={() => downloadImportTemplate("csv")} style={{ ...secondaryBtn, padding: "6px 10px", fontSize: 12 }}><Download size={13} /> CSV template</button>
-                  <button type="button" onClick={() => downloadImportTemplate("xlsx")} style={{ ...secondaryBtn, padding: "6px 10px", fontSize: 12 }}><Download size={13} /> XLSX template</button>
+                  <button
+                    type="button"
+                    onClick={() => downloadImportTemplate("csv")}
+                    style={{
+                      ...secondaryBtn,
+                      padding: "6px 10px",
+                      fontSize: 12,
+                    }}
+                  >
+                    <Download size={13} /> CSV template
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => downloadImportTemplate("xlsx")}
+                    style={{
+                      ...secondaryBtn,
+                      padding: "6px 10px",
+                      fontSize: 12,
+                    }}
+                  >
+                    <Download size={13} /> XLSX template
+                  </button>
                 </div>
               </div>
-              <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--border-color)", borderRadius: 7 }}>
-                <table aria-label="Participant import columns" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                  <thead><tr><th scope="col" style={importSchemaTh}>Column</th><th scope="col" style={importSchemaTh}>Required</th><th scope="col" style={importSchemaTh}>What to enter</th></tr></thead>
-                  <tbody>{PARTICIPANT_IMPORT_SCHEMA.map((column) => <tr key={column.key}><td style={importSchemaTd}><code>{column.key}</code></td><td style={{ ...importSchemaTd, color: column.required ? "var(--primary-color, var(--accent-color))" : "var(--text-secondary)", fontWeight: column.required ? 700 : 400 }}>{column.required ? "Yes" : "Optional"}</td><td style={importSchemaTd}>{column.description}</td></tr>)}</tbody>
+              <div
+                style={{
+                  maxHeight: 220,
+                  overflowY: "auto",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: 7,
+                }}
+              >
+                <table
+                  aria-label="Participant import columns"
+                  style={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    fontSize: 12,
+                  }}
+                >
+                  <thead>
+                    <tr>
+                      <th scope="col" style={importSchemaTh}>
+                        Column
+                      </th>
+                      <th scope="col" style={importSchemaTh}>
+                        Required
+                      </th>
+                      <th scope="col" style={importSchemaTh}>
+                        What to enter
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {PARTICIPANT_IMPORT_SCHEMA.map((column) => (
+                      <tr key={column.key}>
+                        <td style={importSchemaTd}>
+                          <code>{column.key}</code>
+                        </td>
+                        <td
+                          style={{
+                            ...importSchemaTd,
+                            color: column.required
+                              ? "var(--primary-color, var(--accent-color))"
+                              : "var(--text-secondary)",
+                            fontWeight: column.required ? 700 : 400,
+                          }}
+                        >
+                          {column.required ? "Yes" : "Optional"}
+                        </td>
+                        <td style={importSchemaTd}>{column.description}</td>
+                      </tr>
+                    ))}
+                  </tbody>
                 </table>
               </div>
-              <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>Matching uses fullName + parentPhone + parentEmail. Never include a full Aadhaar number; only the last four digits are accepted.</div>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--text-secondary)",
+                  lineHeight: 1.5,
+                }}
+              >
+                Matching uses fullName + parentPhone + parentEmail. Never
+                include a full Aadhaar number; only the last four digits are
+                accepted.
+              </div>
             </div>
             <label
               htmlFor="participant-bulk-import-file"
@@ -1499,12 +2920,41 @@ function SimpleParticipantsTab({ trip, onChange, notify }) {
               }}
             >
               Choose CSV or XLSX file
-              <input ref={importInputRef} id="participant-bulk-import-file" aria-label="Bulk import participants file" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => setBulkFile(event.target.files?.[0] || null)} style={{ width: "100%" }} />
-              <span style={{ color: "var(--text-secondary)", fontWeight: 400 }}>Selected file: {bulkFile?.name || "No file chosen"}</span>
+              <input
+                ref={importInputRef}
+                id="participant-bulk-import-file"
+                aria-label="Bulk import participants file"
+                type="file"
+                accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                onChange={(event) =>
+                  setBulkFile(event.target.files?.[0] || null)
+                }
+                style={{ width: "100%" }}
+              />
+              <span style={{ color: "var(--text-secondary)", fontWeight: 400 }}>
+                Selected file: {bulkFile?.name || "No file chosen"}
+              </span>
             </label>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <button type="button" onClick={closeBulkImportModal} style={secondaryBtn}>Cancel</button>
-              <button type="button" onClick={bulkImport} disabled={bulkImporting || !bulkFile} style={bulkImporting || !bulkFile ? primaryBtnDisabled : primaryBtn}>{bulkImporting ? "Importing..." : "Confirm import"}</button>
+            <div
+              style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}
+            >
+              <button
+                type="button"
+                onClick={closeBulkImportModal}
+                style={secondaryBtn}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={bulkImport}
+                disabled={bulkImporting || !bulkFile}
+                style={
+                  bulkImporting || !bulkFile ? primaryBtnDisabled : primaryBtn
+                }
+              >
+                {bulkImporting ? "Importing..." : "Confirm import"}
+              </button>
             </div>
           </div>
         </div>
@@ -1518,7 +2968,11 @@ function SimpleParticipantsTab({ trip, onChange, notify }) {
 // eslint-disable-next-line no-unused-vars
 function LegacyParticipantsTab({ trip, onChange, notify }) {
   const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ fullName: "", parentName: "", parentPhone: "" });
+  const [form, setForm] = useState({
+    fullName: "",
+    parentName: "",
+    parentPhone: "",
+  });
   const [decidingId, setDecidingId] = useState(null);
   // Tracks which participant row currently has an approve / reject call in
   // flight so we can disable BOTH buttons on that row (avoid double-click
@@ -1584,9 +3038,10 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
       const url = window.URL.createObjectURL(blob);
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = format === "xlsx"
-        ? "travel-participants-template.xlsx"
-        : "travel-participants-template.csv";
+      anchor.download =
+        format === "xlsx"
+          ? "travel-participants-template.xlsx"
+          : "travel-participants-template.csv";
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
@@ -1608,21 +3063,31 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
     setBulkImporting(true);
     try {
       const token = getAuthToken();
-      const resp = await fetch(`/api/travel/trips/${trip.id}/participants/import`, {
-        method: "POST",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-        body: fd,
-      });
+      const resp = await fetch(
+        `/api/travel/trips/${trip.id}/participants/import`,
+        {
+          method: "POST",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+          body: fd,
+        },
+      );
       const data = await resp.json().catch(() => null);
       if (!resp.ok) {
-        throw Object.assign(new Error(data?.error || "Failed to import participants"), { body: data, status: resp.status });
+        throw Object.assign(
+          new Error(data?.error || "Failed to import participants"),
+          { body: data, status: resp.status },
+        );
       }
       setBulkImportResult(data || null);
       closeBulkImportModal();
-      notify.success(`Imported ${data?.inserted || 0}, updated ${data?.updated || 0}`);
+      notify.success(
+        `Imported ${data?.inserted || 0}, updated ${data?.updated || 0}`,
+      );
       onChange();
     } catch (e) {
-      notify.error(e?.body?.error || e?.message || "Failed to import participants");
+      notify.error(
+        e?.body?.error || e?.message || "Failed to import participants",
+      );
     } finally {
       setBulkImporting(false);
     }
@@ -1639,11 +3104,16 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
     if (form.parentPhone.trim()) {
       const raw = form.parentPhone.trim();
       const digits = raw.replace(/\D/g, "");
-      const ok = (raw.startsWith("+") && digits.length >= 10 && digits.length <= 15)
-        || (digits.length === 10 && /^[6-9]/.test(digits))
-        || (digits.length === 12 && digits.startsWith("91") && /^[6-9]/.test(digits.slice(2)));
+      const ok =
+        (raw.startsWith("+") && digits.length >= 10 && digits.length <= 15) ||
+        (digits.length === 10 && /^[6-9]/.test(digits)) ||
+        (digits.length === 12 &&
+          digits.startsWith("91") &&
+          /^[6-9]/.test(digits.slice(2)));
       if (!ok) {
-        notify.error("Parent phone must be a 10-digit Indian mobile (e.g. 9876543210) or an international number with country code");
+        notify.error(
+          "Parent phone must be a 10-digit Indian mobile (e.g. 9876543210) or an international number with country code",
+        );
         return;
       }
     }
@@ -1670,7 +3140,9 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
     });
     if (!ok) return;
     try {
-      await fetchApi(`/api/travel/trips/${trip.id}/participants/${pid}`, { method: "DELETE" });
+      await fetchApi(`/api/travel/trips/${trip.id}/participants/${pid}`, {
+        method: "DELETE",
+      });
       notify.success("Removed");
       onChange();
     } catch (e) {
@@ -1696,7 +3168,8 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
       }
       const ok = await notify.confirm({
         title: "Reject application",
-        message: "Mark this participant as rejected? You can re-approve later if needed.",
+        message:
+          "Mark this participant as rejected? You can re-approve later if needed.",
         confirmText: "Reject",
         destructive: true,
       });
@@ -1704,11 +3177,22 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
     }
     setDecidingId(pid);
     try {
-      await fetchApi(`/api/travel/trips/${trip.id}/participants/${pid}/${action}`, {
-        method: "POST",
-        ...(action === "reject" ? { body: JSON.stringify({ reviewNotes: String(reviewNotes).trim() }) } : {}),
-      });
-      notify.success(action === "approve" ? "Application approved" : "Application rejected");
+      await fetchApi(
+        `/api/travel/trips/${trip.id}/participants/${pid}/${action}`,
+        {
+          method: "POST",
+          ...(action === "reject"
+            ? {
+                body: JSON.stringify({
+                  reviewNotes: String(reviewNotes).trim(),
+                }),
+              }
+            : {}),
+        },
+      );
+      notify.success(
+        action === "approve" ? "Application approved" : "Application rejected",
+      );
       onChange();
     } catch (e) {
       notify.error(e?.body?.error || `Failed to ${action}`);
@@ -1778,7 +3262,8 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
       }
       const ok = await notify.confirm({
         title: "Reject registration",
-        message: "Mark this registration as rejected? It will be removed from the review queue.",
+        message:
+          "Mark this registration as rejected? It will be removed from the review queue.",
         confirmText: "Reject",
         destructive: true,
       });
@@ -1786,10 +3271,19 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
     }
     setDecidingRegId(rid);
     try {
-      await fetchApi(`/api/travel/trips/${trip.id}/registrations/${rid}/${action}`, {
-        method: "POST",
-        ...(action === "reject" ? { body: JSON.stringify({ reviewNotes: String(reviewNotes).trim() }) } : {}),
-      });
+      await fetchApi(
+        `/api/travel/trips/${trip.id}/registrations/${rid}/${action}`,
+        {
+          method: "POST",
+          ...(action === "reject"
+            ? {
+                body: JSON.stringify({
+                  reviewNotes: String(reviewNotes).trim(),
+                }),
+              }
+            : {}),
+        },
+      );
       notify.success(
         action === "approve"
           ? "Registration approved — added as a participant"
@@ -1806,23 +3300,46 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
 
   // Completed registrations already have participant rows. Show only work in
   // progress here, and use the converted record for its uploaded documents.
-  const normalizeName = (value) => String(value || "").trim().toLowerCase();
-  const normalizeEmail = (value) => String(value || "").trim().toLowerCase();
+  const normalizeName = (value) =>
+    String(value || "")
+      .trim()
+      .toLowerCase();
+  const normalizeEmail = (value) =>
+    String(value || "")
+      .trim()
+      .toLowerCase();
   const normalizePhone = (value) => String(value || "").replace(/\D/g, "");
-  const alreadyRegistered = (registration) => (trip.participants || []).some((participant) =>
-    String(participant.applicationStatus || "").toLowerCase() !== "rejected"
-    && normalizeName(participant.fullName) === normalizeName(registration.studentName)
-    && Boolean((registration.parentEmail && normalizeEmail(participant.parentEmail) === normalizeEmail(registration.parentEmail))
-      || (registration.parentPhone && normalizePhone(participant.parentPhone) === normalizePhone(registration.parentPhone)))
+  const alreadyRegistered = (registration) =>
+    (trip.participants || []).some(
+      (participant) =>
+        String(participant.applicationStatus || "").toLowerCase() !==
+          "rejected" &&
+        normalizeName(participant.fullName) ===
+          normalizeName(registration.studentName) &&
+        Boolean(
+          (registration.parentEmail &&
+            normalizeEmail(participant.parentEmail) ===
+              normalizeEmail(registration.parentEmail)) ||
+          (registration.parentPhone &&
+            normalizePhone(participant.parentPhone) ===
+              normalizePhone(registration.parentPhone)),
+        ),
+    );
+  const reviewableRegs = pendingRegs.filter(
+    (r) =>
+      !["CONVERTED", "REJECTED"].includes(r.status) && !alreadyRegistered(r),
   );
-  const reviewableRegs = pendingRegs.filter((r) => !["CONVERTED", "REJECTED"].includes(r.status) && !alreadyRegistered(r));
   const parentDocumentsByEmail = new Map(
     (trip.parentDocuments || []).map((row) => [
-      String(row.parentEmail || "").trim().toLowerCase(),
+      String(row.parentEmail || "")
+        .trim()
+        .toLowerCase(),
       Array.isArray(row.documents) ? row.documents : [],
     ]),
   );
-  const requirements = Array.isArray(trip.documentRequirements) ? trip.documentRequirements : [];
+  const requirements = Array.isArray(trip.documentRequirements)
+    ? trip.documentRequirements
+    : [];
 
   return (
     <div>
@@ -1833,14 +3350,36 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
           onClose={() => setViewingConsent(null)}
         />
       )}
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-        <div style={{ display: "flex", gap: 12, color: "var(--text-secondary)", fontSize: 13, flexWrap: "wrap" }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          marginBottom: 12,
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: 8,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            gap: 12,
+            color: "var(--text-secondary)",
+            fontSize: 13,
+            flexWrap: "wrap",
+          }}
+        >
           <span>
-            {trip.participants?.length || 0} participant{(trip.participants?.length || 0) === 1 ? "" : "s"}
+            {trip.participants?.length || 0} participant
+            {(trip.participants?.length || 0) === 1 ? "" : "s"}
           </span>
           {reviewableRegs.length > 0 && (
-            <span data-testid="pending-regs-count" style={{ color: "var(--text-secondary)" }}>
-              · {reviewableRegs.length} pending registration{reviewableRegs.length === 1 ? "" : "s"}
+            <span
+              data-testid="pending-regs-count"
+              style={{ color: "var(--text-secondary)" }}
+            >
+              · {reviewableRegs.length} pending registration
+              {reviewableRegs.length === 1 ? "" : "s"}
             </span>
           )}
         </div>
@@ -1851,33 +3390,66 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
         )}
       </div>
 
-      <div className="glass" data-testid="participant-bulk-import" style={{ padding: 14, marginBottom: 12 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+      <div
+        className="glass"
+        data-testid="participant-bulk-import"
+        style={{ padding: 14, marginBottom: 12 }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 10,
+            flexWrap: "wrap",
+          }}
+        >
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 14, fontWeight: 600 }}>Bulk import participants</div>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>
+              Bulk import participants
+            </div>
             <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-              Upload a CSV or XLSX file. Existing rows are updated additively, and blank cells never clear data already stored in CRM.
+              Upload a CSV or XLSX file. Existing rows are updated additively,
+              and blank cells never clear data already stored in CRM.
             </div>
           </div>
-          <button type="button" onClick={openBulkImportModal} style={{ ...secondaryBtn, alignSelf: "center" }}>
+          <button
+            type="button"
+            onClick={openBulkImportModal}
+            style={{ ...secondaryBtn, alignSelf: "center" }}
+          >
             <Download size={14} /> Import file
           </button>
         </div>
         {bulkImportResult && (
-          <div style={{ marginTop: 10, display: "grid", gap: 6 }} data-testid="participant-bulk-import-result">
+          <div
+            style={{ marginTop: 10, display: "grid", gap: 6 }}
+            data-testid="participant-bulk-import-result"
+          >
             <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-              Imported {bulkImportResult.inserted || 0}, updated {bulkImportResult.updated || 0}, skipped {bulkImportResult.skipped || 0}, errors {bulkImportResult.errors?.length || 0}.
+              Imported {bulkImportResult.inserted || 0}, updated{" "}
+              {bulkImportResult.updated || 0}, skipped{" "}
+              {bulkImportResult.skipped || 0}, errors{" "}
+              {bulkImportResult.errors?.length || 0}.
             </div>
-            {Array.isArray(bulkImportResult.errors) && bulkImportResult.errors.length > 0 && (
-              <div style={{ fontSize: 12, color: "var(--danger-color, #b91c1c)" }}>
-                <strong>Rows with errors</strong>
-                <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
-                  {bulkImportResult.errors.map((item, index) => (
-                    <li key={`${item.row}-${index}`}>Row {item.row || "?"}: {item.reason || "Unknown error"}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
+            {Array.isArray(bulkImportResult.errors) &&
+              bulkImportResult.errors.length > 0 && (
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "var(--danger-color, #b91c1c)",
+                  }}
+                >
+                  <strong>Rows with errors</strong>
+                  <ul style={{ margin: "4px 0 0", paddingLeft: 20 }}>
+                    {bulkImportResult.errors.map((item, index) => (
+                      <li key={`${item.row}-${index}`}>
+                        Row {item.row || "?"}: {item.reason || "Unknown error"}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
           </div>
         )}
       </div>
@@ -1913,14 +3485,32 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
               gap: 16,
             }}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "flex-start",
+                gap: 12,
+              }}
+            >
               <div style={{ minWidth: 0 }}>
-                <h2 id="participant-bulk-import-modal-title" style={{ margin: 0, fontSize: 20 }}>
+                <h2
+                  id="participant-bulk-import-modal-title"
+                  style={{ margin: 0, fontSize: 20 }}
+                >
                   Import Participants from CSV / Excel
                 </h2>
-                <p style={{ margin: "6px 0 0", color: "var(--text-secondary)", fontSize: 13, lineHeight: 1.6 }}>
-                  Download a template and enter one participant per row. Keep the first row of column names unchanged.
-                  Existing rows are updated additively and blank cells never clear stored data.
+                <p
+                  style={{
+                    margin: "6px 0 0",
+                    color: "var(--text-secondary)",
+                    fontSize: 13,
+                    lineHeight: 1.6,
+                  }}
+                >
+                  Download a template and enter one participant per row. Keep
+                  the first row of column names unchanged. Existing rows are
+                  updated additively and blank cells never clear stored data.
                 </p>
               </div>
               <button
@@ -1944,34 +3534,106 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
                 background: "var(--surface-color, var(--subtle-bg))",
               }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                <div style={{ fontSize: 13, fontWeight: 700 }}>Download a starter template</div>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 700 }}>
+                  Download a starter template
+                </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  <button type="button" onClick={() => downloadImportTemplate("csv")} style={{ ...secondaryBtn, padding: "6px 10px", fontSize: 12 }}>
+                  <button
+                    type="button"
+                    onClick={() => downloadImportTemplate("csv")}
+                    style={{
+                      ...secondaryBtn,
+                      padding: "6px 10px",
+                      fontSize: 12,
+                    }}
+                  >
                     <Download size={13} /> CSV template
                   </button>
-                  <button type="button" onClick={() => downloadImportTemplate("xlsx")} style={{ ...secondaryBtn, padding: "6px 10px", fontSize: 12 }}>
+                  <button
+                    type="button"
+                    onClick={() => downloadImportTemplate("xlsx")}
+                    style={{
+                      ...secondaryBtn,
+                      padding: "6px 10px",
+                      fontSize: 12,
+                    }}
+                  >
                     <Download size={13} /> XLSX template
                   </button>
                 </div>
               </div>
-              <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
-                Templates contain only the required columns: <code style={{ color: "var(--text-primary)" }}>fullName</code>, <code>parentName</code>, <code>parentPhone</code>, and <code>parentEmail</code>. Keep phone numbers as text in Excel.
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--text-secondary)",
+                  lineHeight: 1.5,
+                }}
+              >
+                Templates contain only the required columns:{" "}
+                <code style={{ color: "var(--text-primary)" }}>fullName</code>,{" "}
+                <code>parentName</code>, <code>parentPhone</code>, and{" "}
+                <code>parentEmail</code>. Keep phone numbers as text in Excel.
               </div>
-              <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--border-color)", borderRadius: 7 }}>
-                <table aria-label="Participant import columns" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <div
+                style={{
+                  maxHeight: 220,
+                  overflowY: "auto",
+                  border: "1px solid var(--border-color)",
+                  borderRadius: 7,
+                }}
+              >
+                <table
+                  aria-label="Participant import columns"
+                  style={{
+                    width: "100%",
+                    borderCollapse: "collapse",
+                    fontSize: 12,
+                  }}
+                >
                   <thead>
-                    <tr style={{ position: "sticky", top: 0, background: "var(--surface-color, var(--bg-color))", zIndex: 1 }}>
-                      <th scope="col" style={importSchemaTh}>Column</th>
-                      <th scope="col" style={importSchemaTh}>Required</th>
-                      <th scope="col" style={importSchemaTh}>What to enter</th>
+                    <tr
+                      style={{
+                        position: "sticky",
+                        top: 0,
+                        background: "var(--surface-color, var(--bg-color))",
+                        zIndex: 1,
+                      }}
+                    >
+                      <th scope="col" style={importSchemaTh}>
+                        Column
+                      </th>
+                      <th scope="col" style={importSchemaTh}>
+                        Required
+                      </th>
+                      <th scope="col" style={importSchemaTh}>
+                        What to enter
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
                     {PARTICIPANT_IMPORT_SCHEMA.map((column) => (
                       <tr key={column.key}>
-                        <td style={importSchemaTd}><code>{column.key}</code></td>
-                        <td style={{ ...importSchemaTd, color: column.required ? "var(--primary-color, var(--accent-color))" : "var(--text-secondary)", fontWeight: column.required ? 700 : 400 }}>
+                        <td style={importSchemaTd}>
+                          <code>{column.key}</code>
+                        </td>
+                        <td
+                          style={{
+                            ...importSchemaTd,
+                            color: column.required
+                              ? "var(--primary-color, var(--accent-color))"
+                              : "var(--text-secondary)",
+                            fontWeight: column.required ? 700 : 400,
+                          }}
+                        >
                           {column.required ? "Yes" : "Optional"}
                         </td>
                         <td style={importSchemaTd}>{column.description}</td>
@@ -1980,8 +3642,20 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
                   </tbody>
                 </table>
               </div>
-              <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
-                Matching uses <code style={{ color: "var(--text-primary)" }}>fullName + parentPhone + parentEmail</code>. Optional columns can still be added using their exact names. Never include a full Aadhaar number; only the last four digits are accepted.
+              <div
+                style={{
+                  fontSize: 12,
+                  color: "var(--text-secondary)",
+                  lineHeight: 1.5,
+                }}
+              >
+                Matching uses{" "}
+                <code style={{ color: "var(--text-primary)" }}>
+                  fullName + parentPhone + parentEmail
+                </code>
+                . Optional columns can still be added using their exact names.
+                Never include a full Aadhaar number; only the last four digits
+                are accepted.
               </div>
             </div>
 
@@ -1995,31 +3669,57 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
                 background: "var(--subtle-bg, var(--surface-color))",
               }}
             >
-              <label style={{ color: "var(--text-secondary)", fontSize: 13, fontWeight: 500 }}>
+              <label
+                style={{
+                  color: "var(--text-secondary)",
+                  fontSize: 13,
+                  fontWeight: 500,
+                }}
+              >
                 Choose file
               </label>
               <input
                 ref={importInputRef}
                 type="file"
                 accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                onChange={(e) => setBulkFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)}
+                onChange={(e) =>
+                  setBulkFile(
+                    e.target.files && e.target.files[0]
+                      ? e.target.files[0]
+                      : null,
+                  )
+                }
                 aria-label="Bulk import participants file"
                 style={{ width: "100%" }}
               />
               <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
-                Selected file: <strong>{bulkFile ? bulkFile.name : "No file chosen"}</strong>
+                Selected file:{" "}
+                <strong>{bulkFile ? bulkFile.name : "No file chosen"}</strong>
               </div>
             </div>
 
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
-              <button type="button" onClick={closeBulkImportModal} style={secondaryBtn}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+                flexWrap: "wrap",
+              }}
+            >
+              <button
+                type="button"
+                onClick={closeBulkImportModal}
+                style={secondaryBtn}
+              >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={bulkImport}
                 disabled={bulkImporting || !bulkFile}
-                style={bulkImporting || !bulkFile ? primaryBtnDisabled : primaryBtn}
+                style={
+                  bulkImporting || !bulkFile ? primaryBtnDisabled : primaryBtn
+                }
               >
                 {bulkImporting ? "Importing..." : "Confirm import"}
               </button>
@@ -2029,15 +3729,55 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
       )}
 
       {adding && (
-        <div style={{ background: "var(--bg-color, #111318)", padding: 16, borderRadius: 8, border: "1px solid var(--border-color)", marginBottom: 12 }}>
-          <div style={{ display: "grid", gap: 8, gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 180px), 1fr))" }}>
-            <input placeholder="Full name *" value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} style={input} />
-            <input placeholder="Parent name" value={form.parentName} onChange={(e) => setForm({ ...form, parentName: e.target.value })} style={input} />
-            <input placeholder="Parent phone (e.g. 9876543210)" value={form.parentPhone} onChange={(e) => setForm({ ...form, parentPhone: e.target.value })} style={input} />
+        <div
+          style={{
+            background: "var(--bg-color, #111318)",
+            padding: 16,
+            borderRadius: 8,
+            border: "1px solid var(--border-color)",
+            marginBottom: 12,
+          }}
+        >
+          <div
+            style={{
+              display: "grid",
+              gap: 8,
+              gridTemplateColumns:
+                "repeat(auto-fit, minmax(min(100%, 180px), 1fr))",
+            }}
+          >
+            <input
+              placeholder="Full name *"
+              value={form.fullName}
+              onChange={(e) => setForm({ ...form, fullName: e.target.value })}
+              style={input}
+            />
+            <input
+              placeholder="Parent name"
+              value={form.parentName}
+              onChange={(e) => setForm({ ...form, parentName: e.target.value })}
+              style={input}
+            />
+            <input
+              placeholder="Parent phone (e.g. 9876543210)"
+              value={form.parentPhone}
+              onChange={(e) =>
+                setForm({ ...form, parentPhone: e.target.value })
+              }
+              style={input}
+            />
           </div>
           <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-            <button type="button" onClick={add} style={primaryBtn}>Add</button>
-            <button type="button" onClick={() => setAdding(false)} style={secondaryBtn}>Cancel</button>
+            <button type="button" onClick={add} style={primaryBtn}>
+              Add
+            </button>
+            <button
+              type="button"
+              onClick={() => setAdding(false)}
+              style={secondaryBtn}
+            >
+              Cancel
+            </button>
           </div>
         </div>
       )}
@@ -2052,13 +3792,58 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
           The list shares the same listShell + row styles as
           participants so they read as one continuous review surface. */}
       {reviewableRegs.length > 0 && (
-        <div style={{ background: "var(--surface-color, #fff)", borderRadius: 14, border: "1px solid var(--border-color)", overflow: "hidden", marginBottom: 18, boxShadow: "0 8px 24px rgba(15, 23, 42, 0.05)" }} data-testid="pending-registrations-list">
-          <div style={{ ...participantTableHeader, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div
+          style={{
+            background: "var(--surface-color, #fff)",
+            borderRadius: 14,
+            border: "1px solid var(--border-color)",
+            overflow: "hidden",
+            marginBottom: 18,
+            boxShadow: "0 8px 24px rgba(15, 23, 42, 0.05)",
+          }}
+          data-testid="pending-registrations-list"
+        >
+          <div
+            style={{
+              ...participantTableHeader,
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
             <div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>Pending registrations</div>
-              <div style={{ marginTop: 3, fontSize: 12, color: "var(--text-secondary)" }}>Completed registrations and their documents appear in the participant list below.</div>
+              <div
+                style={{
+                  fontSize: 15,
+                  fontWeight: 700,
+                  color: "var(--text-primary)",
+                }}
+              >
+                Pending registrations
+              </div>
+              <div
+                style={{
+                  marginTop: 3,
+                  fontSize: 12,
+                  color: "var(--text-secondary)",
+                }}
+              >
+                Completed registrations and their documents appear in the
+                participant list below.
+              </div>
             </div>
-            <span style={{ fontSize: 12, fontWeight: 600, color: "#2F7A4D", background: "rgba(47,122,77,0.12)", padding: "6px 10px", borderRadius: 999 }}>{reviewableRegs.length} total</span>
+            <span
+              style={{
+                fontSize: 12,
+                fontWeight: 600,
+                color: "#2F7A4D",
+                background: "rgba(47,122,77,0.12)",
+                padding: "6px 10px",
+                borderRadius: 999,
+              }}
+            >
+              {reviewableRegs.length} total
+            </span>
           </div>
           <div
             data-testid="registered-participants-scroll-area"
@@ -2067,59 +3852,148 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
             style={participantScrollArea}
           >
             {reviewableRegs.map((r) => {
-            // Parse uploaded document status from extrasJson — booleans only, no raw keys
-            const parentDocuments = parentDocumentsByEmail.get(String(r.parentEmail || "").trim().toLowerCase()) || [];
-            return (
-            <div key={`reg:${r.id}`} style={{ padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 18, borderBottom: "1px solid var(--border-color)" }} data-testid={`pending-reg-row-${r.id}`}>
-                <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    <strong style={{ fontSize: 14, color: "var(--text-primary)" }}>{r.studentName}</strong>
-                    <span
+              // Parse uploaded document status from extrasJson — booleans only, no raw keys
+              const parentDocuments =
+                parentDocumentsByEmail.get(
+                  String(r.parentEmail || "")
+                    .trim()
+                    .toLowerCase(),
+                ) || [];
+              return (
+                <div
+                  key={`reg:${r.id}`}
+                  style={{
+                    padding: "16px 20px",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                    gap: 18,
+                    borderBottom: "1px solid var(--border-color)",
+                  }}
+                  data-testid={`pending-reg-row-${r.id}`}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 2,
+                      minWidth: 0,
+                      flex: 1,
+                    }}
+                  >
+                    <div
                       style={{
-                        background: "rgba(47,122,77,0.14)", color: "#2F7A4D",
-                        fontSize: 10, fontWeight: 700, letterSpacing: 0.3,
-                        padding: "2px 8px", borderRadius: 999, textTransform: "uppercase",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        flexWrap: "wrap",
                       }}
                     >
-                      {r.status === "DRAFT" ? "Draft" : r.status === "OTP_VERIFIED" ? "Verified" : r.status === "APPROVED" ? "Approved" : String(r.status || "Pending").replaceAll("_", " ")}
-                    </span>
-                  </div>
-                  <div style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: 8, rowGap: 2 }}>
-                    {r.parentName && (
-                      <span>
-                        <span style={{ opacity: 0.7 }}>Parent</span> · {r.parentName}
+                      <strong
+                        style={{ fontSize: 14, color: "var(--text-primary)" }}
+                      >
+                        {r.studentName}
+                      </strong>
+                      <span
+                        style={{
+                          background: "rgba(47,122,77,0.14)",
+                          color: "#2F7A4D",
+                          fontSize: 10,
+                          fontWeight: 700,
+                          letterSpacing: 0.3,
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          textTransform: "uppercase",
+                        }}
+                      >
+                        {r.status === "DRAFT"
+                          ? "Draft"
+                          : r.status === "OTP_VERIFIED"
+                            ? "Verified"
+                            : r.status === "APPROVED"
+                              ? "Approved"
+                              : String(r.status || "Pending").replaceAll(
+                                  "_",
+                                  " ",
+                                )}
                       </span>
-                    )}
-                    {r.parentPhone && <span style={{ fontVariantNumeric: "tabular-nums" }}>{r.parentPhone}</span>}
-                    {r.parentEmail && <span style={{ opacity: 0.85 }}>{r.parentEmail}</span>}
-                  </div>
-                  {/* Document upload status — clicking "View" opens a 5-min signed URL */}
-                  <DocumentStatusChips
-                    requirements={requirements}
-                    documents={parentDocuments}
-                    onView={(document) => viewParentConsentFile(`/trips/${trip.id}/registrations/${r.id}/parent-documents/${document.id}/file`, document, { name: r.studentName })}
-                    testIdPrefix={`registration-${r.id}`}
-                  />
-                  {r.reviewNotes && (
-                    <div style={{ fontSize: 11, color: "var(--text-secondary)", fontStyle: "italic", marginTop: 2 }}>
-                      Note: {r.reviewNotes}
                     </div>
-                  )}
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: "var(--text-secondary)",
+                        display: "flex",
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                        columnGap: 8,
+                        rowGap: 2,
+                      }}
+                    >
+                      {r.parentName && (
+                        <span>
+                          <span style={{ opacity: 0.7 }}>Parent</span> ·{" "}
+                          {r.parentName}
+                        </span>
+                      )}
+                      {r.parentPhone && (
+                        <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                          {r.parentPhone}
+                        </span>
+                      )}
+                      {r.parentEmail && (
+                        <span style={{ opacity: 0.85 }}>{r.parentEmail}</span>
+                      )}
+                    </div>
+                    {/* Document upload status — clicking "View" opens a 5-min signed URL */}
+                    <DocumentStatusChips
+                      requirements={requirements}
+                      documents={parentDocuments}
+                      onView={(document) =>
+                        viewParentConsentFile(
+                          `/trips/${trip.id}/registrations/${r.id}/parent-documents/${document.id}/file`,
+                          document,
+                          { name: r.studentName },
+                        )
+                      }
+                      testIdPrefix={`registration-${r.id}`}
+                    />
+                    {r.reviewNotes && (
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: "var(--text-secondary)",
+                          fontStyle: "italic",
+                          marginTop: 2,
+                        }}
+                      >
+                        Note: {r.reviewNotes}
+                      </div>
+                    )}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11,
+                      color: "var(--text-secondary)",
+                      flexShrink: 0,
+                    }}
+                  >
+                    Awaiting completion
+                  </div>
                 </div>
-                <div style={{ fontSize: 11, color: "var(--text-secondary)", flexShrink: 0 }}>
-                  Awaiting completion
-                </div>
-              </div>
-            );
+              );
             })}
           </div>
         </div>
       )}
 
-      <div style={{ ...listShell, borderRadius: 14, boxShadow: "0 8px 24px rgba(15, 23, 42, 0.04)" }}>
-        <div style={participantTableHeader}>
-          Participant list
-        </div>
+      <div
+        style={{
+          ...listShell,
+          borderRadius: 14,
+          boxShadow: "0 8px 24px rgba(15, 23, 42, 0.04)",
+        }}
+      >
+        <div style={participantTableHeader}>Participant list</div>
         <div
           data-testid="participant-list-scroll-area"
           role="region"
@@ -2127,7 +4001,15 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
           style={participantScrollArea}
         >
           {(trip.participants || []).length === 0 ? (
-            <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+            <div
+              style={{
+                ...empty,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
               <Users size={28} aria-hidden style={{ opacity: 0.4 }} />
               <div>No participants yet</div>
               <div style={{ fontSize: 12, opacity: 0.75 }}>
@@ -2136,88 +4018,162 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
             </div>
           ) : (
             trip.participants.map((p) => {
-            // Default to "pending" so legacy rows (pre-applicationStatus
-            // column) read as pending review rather than as an unknown
-            // status. The schema default already covers new rows.
-            const isPending = false;
-            const isApproved = false;
-            const isRejected = false;
-            const busy = decidingId === p.id;
-            const isApprovalUiEnabled = Boolean(window.__ENABLE_LEGACY_APPROVAL_UI__);
-            const parentDocuments = p.parentDocuments?.length
-              ? p.parentDocuments
-              : parentDocumentsByEmail.get(String(p.parentEmail || "").trim().toLowerCase()) || [];
-            return (
-              <div key={p.id} style={row}>
-                <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0, flex: 1 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    <strong style={{ fontSize: 14, color: "var(--text-primary)" }}>{p.fullName}</strong>
-                    <StatusPill hasFirstPayment={p.hasFirstPayment} />
+              // Default to "pending" so legacy rows (pre-applicationStatus
+              // column) read as pending review rather than as an unknown
+              // status. The schema default already covers new rows.
+              const isPending = false;
+              const isApproved = false;
+              const isRejected = false;
+              const busy = decidingId === p.id;
+              const isApprovalUiEnabled = Boolean(
+                window.__ENABLE_LEGACY_APPROVAL_UI__,
+              );
+              const parentDocuments = p.parentDocuments?.length
+                ? p.parentDocuments
+                : parentDocumentsByEmail.get(
+                    String(p.parentEmail || "")
+                      .trim()
+                      .toLowerCase(),
+                  ) || [];
+              return (
+                <div key={p.id} style={row}>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 2,
+                      minWidth: 0,
+                      flex: 1,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <strong
+                        style={{ fontSize: 14, color: "var(--text-primary)" }}
+                      >
+                        {p.fullName}
+                      </strong>
+                      <StatusPill hasFirstPayment={p.hasFirstPayment} />
+                    </div>
+                    {(p.parentName || p.parentPhone || p.parentEmail) && (
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: "var(--text-secondary)",
+                          display: "flex",
+                          flexWrap: "wrap",
+                          alignItems: "center",
+                          columnGap: 8,
+                          rowGap: 2,
+                        }}
+                      >
+                        {p.parentName && (
+                          <span>
+                            <span style={{ opacity: 0.7 }}>Parent</span> ·{" "}
+                            {p.parentName}
+                          </span>
+                        )}
+                        {p.parentPhone && (
+                          <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                            {p.parentPhone}
+                          </span>
+                        )}
+                        {p.parentEmail && <span>{p.parentEmail}</span>}
+                      </div>
+                    )}
+                    {p.reviewNotes && (
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: "var(--text-secondary)",
+                          fontStyle: "italic",
+                          marginTop: 2,
+                        }}
+                      >
+                        Note: {p.reviewNotes}
+                      </div>
+                    )}
                   </div>
-                  {(p.parentName || p.parentPhone || p.parentEmail) && (
-                    <div style={{ fontSize: 12, color: "var(--text-secondary)", display: "flex", flexWrap: "wrap", alignItems: "center", columnGap: 8, rowGap: 2 }}>
-                      {p.parentName && (
-                        <span>
-                          <span style={{ opacity: 0.7 }}>Parent</span> · {p.parentName}
-                        </span>
-                      )}
-                      {p.parentPhone && <span style={{ fontVariantNumeric: "tabular-nums" }}>{p.parentPhone}</span>}
-                      {p.parentEmail && <span>{p.parentEmail}</span>}
-                    </div>
-                  )}
-                  {p.reviewNotes && (
-                    <div style={{ fontSize: 11, color: "var(--text-secondary)", fontStyle: "italic", marginTop: 2 }}>
-                      Note: {p.reviewNotes}
-                    </div>
-                  )}
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0 }}>
-                  <DocumentStatusChips
-                    requirements={requirements}
-                    documents={parentDocuments}
-                    onView={(document) => viewParentConsentFile(`/trips/${trip.id}/participants/${p.id}/parent-documents/${document.id}/file`, document, { name: p.fullName })}
-                    testIdPrefix={`participant-${p.id}`}
-                  />
-                  {/* Approve/Reject CTAs — visible only when an action makes sense.
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      flexWrap: "wrap",
+                      flexShrink: 0,
+                    }}
+                  >
+                    <DocumentStatusChips
+                      requirements={requirements}
+                      documents={parentDocuments}
+                      onView={(document) =>
+                        viewParentConsentFile(
+                          `/trips/${trip.id}/participants/${p.id}/parent-documents/${document.id}/file`,
+                          document,
+                          { name: p.fullName },
+                        )
+                      }
+                      testIdPrefix={`participant-${p.id}`}
+                    />
+                    {/* Approve/Reject CTAs — visible only when an action makes sense.
                       Pending → both. Approved → "Reject" so a wrongly-approved
                       row can be reversed. Rejected → "Approve" so a re-review
                       is one click away. */}
-                  {isApprovalUiEnabled && (isPending || isRejected) && (
+                    {isApprovalUiEnabled && (isPending || isRejected) && (
+                      <button
+                        type="button"
+                        onClick={() => decide(p.id, "approve")}
+                        disabled={busy}
+                        style={{
+                          ...secondaryBtn,
+                          padding: "5px 10px",
+                          fontSize: 12,
+                          color: "#2F7A4D",
+                          borderColor: "rgba(47,122,77,0.4)",
+                          opacity: busy ? 0.6 : 1,
+                          cursor: busy ? "wait" : "pointer",
+                        }}
+                        aria-label={`Approve ${p.fullName}`}
+                      >
+                        <CheckCircle2 size={13} aria-hidden /> Approve
+                      </button>
+                    )}
+                    {isApprovalUiEnabled && (isPending || isApproved) && (
+                      <button
+                        type="button"
+                        onClick={() => decide(p.id, "reject")}
+                        disabled={busy}
+                        style={{
+                          ...secondaryBtn,
+                          padding: "5px 10px",
+                          fontSize: 12,
+                          color: "#A8323F",
+                          borderColor: "rgba(168,50,63,0.4)",
+                          opacity: busy ? 0.6 : 1,
+                          cursor: busy ? "wait" : "pointer",
+                        }}
+                        aria-label={`Reject ${p.fullName}`}
+                      >
+                        <AlertCircle size={13} aria-hidden /> Reject
+                      </button>
+                    )}
                     <button
                       type="button"
-                      onClick={() => decide(p.id, "approve")}
-                      disabled={busy}
-                      style={{
-                        ...secondaryBtn, padding: "5px 10px", fontSize: 12,
-                        color: "#2F7A4D", borderColor: "rgba(47,122,77,0.4)",
-                        opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer",
-                      }}
-                      aria-label={`Approve ${p.fullName}`}
+                      onClick={() => remove(p.id)}
+                      style={iconBtn}
+                      aria-label={`Remove ${p.fullName}`}
                     >
-                      <CheckCircle2 size={13} aria-hidden /> Approve
+                      <Trash2 size={14} />
                     </button>
-                  )}
-                  {isApprovalUiEnabled && (isPending || isApproved) && (
-                    <button
-                      type="button"
-                      onClick={() => decide(p.id, "reject")}
-                      disabled={busy}
-                      style={{
-                        ...secondaryBtn, padding: "5px 10px", fontSize: 12,
-                        color: "#A8323F", borderColor: "rgba(168,50,63,0.4)",
-                        opacity: busy ? 0.6 : 1, cursor: busy ? "wait" : "pointer",
-                      }}
-                      aria-label={`Reject ${p.fullName}`}
-                    >
-                      <AlertCircle size={13} aria-hidden /> Reject
-                    </button>
-                  )}
-                  <button type="button" onClick={() => remove(p.id)} style={iconBtn} aria-label={`Remove ${p.fullName}`}>
-                    <Trash2 size={14} />
-                  </button>
+                  </div>
                 </div>
-              </div>
-            );
+              );
             })
           )}
         </div>
@@ -2226,23 +4182,106 @@ function LegacyParticipantsTab({ trip, onChange, notify }) {
   );
 }
 
+function ConsentTermsFormattedPreview({ terms }) {
+  const content = parseConsentTermsForDisplay(terms);
+  if (!content.title && !content.introduction && !content.sections.length) {
+    return (
+      <p style={consentTermsPreviewEmpty}>
+        No consent terms are available to preview.
+      </p>
+    );
+  }
+
+  return (
+    <section
+      aria-label="Formatted parent consent terms"
+      style={consentTermsPreview}
+    >
+      {content.title && (
+        <h4 style={consentTermsPreviewTitle}>{content.title}</h4>
+      )}
+      {content.introduction && (
+        <p style={consentTermsPreviewIntro}>{content.introduction}</p>
+      )}
+      {content.sections.map((section, index) => (
+        <section
+          key={`${section.heading || "section"}-${index}`}
+          style={consentTermsPreviewSection}
+        >
+          {section.heading && (
+            <h5 style={consentTermsPreviewHeading}>{section.heading}</h5>
+          )}
+          {section.paragraphs.map((paragraph, paragraphIndex) => (
+            <p
+              key={`${index}-${paragraphIndex}`}
+              style={consentTermsPreviewParagraph}
+            >
+              {paragraph}
+            </p>
+          ))}
+        </section>
+      ))}
+    </section>
+  );
+}
+
 function DocumentsTab({ trip, onChange, notify }) {
   const [pendingRegs, setPendingRegs] = useState([]);
   const [loadingRegs, setLoadingRegs] = useState(true);
+  const [peoplePage, setPeoplePage] = useState(1);
+  const [collectionOpen, setCollectionOpen] = useState(false);
+  const [requirementSearch, setRequirementSearch] = useState("");
   const [editingId, setEditingId] = useState(null);
   const [docName, setDocName] = useState("");
-  const [acceptedFileTypes, setAcceptedFileTypes] = useState(["pdf", "jpg", "png"]);
+  const [docNameError, setDocNameError] = useState("");
+  const [acceptedFileTypes, setAcceptedFileTypes] = useState([
+    "pdf",
+    "jpg",
+    "png",
+  ]);
   const [captureMode, setCaptureMode] = useState("file");
+  const [consentTerms, setConsentTerms] = useState("");
+  const [tripConsentTerms, setTripConsentTerms] = useState("");
+  const [savedConsentTerms, setSavedConsentTerms] = useState("");
+  const [consentPreviewOpen, setConsentPreviewOpen] = useState(false);
+  const [consentTermsTemplate, setConsentTermsTemplate] = useState("");
+  const [loadingConsentTerms, setLoadingConsentTerms] = useState(true);
+  const [consentTermsError, setConsentTermsError] = useState("");
   const [saving, setSaving] = useState(false);
   const [viewingConsent, setViewingConsent] = useState(null);
 
-  const requirements = Array.isArray(trip.documentRequirements) ? trip.documentRequirements : [];
-  const parentDocumentsByEmail = useMemo(() => new Map(
-    (trip.parentDocuments || []).map((row) => [
-      String(row.parentEmail || "").trim().toLowerCase(),
-      Array.isArray(row.documents) ? row.documents : [],
-    ]),
-  ), [trip.parentDocuments]);
+  const requirements = Array.isArray(trip.documentRequirements)
+    ? trip.documentRequirements
+    : [];
+  const normalizedRequirementSearch = requirementSearch.trim().toLowerCase();
+  const visibleRequirements = requirements.filter(
+    (requirement) =>
+      !normalizedRequirementSearch ||
+      documentRequirementLabel(requirement)
+        .toLowerCase()
+        .includes(normalizedRequirementSearch) ||
+      formatAcceptedFileTypes(requirement.acceptedFileTypes)
+        .toLowerCase()
+        .includes(normalizedRequirementSearch),
+  );
+  const configuredConsentRequirement = requirements.find(
+    isDigitalConsentRequirement,
+  );
+  const canAddDigitalConsent =
+    !configuredConsentRequirement ||
+    String(configuredConsentRequirement.id) === String(editingId);
+  const parentDocumentsByEmail = useMemo(
+    () =>
+      new Map(
+        (trip.parentDocuments || []).map((row) => [
+          String(row.parentEmail || "")
+            .trim()
+            .toLowerCase(),
+          Array.isArray(row.documents) ? row.documents : [],
+        ]),
+      ),
+    [trip.parentDocuments],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -2257,11 +4296,67 @@ function DocumentsTab({ trip, onChange, notify }) {
       .finally(() => {
         if (!cancelled) setLoadingRegs(false);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [trip.id]);
 
+  useEffect(() => {
+    setPeoplePage(1);
+  }, [trip.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingConsentTerms(true);
+    setConsentTermsError("");
+    fetchApi(`/api/travel/trips/${trip.id}/documents`, { silent: true })
+      .then((result) => {
+        if (cancelled) return;
+        const template = formatConsentTermsForEditing(
+          result?.consentTermsTemplate || "",
+        );
+        const savedTerms = formatConsentTermsForEditing(
+          result?.consentTermsSaved || "",
+        );
+        setConsentTermsTemplate(template);
+        setTripConsentTerms(savedTerms);
+        setSavedConsentTerms(savedTerms || template);
+        if (!template)
+          setConsentTermsError(
+            "The consent form template could not be loaded.",
+          );
+      })
+      .catch((error) => {
+        if (!cancelled)
+          setConsentTermsError(
+            error?.body?.error ||
+              "The consent form template could not be loaded.",
+          );
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingConsentTerms(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [trip.id]);
+
+  useEffect(() => {
+    if (!consentTermsTemplate) return;
+    setConsentTerms((current) => {
+      const existing = String(current || "").trim();
+      const initialTerms = tripConsentTerms || consentTermsTemplate;
+      return !existing || existing === DEFAULT_TMC_CONSENT_TERMS
+        ? initialTerms
+        : current;
+    });
+  }, [consentTermsTemplate, tripConsentTerms]);
+
   const pendingPeople = pendingRegs
-    .filter((registration) => !["CONVERTED", "REJECTED"].includes(registration.status))
+    .filter(
+      (registration) =>
+        !["CONVERTED", "REJECTED"].includes(registration.status),
+    )
     .map((registration) => ({
       ...registration,
       id: `registration-${registration.id}`,
@@ -2269,7 +4364,12 @@ function DocumentsTab({ trip, onChange, notify }) {
       name: registration.studentName,
       parentName: registration.parentName,
       parentEmail: registration.parentEmail,
-      documents: parentDocumentsByEmail.get(String(registration.parentEmail || "").trim().toLowerCase()) || [],
+      documents:
+        parentDocumentsByEmail.get(
+          String(registration.parentEmail || "")
+            .trim()
+            .toLowerCase(),
+        ) || [],
       pathPrefix: "registrations",
     }));
   const participantPeople = (trip.participants || []).map((participant) => ({
@@ -2281,30 +4381,85 @@ function DocumentsTab({ trip, onChange, notify }) {
     parentEmail: participant.parentEmail,
     documents: participant.parentDocuments?.length
       ? participant.parentDocuments
-      : parentDocumentsByEmail.get(String(participant.parentEmail || "").trim().toLowerCase()) || [],
+      : parentDocumentsByEmail.get(
+          String(participant.parentEmail || "")
+            .trim()
+            .toLowerCase(),
+        ) || [],
     pathPrefix: "participants",
   }));
   const people = [...pendingPeople, ...participantPeople];
+  const peoplePageSize = 5;
+  const peoplePageCount = Math.max(
+    1,
+    Math.ceil(people.length / peoplePageSize),
+  );
+  const currentPeoplePage = Math.min(peoplePage, peoplePageCount);
+  const pageStartIndex = (currentPeoplePage - 1) * peoplePageSize;
+  const visiblePeople = people.slice(
+    pageStartIndex,
+    pageStartIndex + peoplePageSize,
+  );
 
   const resetForm = () => {
     setEditingId(null);
     setDocName("");
+    setDocNameError("");
     setAcceptedFileTypes(["pdf", "jpg", "png"]);
     setCaptureMode("file");
+    const initialTerms = tripConsentTerms || consentTermsTemplate;
+    setConsentTerms(initialTerms);
+    setSavedConsentTerms(initialTerms);
+    setConsentPreviewOpen(false);
   };
 
   const beginEdit = (requirement) => {
     setEditingId(requirement.id);
     setDocName(requirement.docType || "");
-    setAcceptedFileTypes(normalizeAcceptedFileTypes(requirement.acceptedFileTypes));
-    setCaptureMode(isDigitalConsentRequirement(requirement) ? "digital_consent" : "file");
-    window.setTimeout(() => document.getElementById("trip-document-name")?.focus(), 0);
+    setDocNameError("");
+    setAcceptedFileTypes(
+      normalizeAcceptedFileTypes(requirement.acceptedFileTypes),
+    );
+    setCaptureMode(
+      isDigitalConsentRequirement(requirement) ? "digital_consent" : "file",
+    );
+    const storedTerms = String(requirement.consentTerms || "").trim();
+    const terms = formatConsentTermsForEditing(
+      tripConsentTerms ||
+        (storedTerms && storedTerms !== DEFAULT_TMC_CONSENT_TERMS
+          ? storedTerms
+          : consentTermsTemplate),
+    );
+    setConsentTerms(terms);
+    setSavedConsentTerms(terms);
+    setConsentPreviewOpen(false);
+    window.setTimeout(
+      () => document.getElementById("trip-document-name")?.focus(),
+      0,
+    );
+  };
+
+  const selectCaptureMode = (nextMode) => {
+    setCaptureMode(nextMode);
+    if (nextMode === "digital_consent") {
+      const existing = String(consentTerms || "").trim();
+      const terms = formatConsentTermsForEditing(
+        !existing || existing === DEFAULT_TMC_CONSENT_TERMS
+          ? tripConsentTerms || consentTermsTemplate
+          : existing,
+      );
+      setConsentTerms(terms);
+      if (!existing || existing === DEFAULT_TMC_CONSENT_TERMS)
+        setSavedConsentTerms(tripConsentTerms || terms);
+    }
   };
 
   const toggleFileType = (value) => {
-    setAcceptedFileTypes((current) => current.includes(value)
-      ? current.filter((item) => item !== value)
-      : [...current, value]);
+    setAcceptedFileTypes((current) =>
+      current.includes(value)
+        ? current.filter((item) => item !== value)
+        : [...current, value],
+    );
   };
 
   const saveRequirement = async (event) => {
@@ -2314,8 +4469,30 @@ function DocumentsTab({ trip, onChange, notify }) {
       notify.error("Enter a document name");
       return;
     }
+    const normalizedName = trimmedName.toLowerCase();
+    const duplicateRequirement = requirements.find(
+      (requirement) =>
+        String(requirement.id) !== String(editingId) &&
+        String(requirement.docType || "")
+          .trim()
+          .toLowerCase() === normalizedName,
+    );
+    if (duplicateRequirement) {
+      const error = "A document requirement with this name already exists";
+      setDocNameError(error);
+      notify.error(error);
+      return;
+    }
+    setDocNameError("");
     if (!acceptedFileTypes.length) {
       notify.error("Choose at least one accepted file type");
+      return;
+    }
+    if (captureMode === "digital_consent" && !consentTerms.trim()) {
+      notify.error(
+        consentTermsError ||
+          "Load the consent form before saving this requirement",
+      );
       return;
     }
     setSaving(true);
@@ -2327,18 +4504,49 @@ function DocumentsTab({ trip, onChange, notify }) {
       };
       if (captureMode === "digital_consent") {
         body.captureMode = "digital_consent";
+        body.consentTerms = consentTerms.trim();
       }
-      await fetchApi(editingId
-        ? `/api/travel/trips/${trip.id}/documents/${editingId}`
-        : `/api/travel/trips/${trip.id}/documents`, {
+      await fetchApi(
+        editingId
+          ? `/api/travel/trips/${trip.id}/documents/${editingId}`
+          : `/api/travel/trips/${trip.id}/documents`,
+        {
           method: editingId ? "PATCH" : "POST",
           body: JSON.stringify(body),
-        });
-      notify.success(editingId ? "Document requirement updated" : "Document requirement added");
+        },
+      );
+      notify.success(
+        editingId
+          ? "Document requirement updated"
+          : "Document requirement added",
+      );
       resetForm();
       onChange();
     } catch (error) {
       notify.error(error?.body?.error || "Failed to save document requirement");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveConsentTerms = async () => {
+    const terms = consentTerms.trim();
+    if (!terms || saving) return;
+    setSaving(true);
+    try {
+      const result = await fetchApi(`/api/travel/trips/${trip.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ consentTerms: terms }),
+      });
+      const savedTerms = String(result?.consentTerms || terms).trim();
+      setConsentTerms(savedTerms);
+      setTripConsentTerms(savedTerms);
+      setConsentTermsTemplate(savedTerms);
+      setSavedConsentTerms(savedTerms);
+      notify.success("Consent form saved");
+      onChange();
+    } catch (error) {
+      notify.error(error?.body?.error || "Failed to save consent form");
     } finally {
       setSaving(false);
     }
@@ -2353,20 +4561,28 @@ function DocumentsTab({ trip, onChange, notify }) {
     });
     if (!confirmed) return;
     try {
-      await fetchApi(`/api/travel/trips/${trip.id}/documents/${requirement.id}`, { method: "DELETE" });
+      await fetchApi(
+        `/api/travel/trips/${trip.id}/documents/${requirement.id}`,
+        { method: "DELETE" },
+      );
       notify.success("Document requirement removed");
       if (editingId === requirement.id) resetForm();
       onChange();
     } catch (error) {
-      notify.error(error?.body?.error || "Failed to remove document requirement");
+      notify.error(
+        error?.body?.error || "Failed to remove document requirement",
+      );
     }
   };
 
   const fetchDocumentBlob = async (person, documentRecord) => {
     const token = getAuthToken();
-    const response = await fetch(`/api/travel/trips/${trip.id}/${person.pathPrefix}/${person.sourceId}/parent-documents/${documentRecord.id}/file`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
+    const response = await fetch(
+      `/api/travel/trips/${trip.id}/${person.pathPrefix}/${person.sourceId}/parent-documents/${documentRecord.id}/file`,
+      {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      },
+    );
     if (!response.ok) {
       const result = await response.json().catch(() => ({}));
       throw new Error(result.error || "Failed to open document");
@@ -2376,9 +4592,12 @@ function DocumentsTab({ trip, onChange, notify }) {
 
   const fetchDocumentViewUrl = async (person, documentRecord) => {
     const token = getAuthToken();
-    const response = await fetch(`/api/travel/trips/${trip.id}/${person.pathPrefix}/${person.sourceId}/parent-documents/${documentRecord.id}/view-url`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    });
+    const response = await fetch(
+      `/api/travel/trips/${trip.id}/${person.pathPrefix}/${person.sourceId}/parent-documents/${documentRecord.id}/view-url`,
+      {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      },
+    );
     if (!response.ok || typeof response.json !== "function") return null;
     const result = await response.json().catch(() => ({}));
     return result?.url || null;
@@ -2390,13 +4609,17 @@ function DocumentsTab({ trip, onChange, notify }) {
       window.open(signedUrl, "_blank", "noopener,noreferrer");
       return;
     }
-    const url = URL.createObjectURL(await fetchDocumentBlob(person, documentRecord));
+    const url = URL.createObjectURL(
+      await fetchDocumentBlob(person, documentRecord),
+    );
     window.open(url, "_blank", "noopener,noreferrer");
     window.setTimeout(() => URL.revokeObjectURL(url), 30000);
   };
 
   const downloadDocument = async (person, documentRecord) => {
-    const url = URL.createObjectURL(await fetchDocumentBlob(person, documentRecord));
+    const url = URL.createObjectURL(
+      await fetchDocumentBlob(person, documentRecord),
+    );
     const filename = String(
       isDigitalConsentRequirement(documentRecord)
         ? `consent-form-${documentRecord.id}.pdf`
@@ -2416,7 +4639,9 @@ function DocumentsTab({ trip, onChange, notify }) {
       setViewingConsent({ person, document });
       return;
     }
-    viewDocument(person, document).catch((error) => notify.error(error.message || "Failed to open document"));
+    viewDocument(person, document).catch((error) =>
+      notify.error(error.message || "Failed to open document"),
+    );
   };
 
   return (
@@ -2429,154 +4654,796 @@ function DocumentsTab({ trip, onChange, notify }) {
         />
       )}
       <section style={documentAdminCard}>
-        <div style={documentAdminHeader}>
-          <div>
-            <h2 style={{ margin: 0, fontSize: 17 }}>Documents to collect</h2>
-            <p style={{ margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 13 }}>
-              Add the exact document name parents should see, then choose the file types this trip accepts.
-            </p>
-          </div>
-          <FileText size={20} aria-hidden />
-        </div>
-        <form onSubmit={saveRequirement} style={{ display: "grid", gap: 13 }}>
-          <label style={{ display: "grid", gap: 6, fontSize: 12, fontWeight: 700 }} htmlFor="trip-document-name">
-            Document name
-            <input
-              id="trip-document-name"
-              value={docName}
-              onChange={(event) => setDocName(event.target.value)}
-              placeholder="e.g. School medical clearance"
-              maxLength={120}
-              style={input}
-            />
-          </label>
-          <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
-            <legend style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>How should parents complete it?</legend>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <label style={{ ...fileTypeChoice, ...(captureMode === "file" ? fileTypeChoiceActive : {}) }}>
-                <input type="radio" name="trip-document-capture-mode" checked={captureMode === "file"} onChange={() => setCaptureMode("file")} />
-                Upload a file
-              </label>
-              <label style={{ ...fileTypeChoice, ...(captureMode === "digital_consent" ? fileTypeChoiceActive : {}) }}>
-                <input type="radio" name="trip-document-capture-mode" checked={captureMode === "digital_consent"} onChange={() => setCaptureMode("digital_consent")} />
-                Digital consent form
-              </label>
-            </div>
-          </fieldset>
-          {captureMode === "file" ? (
-            <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
-              <legend style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>Accepted file types</legend>
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                {TMC_DOCUMENT_FILE_TYPES.map((type) => (
-                  <label key={type.value} style={{ ...fileTypeChoice, ...(acceptedFileTypes.includes(type.value) ? fileTypeChoiceActive : {}) }}>
-                    <input type="checkbox" checked={acceptedFileTypes.includes(type.value)} onChange={() => toggleFileType(type.value)} />
-                    {type.label}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-          ) : (
-            <div style={{ display: "grid", gap: 6, padding: 12, border: "1px solid var(--border-color)", borderRadius: 9, background: "var(--subtle-bg)" }}>
-              <strong style={{ fontSize: 12 }}>Approved trip terms</strong>
-              <span style={{ color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.5 }}>
-                Parents will see the approved {trip.tripType === "international" ? "international" : trip.tripType === "day_trip" ? "day-tour" : "domestic"} travel terms in the parent portal before completing this digital consent form.
+        <button
+          type="button"
+          aria-expanded={collectionOpen}
+          aria-controls="trip-document-collection-panel"
+          onClick={() => setCollectionOpen((current) => !current)}
+          style={documentCollectionToggle}
+        >
+          <span style={documentCollectionTitle}>
+            <span style={documentCollectionIcon}>
+              <FileText size={18} aria-hidden />
+            </span>
+            <span style={{ display: "grid", gap: 3, textAlign: "left" }}>
+              <strong style={{ fontSize: 15 }}>Document collection</strong>
+              <span
+                style={{
+                  color: "var(--text-secondary)",
+                  fontSize: 12,
+                  fontWeight: 400,
+                }}
+              >
+                Set the documents parents need to submit and the accepted file
+                types.
               </span>
+            </span>
+          </span>
+          <span style={documentCollectionControls}>
+            <span style={countBadge}>{requirements.length} configured</span>
+            {collectionOpen ? (
+              <ChevronUp size={17} aria-hidden />
+            ) : (
+              <ChevronDown size={17} aria-hidden />
+            )}
+          </span>
+        </button>
+
+        {collectionOpen && (
+          <div
+            id="trip-document-collection-panel"
+            style={documentCollectionPanel}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 12,
+              }}
+            >
+              <h2
+                style={{
+                  margin: 0,
+                  color: "var(--text-primary)",
+                  fontSize: 16,
+                }}
+              >
+                Documents to collect
+              </h2>
             </div>
-          )}
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, flexWrap: "wrap" }}>
-            {editingId && <button type="button" onClick={resetForm} style={secondaryBtn}>Cancel edit</button>}
-            <button type="submit" disabled={saving} style={primaryBtn}>
-              <Save size={14} aria-hidden /> {saving ? "Saving…" : editingId ? "Save changes" : "Add document"}
-            </button>
+            <form
+              onSubmit={saveRequirement}
+              style={{ display: "grid", gap: 14 }}
+            >
+              <div style={documentRequirementPrimaryRow}>
+                <label style={documentFormLabel} htmlFor="trip-document-name">
+                  <span>
+                    Document name{" "}
+                    <span
+                      aria-hidden="true"
+                      style={{ color: "var(--danger-color, #b42318)" }}
+                    >
+                      *
+                    </span>
+                  </span>
+                  <input
+                    id="trip-document-name"
+                    required
+                    aria-required="true"
+                    value={docName}
+                    onChange={(event) => {
+                      setDocName(event.target.value);
+                      setDocNameError("");
+                    }}
+                    placeholder="e.g. School medical clearance"
+                    maxLength={120}
+                    style={{ ...input, width: "100%", boxSizing: "border-box" }}
+                  />
+                  {docNameError && (
+                    <span
+                      role="alert"
+                      style={{
+                        color: "var(--danger-color, #b42318)",
+                        fontSize: 11,
+                        fontWeight: 500,
+                      }}
+                    >
+                      {docNameError}
+                    </span>
+                  )}
+                </label>
+                <fieldset style={documentFormFieldset}>
+                  <legend style={documentFormLegend}>
+                    How should parents complete it?
+                  </legend>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <label
+                      style={{
+                        ...fileTypeChoice,
+                        ...(captureMode === "file" ? fileTypeChoiceActive : {}),
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="trip-document-capture-mode"
+                        checked={captureMode === "file"}
+                        onChange={() => selectCaptureMode("file")}
+                      />
+                      Upload a file
+                    </label>
+                    <label
+                      style={{
+                        ...fileTypeChoice,
+                        ...(captureMode === "digital_consent"
+                          ? fileTypeChoiceActive
+                          : {}),
+                        ...(!canAddDigitalConsent
+                          ? { opacity: 0.55, cursor: "not-allowed" }
+                          : {}),
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="trip-document-capture-mode"
+                        checked={captureMode === "digital_consent"}
+                        disabled={!canAddDigitalConsent}
+                        onChange={() => selectCaptureMode("digital_consent")}
+                      />
+                      Digital consent form
+                    </label>
+                    {!canAddDigitalConsent && (
+                      <span
+                        role="status"
+                        style={{
+                          alignSelf: "center",
+                          color: "var(--text-secondary)",
+                          fontSize: 11,
+                        }}
+                      >
+                        A consent form is already configured. Edit or remove it
+                        below.
+                      </span>
+                    )}
+                  </div>
+                </fieldset>
+              </div>
+
+              <div style={documentRequirementOptionsRow}>
+                {captureMode === "file" ? (
+                  <fieldset
+                    style={{
+                      ...documentFormFieldset,
+                      ...documentFileTypesFieldset,
+                    }}
+                  >
+                    <legend style={documentFormLegend}>
+                      Accepted file types
+                    </legend>
+                    <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
+                      {TMC_DOCUMENT_FILE_TYPES.map((type) => (
+                        <label
+                          key={type.value}
+                          style={{
+                            ...fileTypeChoice,
+                            ...(acceptedFileTypes.includes(type.value)
+                              ? fileTypeChoiceActive
+                              : {}),
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={acceptedFileTypes.includes(type.value)}
+                            onChange={() => toggleFileType(type.value)}
+                          />
+                          {type.label}
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                ) : (
+                  <div style={documentConsentMethodHint}>
+                    Parents complete this requirement in the digital consent
+                    form.
+                  </div>
+                )}
+                {captureMode === "file" && (
+                  <div style={documentRequirementSubmit}>
+                    {editingId && (
+                      <button
+                        type="button"
+                        onClick={resetForm}
+                        style={secondaryBtn}
+                      >
+                        Cancel edit
+                      </button>
+                    )}
+                    <button type="submit" disabled={saving} style={primaryBtn}>
+                      <Save size={14} aria-hidden />{" "}
+                      {saving
+                        ? "Saving…"
+                        : editingId
+                          ? "Save changes"
+                          : "Add requirement"}
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {captureMode === "digital_consent" && (
+                <section
+                  style={consentFormEditor}
+                  aria-labelledby="trip-consent-form-title"
+                >
+                  <div style={consentFormEditorHeader}>
+                    <div>
+                      <h3
+                        id="trip-consent-form-title"
+                        style={{ margin: 0, fontSize: 14 }}
+                      >
+                        Digital consent form
+                      </h3>
+                      <p
+                        style={{
+                          margin: "4px 0 0",
+                          color: "var(--text-secondary)",
+                          fontSize: 12,
+                          lineHeight: 1.5,
+                        }}
+                      >
+                        Edit the terms parents will read. Previous submissions
+                        keep the terms accepted at that time.
+                      </p>
+                    </div>
+                    <div style={consentFormEditorTools}>
+                      <button
+                        type="button"
+                        onClick={() => setConsentPreviewOpen(true)}
+                        style={secondaryBtn}
+                      >
+                        <Eye size={14} aria-hidden /> Preview
+                      </button>
+                      {consentTerms !== savedConsentTerms && (
+                        <button
+                          type="button"
+                          onClick={saveConsentTerms}
+                          disabled={saving || !consentTerms.trim()}
+                          style={primaryBtn}
+                        >
+                          <Save size={14} aria-hidden />{" "}
+                          {saving ? "Saving…" : "Save"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {loadingConsentTerms && !consentTerms && (
+                    <div role="status" style={consentTemplateNotice}>
+                      Loading the full consent document…
+                    </div>
+                  )}
+                  {consentTermsError && !consentTerms && (
+                    <div role="alert" style={consentTemplateError}>
+                      {consentTermsError}
+                    </div>
+                  )}
+                  <label htmlFor="trip-consent-terms" style={documentFormLabel}>
+                    Terms and clauses
+                    <textarea
+                      id="trip-consent-terms"
+                      aria-label="Consent form terms"
+                      value={consentTerms}
+                      onChange={(event) => {
+                        setConsentTerms(event.target.value);
+                        if (event.target.value.trim()) setConsentTermsError("");
+                      }}
+                      rows={18}
+                      maxLength={30000}
+                      style={consentTermsEditorInput}
+                    />
+                    <span
+                      style={{
+                        color: "var(--text-secondary)",
+                        fontSize: 11,
+                        fontWeight: 400,
+                      }}
+                    >
+                      {consentTerms.length.toLocaleString()} / 30,000 characters
+                    </span>
+                  </label>
+                  <div
+                    style={consentParentFieldsSection}
+                    aria-label="Parent consent form fields"
+                    data-testid="trip-consent-form-fields"
+                  >
+                    <div>
+                      <strong style={{ fontSize: 12 }}>
+                        Parent and signature details
+                      </strong>
+                      <p
+                        style={{
+                          margin: "3px 0 0",
+                          color: "var(--text-secondary)",
+                          fontSize: 11,
+                        }}
+                      >
+                        These fields follow the terms in the parent consent
+                        form.
+                      </p>
+                    </div>
+                    <div style={consentParentFieldsGrid}>
+                      {TMC_DIGITAL_CONSENT_FIELDS.map((field) => (
+                        <div key={field.key} style={consentParentField}>
+                          <span style={{ fontSize: 11, fontWeight: 600 }}>
+                            {field.label}
+                            {field.required ? " *" : ""}
+                          </span>
+                          <span
+                            aria-hidden
+                            style={{
+                              ...consentParentFieldInput,
+                              ...(field.type === "textarea"
+                                ? { height: 46 }
+                                : {}),
+                            }}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                    <div style={consentParentAgreement}>
+                      <span aria-hidden style={consentAgreementCheckbox} />
+                      <span>I agree to the terms and conditions above.</span>
+                    </div>
+                  </div>
+                  <div style={consentFormActions}>
+                    {editingId && (
+                      <button
+                        type="button"
+                        onClick={resetForm}
+                        style={secondaryBtn}
+                      >
+                        Cancel edit
+                      </button>
+                    )}
+                    <button
+                      type="submit"
+                      disabled={saving || !consentTerms.trim()}
+                      style={primaryBtn}
+                    >
+                      <Save size={14} aria-hidden />{" "}
+                      {saving
+                        ? "Saving…"
+                        : editingId
+                          ? "Save changes"
+                          : "Add requirement"}
+                    </button>
+                  </div>
+                  {consentPreviewOpen &&
+                    createPortal(
+                      <div
+                        style={consentPreviewOverlay}
+                        onMouseDown={(event) => {
+                          if (event.target === event.currentTarget)
+                            setConsentPreviewOpen(false);
+                        }}
+                      >
+                        <section
+                          role="dialog"
+                          aria-modal="true"
+                          aria-labelledby="trip-consent-preview-title"
+                          style={consentPreviewDialog}
+                        >
+                          <div style={consentPreviewHeader}>
+                            <div>
+                              <h4
+                                id="trip-consent-preview-title"
+                                style={{
+                                  margin: 0,
+                                  color: "var(--text-primary)",
+                                  fontSize: 16,
+                                }}
+                              >
+                                Parent consent preview
+                              </h4>
+                              <p
+                                style={{
+                                  margin: "4px 0 0",
+                                  color: "var(--text-secondary)",
+                                  fontSize: 12,
+                                }}
+                              >
+                                This is how the consent terms are organized for
+                                parents.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setConsentPreviewOpen(false)}
+                              style={secondaryBtn}
+                            >
+                              Close preview
+                            </button>
+                          </div>
+                          <ConsentTermsFormattedPreview terms={consentTerms} />
+                        </section>
+                      </div>,
+                      document.body,
+                    )}
+                </section>
+              )}
+            </form>
+
+            <section
+              style={configuredRequirementsSection}
+              aria-labelledby="trip-configured-requirements-title"
+              data-testid="trip-configured-requirements"
+            >
+              <div style={configuredRequirementsHeader}>
+                <div style={configuredRequirementsHeading}>
+                  <span style={configuredRequirementsIcon}>
+                    <Layers size={17} aria-hidden />
+                  </span>
+                  <div style={{ minWidth: 0 }}>
+                    <h3
+                      id="trip-configured-requirements-title"
+                      style={{
+                        margin: 0,
+                        color: "var(--text-primary)",
+                        fontSize: 14,
+                      }}
+                    >
+                      Configured requirements ({requirements.length})
+                    </h3>
+                    <p
+                      style={{
+                        margin: "3px 0 0",
+                        color: "var(--text-secondary)",
+                        fontSize: 11,
+                      }}
+                    >
+                      These requirements appear on the parent portal for this
+                      trip.
+                    </p>
+                  </div>
+                </div>
+                {requirements.length > 0 && (
+                  <div style={configuredRequirementsToolbar}>
+                    <label style={configuredRequirementsSearch}>
+                      <Search size={15} aria-hidden />
+                      <input
+                        type="search"
+                        aria-label="Search configured requirements"
+                        placeholder="Search requirement..."
+                        value={requirementSearch}
+                        onChange={(event) =>
+                          setRequirementSearch(event.target.value)
+                        }
+                        style={configuredRequirementsSearchInput}
+                      />
+                    </label>
+                  </div>
+                )}
+              </div>
+              {requirements.length === 0 ? (
+                <div style={documentRequirementsEmpty} role="status">
+                  <span style={documentRequirementsEmptyIcon}>
+                    <FileText size={17} aria-hidden />
+                  </span>
+                  <span style={{ display: "grid", gap: 3 }}>
+                    <strong
+                      style={{ color: "var(--text-primary)", fontSize: 12 }}
+                    >
+                      No requirements added yet
+                    </strong>
+                    <span
+                      style={{ color: "var(--text-secondary)", fontSize: 11 }}
+                    >
+                      Add the documents parents need to submit using the fields
+                      above.
+                    </span>
+                  </span>
+                </div>
+              ) : visibleRequirements.length === 0 ? (
+                <div style={documentRequirementsEmpty} role="status">
+                  <span
+                    style={{ color: "var(--text-secondary)", fontSize: 12 }}
+                  >
+                    No requirements match your search.
+                  </span>
+                </div>
+              ) : (
+                <div
+                  data-testid="trip-requirement-cards"
+                  data-layout="grid"
+                  style={configuredRequirementsGrid}
+                >
+                  {visibleRequirements.map((requirement) => (
+                    <article
+                      key={requirement.id}
+                      data-testid="trip-requirement-card"
+                      style={documentRequirementCard}
+                    >
+                      <div style={documentRequirementCardInfo}>
+                        <span style={documentRequirementCardIcon}>
+                          <FileText size={17} aria-hidden />
+                        </span>
+                        <div style={{ display: "grid", gap: 4, minWidth: 0 }}>
+                          <strong
+                            style={{
+                              color: "var(--text-primary)",
+                              fontSize: 13,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                            }}
+                          >
+                            {documentRequirementLabel(requirement)}
+                          </strong>
+                          <span
+                            style={{
+                              color: "var(--text-secondary)",
+                              fontSize: 11,
+                            }}
+                          >
+                            {isDigitalConsentRequirement(requirement)
+                              ? "Digital consent form"
+                              : formatAcceptedFileTypes(
+                                  requirement.acceptedFileTypes,
+                                )}
+                          </span>
+                        </div>
+                        <span style={documentRequirementRequiredBadge}>
+                          Required
+                        </span>
+                      </div>
+                      <div style={documentRequirementCardActions}>
+                        <button
+                          type="button"
+                          onClick={() => beginEdit(requirement)}
+                          style={{
+                            ...secondaryBtn,
+                            padding: "6px 10px",
+                            fontSize: 12,
+                          }}
+                        >
+                          <Edit3 size={13} aria-hidden /> Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeRequirement(requirement)}
+                          style={{
+                            ...dangerBtn,
+                            padding: "6px 10px",
+                            fontSize: 12,
+                          }}
+                        >
+                          <Trash2 size={13} aria-hidden /> Remove
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
           </div>
-        </form>
-        <div style={{ display: "grid", gap: 8, marginTop: 18 }}>
-          {requirements.length === 0 ? (
-            <div style={empty}>No document requirements have been configured for this trip.</div>
-          ) : requirements.map((requirement) => (
-            <div key={requirement.id} style={documentRequirementRow}>
-              <div style={{ minWidth: 0 }}>
-                <strong style={{ display: "block", fontSize: 14 }}>{documentRequirementLabel(requirement)}</strong>
-                <span style={{ color: "var(--text-secondary)", fontSize: 12 }}>
-                  {isDigitalConsentRequirement(requirement) ? "Digital consent form" : formatAcceptedFileTypes(requirement.acceptedFileTypes)} · Required
-                </span>
-              </div>
-              <div style={{ display: "flex", gap: 7, flexWrap: "wrap" }}>
-                <button type="button" onClick={() => beginEdit(requirement)} style={secondaryBtn}><Edit3 size={13} aria-hidden /> Edit</button>
-                <button type="button" onClick={() => removeRequirement(requirement)} style={dangerBtn}><Trash2 size={13} aria-hidden /> Remove</button>
-              </div>
-            </div>
-          ))}
-        </div>
+        )}
       </section>
 
       <section style={documentAdminCard}>
         <div style={documentAdminHeader}>
           <div>
             <h2 style={{ margin: 0, fontSize: 17 }}>Participant documents</h2>
-            <p style={{ margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 13 }}>
-              See every participant and open the documents submitted against this trip.
+            <p
+              style={{
+                margin: "5px 0 0",
+                color: "var(--text-secondary)",
+                fontSize: 13,
+              }}
+            >
+              See every participant and open the documents submitted against
+              this trip.
             </p>
           </div>
-          <span style={countBadge}>{people.length} participant{people.length === 1 ? "" : "s"}</span>
+          <span style={countBadge}>
+            {people.length} participant{people.length === 1 ? "" : "s"}
+          </span>
         </div>
         {loadingRegs && <div style={empty}>Loading registrations…</div>}
-        {!loadingRegs && !people.length && <div style={empty}>No participants or registrations yet.</div>}
+        {!loadingRegs && !people.length && (
+          <div style={empty}>No participants or registrations yet.</div>
+        )}
         {!loadingRegs && people.length > 0 && (
           <div style={{ overflowX: "auto" }}>
-            <div style={{ minWidth: Math.max(620, 240 + requirements.length * 170) }}>
-              <div style={{ ...documentMatrixGrid, gridTemplateColumns: `minmax(220px, 1.2fr) repeat(${Math.max(requirements.length, 1)}, minmax(160px, 1fr))` }}>
+            <div
+              style={{
+                minWidth: Math.max(620, 240 + requirements.length * 170),
+              }}
+            >
+              <div
+                style={{
+                  ...documentMatrixGrid,
+                  gridTemplateColumns: `minmax(220px, 1.2fr) repeat(${Math.max(requirements.length, 1)}, minmax(160px, 1fr))`,
+                }}
+              >
                 <strong>Participant</strong>
-                {requirements.length ? requirements.map((requirement) => <strong key={requirement.id}>{documentRequirementLabel(requirement)}</strong>) : <strong>Documents</strong>}
+                {requirements.length ? (
+                  requirements.map((requirement) => (
+                    <strong key={requirement.id}>
+                      {documentRequirementLabel(requirement)}
+                    </strong>
+                  ))
+                ) : (
+                  <strong>Documents</strong>
+                )}
               </div>
-              {people.map((person) => (
-                <div key={person.id} style={{ ...documentMatrixGrid, gridTemplateColumns: `minmax(220px, 1.2fr) repeat(${Math.max(requirements.length, 1)}, minmax(160px, 1fr))` }}>
+              {visiblePeople.map((person) => (
+                <div
+                  key={person.id}
+                  style={{
+                    ...documentMatrixGrid,
+                    gridTemplateColumns: `minmax(220px, 1.2fr) repeat(${Math.max(requirements.length, 1)}, minmax(160px, 1fr))`,
+                  }}
+                >
                   <div style={{ minWidth: 0 }}>
-                    <strong style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis" }}>{person.name || "Participant"}</strong>
-                    <span style={{ color: "var(--text-secondary)", fontSize: 11 }}>{person.parentName || person.parentEmail || "Parent details unavailable"}</span>
+                    <strong
+                      style={{
+                        display: "block",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      {person.name || "Participant"}
+                    </strong>
+                    <span
+                      style={{ color: "var(--text-secondary)", fontSize: 11 }}
+                    >
+                      {person.parentName ||
+                        person.parentEmail ||
+                        "Parent details unavailable"}
+                    </span>
                   </div>
-                  {requirements.length ? requirements.map((requirement) => {
-                    const document = person.documents.find((candidate) => documentMatchesRequirement(candidate, requirement));
-                    return document ? (
-                      <div key={requirement.id} data-testid="trip-document-actions" style={matrixUploadedActions}>
-                        <span
-                          className="trip-document-view-action"
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => handleView(person, document)}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter" || event.key === " ") {
-                              event.preventDefault();
-                              handleView(person, document);
-                            }
-                          }}
-                          style={matrixUploaded}
-                          title={`View ${document.filename || documentRequirementLabel(requirement)}`}
+                  {requirements.length ? (
+                    requirements.map((requirement) => {
+                      const document = person.documents.find((candidate) =>
+                        documentMatchesRequirement(candidate, requirement),
+                      );
+                      return document ? (
+                        <div
+                          key={requirement.id}
+                          data-testid="trip-document-actions"
+                          style={matrixUploadedActions}
                         >
-                          <Eye size={13} aria-hidden /> {isDigitalConsentRequirement(document) ? "View consent" : "View document"}
-                        </span>
-                        <span
-                          className="trip-document-download-action"
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => downloadDocument(person, document).catch((error) => notify.error(error.message || "Failed to download document"))}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter" || event.key === " ") {
-                              event.preventDefault();
-                              downloadDocument(person, document).catch((error) => notify.error(error.message || "Failed to download document"));
+                          <span
+                            className="trip-document-view-action"
+                            role="button"
+                            tabIndex={0}
+                            onClick={() => handleView(person, document)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                handleView(person, document);
+                              }
+                            }}
+                            style={matrixUploaded}
+                            title={`View ${document.filename || documentRequirementLabel(requirement)}`}
+                          >
+                            <Eye size={13} aria-hidden />{" "}
+                            {isDigitalConsentRequirement(document)
+                              ? "View consent"
+                              : "View document"}
+                          </span>
+                          <span
+                            className="trip-document-download-action"
+                            role="button"
+                            tabIndex={0}
+                            onClick={() =>
+                              downloadDocument(person, document).catch(
+                                (error) =>
+                                  notify.error(
+                                    error.message ||
+                                      "Failed to download document",
+                                  ),
+                              )
                             }
-                          }}
-                          style={matrixUploaded}
-                          title={`Download ${document.filename || documentRequirementLabel(requirement)}`}
-                        >
-                          <Download size={13} aria-hidden /> Download
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                downloadDocument(person, document).catch(
+                                  (error) =>
+                                    notify.error(
+                                      error.message ||
+                                        "Failed to download document",
+                                    ),
+                                );
+                              }
+                            }}
+                            style={matrixUploaded}
+                            title={`Download ${document.filename || documentRequirementLabel(requirement)}`}
+                          >
+                            <Download size={13} aria-hidden /> Download
+                          </span>
+                        </div>
+                      ) : (
+                        <span key={requirement.id} style={matrixPending}>
+                          <Clock size={13} aria-hidden /> Pending
                         </span>
-                      </div>
-                    ) : <span key={requirement.id} style={matrixPending}><Clock size={13} aria-hidden /> Pending</span>;
-                  }) : <span style={matrixPending}>No requirements</span>}
+                      );
+                    })
+                  ) : (
+                    <span style={matrixPending}>No requirements</span>
+                  )}
                 </div>
               ))}
             </div>
+          </div>
+        )}
+        {!loadingRegs && people.length > peoplePageSize && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              flexWrap: "wrap",
+              marginTop: 14,
+            }}
+          >
+            <span
+              aria-live="polite"
+              style={{ color: "var(--text-secondary)", fontSize: 12 }}
+            >
+              Showing {pageStartIndex + 1}-
+              {Math.min(pageStartIndex + peoplePageSize, people.length)} of{" "}
+              {people.length} participants
+            </span>
+            <nav
+              aria-label="Participant documents pagination"
+              style={{ display: "flex", alignItems: "center", gap: 8 }}
+            >
+              <button
+                type="button"
+                onClick={() => setPeoplePage((page) => Math.max(1, page - 1))}
+                disabled={currentPeoplePage === 1}
+                style={{
+                  ...secondaryBtn,
+                  padding: "6px 10px",
+                  fontSize: 12,
+                  opacity: currentPeoplePage === 1 ? 0.55 : 1,
+                  cursor: currentPeoplePage === 1 ? "not-allowed" : "pointer",
+                }}
+                aria-label="Previous participants page"
+              >
+                Previous
+              </button>
+              <span
+                style={{
+                  color: "var(--text-secondary)",
+                  fontSize: 12,
+                  minWidth: 72,
+                  textAlign: "center",
+                }}
+              >
+                Page {currentPeoplePage} of {peoplePageCount}
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  setPeoplePage((page) => Math.min(peoplePageCount, page + 1))
+                }
+                disabled={currentPeoplePage === peoplePageCount}
+                style={{
+                  ...secondaryBtn,
+                  padding: "6px 10px",
+                  fontSize: 12,
+                  opacity: currentPeoplePage === peoplePageCount ? 0.55 : 1,
+                  cursor:
+                    currentPeoplePage === peoplePageCount
+                      ? "not-allowed"
+                      : "pointer",
+                }}
+                aria-label="Next participants page"
+              >
+                Next
+              </button>
+            </nav>
           </div>
         )}
       </section>
@@ -2586,23 +5453,44 @@ function DocumentsTab({ trip, onChange, notify }) {
 
 // ─── Rooming tab ─────────────────────────────────────────────────────
 
-const ROOM_CAPACITY = { single: 1, twin: 2, triple: 3, quad: 4 };
-const ROOM_TYPES = ["single", "twin", "triple", "quad"];
+const LEGACY_ROOM_CAPACITY = { single: 1, twin: 2, triple: 3, quad: 4 };
+const MAX_ROOM_SHARING_CAPACITY = 2_147_483_647;
 
-export function RoomingTab({ trip, notify, request = fetchApi, showExports = true, readOnly = false }) {
+function getRoomSharingCapacity(room) {
+  const capacity = Number(room?.sharingCapacity);
+  return Number.isSafeInteger(capacity) && capacity > 0
+    ? capacity
+    : LEGACY_ROOM_CAPACITY[String(room?.roomType || "").toLowerCase()] || 0;
+}
+
+function isValidRoomSharingCapacity(value) {
+  const capacity = Number(value);
+  return (
+    Number.isSafeInteger(capacity) &&
+    capacity > 0 &&
+    capacity <= MAX_ROOM_SHARING_CAPACITY
+  );
+}
+
+export function RoomingTab({
+  trip,
+  notify,
+  request = fetchApi,
+  showExports = true,
+  onRoomingChange,
+  readOnly = false,
+  assignmentOnly = false,
+  canManageRooms = !readOnly && !assignmentOnly,
+  canDeleteRooms = canManageRooms,
+}) {
   const [rooms, setRooms] = useState([]);
   const [loading, setLoading] = useState(true);
-  // Edit buffer per existing room (keyed by room.id). Local edits live
-  // here until Save → PATCH; the server response then re-hydrates on load.
+  // Edit buffer per existing room (keyed by room.id). Existing rooms stay
+  // in summary view until their configuration or assignments are opened.
   const [buffers, setBuffers] = useState({});
-  // In-progress new-room form, or null when the form is closed.
   const [newRoom, setNewRoom] = useState(null);
-  // 'new' or a room.id while an API call is in flight; used to disable
-  // its row's Save/Delete buttons.
+  const [editingRoomId, setEditingRoomId] = useState(null);
   const [busyId, setBusyId] = useState(null);
-  const [autoAllocating, setAutoAllocating] = useState(false);
-  const [showAutoAllocateDialog, setShowAutoAllocateDialog] = useState(false);
-  const [autoAllocStartRoom, setAutoAllocStartRoom] = useState(101);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -2616,15 +5504,23 @@ export function RoomingTab({ trip, notify, request = fetchApi, showExports = tru
       .then((r) => {
         const rs = r?.rooming || [];
         setRooms(rs);
+        onRoomingChange?.(rs.length);
         const buf = {};
         for (const room of rs) {
           let pids = [];
-          try { pids = JSON.parse(room.participantIds || "[]"); } catch (_e) { /* ignore */ }
+          try {
+            pids = JSON.parse(room.participantIds || "[]");
+          } catch (_e) {
+            /* ignore */
+          }
           buf[room.id] = {
             roomNumber: room.roomNumber || "",
-            roomType: room.roomType || "twin",
+            sharingCapacity: getRoomSharingCapacity(room),
             participantIds: Array.isArray(pids)
-              ? pids.map(Number).filter(Number.isFinite).filter((id) => validIds.has(id))
+              ? pids
+                  .map(Number)
+                  .filter(Number.isFinite)
+                  .filter((id) => validIds.has(id))
               : [],
           };
         }
@@ -2635,24 +5531,23 @@ export function RoomingTab({ trip, notify, request = fetchApi, showExports = tru
         setBuffers({});
       })
       .finally(() => setLoading(false));
-  }, [request, trip.id, trip.participants]);
+  }, [onRoomingChange, request, trip.id, trip.participants]);
 
   useEffect(load, [load]);
 
+  const participants = Array.isArray(trip.participants)
+    ? trip.participants
+    : [];
 
-  const participants = Array.isArray(trip.participants) ? trip.participants : [];
-
-  // Live unassigned count — derived from current edit buffers + the
-  // in-flight new-room form. Helps the operator see at a glance which
-  // participants still need a bed.
+  // Live unassigned count is derived from the persisted rooms and any
+  // participant changes currently being edited by a teacher.
   const assigned = new Set();
   for (const b of Object.values(buffers)) {
-    for (const pid of (b.participantIds || [])) assigned.add(Number(pid));
+    for (const pid of b.participantIds || []) assigned.add(Number(pid));
   }
-  if (newRoom) {
-    for (const pid of newRoom.participantIds) assigned.add(Number(pid));
-  }
-  const unassignedCount = participants.filter((p) => !assigned.has(p.id)).length;
+  const unassignedCount = participants.filter(
+    (p) => !assigned.has(p.id),
+  ).length;
 
   const updateBuf = (id, patch) =>
     setBuffers((b) => ({ ...b, [id]: { ...b[id], ...patch } }));
@@ -2668,21 +5563,32 @@ export function RoomingTab({ trip, notify, request = fetchApi, showExports = tru
 
   const saveRoom = async (id) => {
     const buf = buffers[id];
-    if (!buf || !buf.roomNumber.trim()) {
-      notify.error("roomNumber is required");
+    if (
+      !buf ||
+      (!assignmentOnly &&
+        (!buf.roomNumber.trim() ||
+          !isValidRoomSharingCapacity(buf.sharingCapacity)))
+    ) {
+      notify.error(
+        "Enter a room number and a positive whole-number sharing capacity",
+      );
       return;
     }
     setBusyId(id);
     try {
       await request(`/api/travel/trips/${trip.id}/rooming/${id}`, {
         method: "PATCH",
-        body: JSON.stringify({
-          roomNumber: buf.roomNumber.trim(),
-          roomType: buf.roomType,
-          participantIds: buf.participantIds.map(Number),
-        }),
+        body: JSON.stringify(
+          assignmentOnly
+            ? { participantIds: buf.participantIds.map(Number) }
+            : {
+                roomNumber: buf.roomNumber.trim(),
+                sharingCapacity: Number(buf.sharingCapacity),
+              },
+        ),
       });
-      notify.success("Room saved");
+      notify.success(assignmentOnly ? "Participants assigned" : "Room saved");
+      setEditingRoomId(null);
       load();
     } catch (e) {
       notify.error(e?.body?.error || "Failed to save room");
@@ -2701,7 +5607,9 @@ export function RoomingTab({ trip, notify, request = fetchApi, showExports = tru
     if (!ok) return;
     setBusyId(id);
     try {
-      await request(`/api/travel/trips/${trip.id}/rooming/${id}`, { method: "DELETE" });
+      await request(`/api/travel/trips/${trip.id}/rooming/${id}`, {
+        method: "DELETE",
+      });
       notify.success("Room deleted");
       load();
     } catch (e) {
@@ -2712,22 +5620,19 @@ export function RoomingTab({ trip, notify, request = fetchApi, showExports = tru
   };
 
   const startNew = () =>
-    setNewRoom({ roomNumber: "", roomType: "twin", participantIds: [] });
+    setNewRoom({ roomNumber: "", sharingCapacity: "", participantIds: [] });
 
   const cancelNew = () => setNewRoom(null);
 
-  const toggleNewParticipant = (pid) => {
-    if (!newRoom) return;
-    const next = newRoom.participantIds.includes(pid)
-      ? newRoom.participantIds.filter((x) => x !== pid)
-      : [...newRoom.participantIds, pid];
-    setNewRoom({ ...newRoom, participantIds: next });
-  };
-
   const createRoom = async () => {
     if (!newRoom) return;
-    if (!newRoom.roomNumber.trim()) {
-      notify.error("roomNumber is required");
+    if (
+      !newRoom.roomNumber.trim() ||
+      !isValidRoomSharingCapacity(newRoom.sharingCapacity)
+    ) {
+      notify.error(
+        "Enter a room number and a positive whole-number sharing capacity",
+      );
       return;
     }
     setBusyId("new");
@@ -2736,11 +5641,10 @@ export function RoomingTab({ trip, notify, request = fetchApi, showExports = tru
         method: "POST",
         body: JSON.stringify({
           roomNumber: newRoom.roomNumber.trim(),
-          roomType: newRoom.roomType,
-          participantIds: newRoom.participantIds.map(Number),
+          sharingCapacity: Number(newRoom.sharingCapacity),
         }),
       });
-      notify.success("Room added");
+      notify.success("Room added for teacher assignment");
       setNewRoom(null);
       load();
     } catch (e) {
@@ -2764,131 +5668,69 @@ export function RoomingTab({ trip, notify, request = fetchApi, showExports = tru
     `/api/travel/trips/${trip.id}/rooming/export.pdf` +
     (xlsxToken ? `?_t=${encodeURIComponent(xlsxToken)}` : "");
 
-  const handleAutoAllocateConfirm = async () => {
-    setShowAutoAllocateDialog(false);
-    setAutoAllocating(true);
-    try {
-      const result = await request(`/api/travel/trips/${trip.id}/rooming/auto`, {
-        method: "POST",
-        body: JSON.stringify({
-          roomTypes: ["twin", "quad"],
-          startingRoomNumber: autoAllocStartRoom,
-        }),
-      });
-      notify.success(`Auto-allocated: ${result.created} room(s) created`);
-      load();
-    } catch (e) {
-      notify.error(e?.body?.error || "Failed to auto-allocate rooming");
-    } finally {
-      setAutoAllocating(false);
-    }
-  };
-
   return (
     <div>
-      {!readOnly && showAutoAllocateDialog && (
-        <div style={{
-          position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
-          background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center",
-          zIndex: 1000,
-        }} onClick={() => setShowAutoAllocateDialog(false)}>
-          <div style={{
-            background: "var(--bg-color, #111318)", borderRadius: 12, padding: 24, maxWidth: 400,
-            boxShadow: "0 10px 40px rgba(0,0,0,0.3)",
-          }} onClick={(e) => e.stopPropagation()}>
-            <h3 style={{ fontSize: 16, fontWeight: 600, margin: "0 0 12px 0" }}>Auto-allocate rooms</h3>
-            <p style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 16 }}>
-              Automatically assign {unassignedCount} unallocated participant{unassignedCount === 1 ? "" : "s"} to rooms starting from room number:
-            </p>
-            <div style={{ marginBottom: 20 }}>
-              <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)" }}>Starting room number</span>
-                <input
-                  type="number"
-                  min="1"
-                  value={autoAllocStartRoom}
-                  onChange={(e) => setAutoAllocStartRoom(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                  style={{ ...input, fontSize: 14, fontVariantNumeric: "tabular-nums" }}
-                />
-              </label>
-            </div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button
-                type="button"
-                onClick={() => setShowAutoAllocateDialog(false)}
-                style={secondaryBtn}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleAutoAllocateConfirm}
-                disabled={autoAllocating}
-                style={{ ...primaryBtn, opacity: autoAllocating ? 0.5 : 1, cursor: autoAllocating ? "not-allowed" : "pointer" }}
-              >
-                <Sparkles size={14} aria-hidden /> {autoAllocating ? "Allocating…" : "Auto allocate"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div style={{
-        display: "flex", justifyContent: "space-between", alignItems: "center",
-        marginBottom: 12, flexWrap: "wrap", gap: 8,
-      }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 12,
+          flexWrap: "wrap",
+          gap: 8,
+        }}
+      >
         <span style={{ color: "var(--text-secondary)", fontSize: 13 }}>
-          {rooms.length} room{rooms.length === 1 ? "" : "s"} ·{" "}
-          {unassignedCount} of {participants.length} participant{participants.length === 1 ? "" : "s"} unassigned
+          {rooms.length} room{rooms.length === 1 ? "" : "s"} · {unassignedCount}{" "}
+          of {participants.length} participant
+          {participants.length === 1 ? "" : "s"} unassigned
         </span>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {!readOnly && <button
-            type="button"
-            onClick={() => unassignedCount > 0 && setShowAutoAllocateDialog(true)}
-            disabled={autoAllocating || showAutoAllocateDialog || unassignedCount === 0}
-            title={unassignedCount === 0 ? "No unassigned participants" : "Auto-allocate unassigned participants"}
-            style={{ ...secondaryBtn, opacity: (autoAllocating || showAutoAllocateDialog || unassignedCount === 0) ? 0.5 : 1, cursor: (autoAllocating || showAutoAllocateDialog || unassignedCount === 0) ? "not-allowed" : "pointer" }}
-            aria-label="Auto-allocate unassigned participants"
-          >
-            <Sparkles size={14} aria-hidden /> {autoAllocating ? "Allocating…" : "Auto allocate"}
-          </button>}
-          {!readOnly && showExports && <>
-            <a
-              href={pdfHref}
-              target="_blank"
-              rel="noreferrer"
-              style={{ ...secondaryBtn, textDecoration: "none" }}
-              aria-label="Download rooming as PDF"
-            >
-              <FileText size={14} aria-hidden /> Download PDF
-            </a>
-            <a
-              href={xlsxHref}
-              target="_blank"
-              rel="noreferrer"
-              style={{ ...secondaryBtn, textDecoration: "none" }}
-              aria-label="Download rooming as XLSX"
-            >
-              <Download size={14} aria-hidden /> Download XLSX
-            </a>
-          </>}
-          {!readOnly && !newRoom && (
-            <button type="button" onClick={startNew} style={addBtn}>
-              <Plus size={14} aria-hidden /> Add room
-            </button>
+          {!readOnly && canManageRooms && showExports && (
+            <>
+              <a
+                href={pdfHref}
+                target="_blank"
+                rel="noreferrer"
+                style={{ ...secondaryBtn, textDecoration: "none" }}
+                aria-label="Download rooming as PDF"
+              >
+                <FileText size={14} aria-hidden /> Download PDF
+              </a>
+              <a
+                href={xlsxHref}
+                target="_blank"
+                rel="noreferrer"
+                style={{ ...secondaryBtn, textDecoration: "none" }}
+                aria-label="Download rooming as XLSX"
+              >
+                <Download size={14} aria-hidden /> Download XLSX
+              </a>
+            </>
           )}
+          {!readOnly &&
+            canManageRooms &&
+            !assignmentOnly &&
+            !newRoom &&
+            !editingRoomId && (
+              <button type="button" onClick={startNew} style={addBtn}>
+                <Plus size={14} aria-hidden /> Add room
+              </button>
+            )}
         </div>
       </div>
 
-      {!readOnly && newRoom && (
+      {!readOnly && canManageRooms && !assignmentOnly && newRoom && (
         <RoomCard
           buf={newRoom}
           isNew
+          mode="configuration"
           busy={busyId === "new"}
           participants={participants}
           onChangeRoomNumber={(v) => setNewRoom({ ...newRoom, roomNumber: v })}
-          onChangeRoomType={(v) => setNewRoom({ ...newRoom, roomType: v })}
-          onToggleParticipant={toggleNewParticipant}
+          onChangeSharingCapacity={(v) =>
+            setNewRoom({ ...newRoom, sharingCapacity: v })
+          }
           onSave={createRoom}
           onCancel={cancelNew}
         />
@@ -2897,97 +5739,192 @@ export function RoomingTab({ trip, notify, request = fetchApi, showExports = tru
       {/* Saved Rooms Summary View */}
       {rooms.length > 0 && (
         <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10 }}>
-            Allocated Rooms
+          <div
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              color: "var(--text-secondary)",
+              marginBottom: 10,
+            }}
+          >
+            {assignmentOnly ? "Available rooms" : "Room inventory"}
           </div>
           <div style={{ display: "grid", gap: 10 }}>
             {rooms.map((room) => {
               let storedPids = [];
-              try { storedPids = JSON.parse(room.participantIds || "[]"); } catch (_e) { storedPids = []; }
+              try {
+                storedPids = JSON.parse(room.participantIds || "[]");
+              } catch (_e) {
+                storedPids = [];
+              }
               const pids = Array.isArray(buffers[room.id]?.participantIds)
                 ? buffers[room.id].participantIds
                 : storedPids;
-              const roomParticipants = pids.map((pid) => participants.find((p) => p.id === pid));
-              const isEditing = !readOnly && !!buffers[room.id];
+              const roomParticipants = pids.map((pid) =>
+                participants.find((p) => p.id === pid),
+              );
+              const isEditing = !readOnly && editingRoomId === room.id;
+              const assignedElsewhere = new Set(
+                Object.entries(buffers)
+                  .filter(([otherId]) => Number(otherId) !== room.id)
+                  .flatMap(
+                    ([, otherBuffer]) => otherBuffer?.participantIds || [],
+                  )
+                  .map(Number),
+              );
 
               if (isEditing) {
-                // Show edit form
                 const buf = buffers[room.id];
                 return (
                   <RoomCard
                     key={room.id}
                     buf={buf}
+                    mode={assignmentOnly ? "assignment" : "configuration"}
                     busy={busyId === room.id}
                     participants={participants}
-                    onChangeRoomNumber={(v) => updateBuf(room.id, { roomNumber: v })}
-                    onChangeRoomType={(v) => updateBuf(room.id, { roomType: v })}
-                    onToggleParticipant={(pid) => toggleParticipant(room.id, pid)}
+                    unavailableParticipantIds={assignedElsewhere}
+                    onChangeRoomNumber={(v) =>
+                      updateBuf(room.id, { roomNumber: v })
+                    }
+                    onChangeSharingCapacity={(v) =>
+                      updateBuf(room.id, { sharingCapacity: v })
+                    }
+                    onToggleParticipant={(pid) =>
+                      toggleParticipant(room.id, pid)
+                    }
                     onSave={() => saveRoom(room.id)}
-                    onCancel={() => setBuffers({ ...buffers, [room.id]: undefined })}
-                    onDelete={() => deleteRoom(room.id)}
+                    onCancel={() => setEditingRoomId(null)}
+                    onDelete={
+                      canDeleteRooms ? () => deleteRoom(room.id) : undefined
+                    }
                   />
                 );
               }
 
               // Show summary view
-              const ROOM_CAPACITY = { single: 1, twin: 2, triple: 3, quad: 4 };
-              const capacity = ROOM_CAPACITY[room.roomType] || 0;
+              const capacity = getRoomSharingCapacity(room);
               const isFull = pids.length >= capacity;
 
               return (
-                <div key={room.id} style={{
-                  background: "var(--bg-color, #111318)", border: "1px solid var(--border-color)",
-                  borderRadius: 8, padding: 14, display: "flex", justifyContent: "space-between",
-                  alignItems: "flex-start", gap: 12,
-                }}>
+                <div
+                  key={room.id}
+                  style={{
+                    background: "var(--bg-color, #111318)",
+                    border: "1px solid var(--border-color)",
+                    borderRadius: 8,
+                    padding: 14,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                    gap: 12,
+                  }}
+                >
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                      <strong style={{ fontSize: 16 }}>Room {room.roomNumber}</strong>
-                      <span style={{
-                        background: isFull ? "rgba(47,122,77,0.2)" : "rgba(200,154,78,0.18)",
-                        color: isFull ? "#2F7A4D" : "#9A6F2E",
-                        padding: "3px 8px", borderRadius: 6, fontSize: 11, fontWeight: 700,
-                        textTransform: "uppercase", letterSpacing: 0.3,
-                      }}>
-                        {room.roomType} ({pids.length}/{capacity})
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 10,
+                        marginBottom: 8,
+                      }}
+                    >
+                      <strong style={{ fontSize: 16 }}>
+                        Room {room.roomNumber}
+                      </strong>
+                      <span
+                        style={{
+                          background: isFull
+                            ? "rgba(47,122,77,0.2)"
+                            : "rgba(200,154,78,0.18)",
+                          color: isFull ? "#2F7A4D" : "#9A6F2E",
+                          padding: "3px 8px",
+                          borderRadius: 6,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          textTransform: "uppercase",
+                          letterSpacing: 0.3,
+                        }}
+                      >
+                        {capacity} sharing ({pids.length}/{capacity})
                       </span>
                     </div>
-                    <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: "var(--text-secondary)",
+                        marginBottom: 8,
+                      }}
+                    >
                       {pids.length === 0 ? (
                         <em>No participants assigned</em>
                       ) : (
-                        roomParticipants.filter(Boolean).map((p) => p.fullName).join(", ")
+                        roomParticipants
+                          .filter(Boolean)
+                          .map((p) => p.fullName)
+                          .join(", ")
                       )}
                     </div>
                   </div>
-                  {!readOnly && <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const currentBuf = buffers[room.id];
-                        if (!currentBuf) {
-                          updateBuf(room.id, {
-                            roomNumber: room.roomNumber,
-                            roomType: room.roomType,
-                            participantIds: pids,
-                          });
+                  {!readOnly && (assignmentOnly || canManageRooms) && (
+                    <div
+                      style={{ display: "flex", gap: 6, alignItems: "center" }}
+                    >
+                      <button
+                        type="button"
+                        disabled={!assignmentOnly && Boolean(newRoom)}
+                        onClick={() => {
+                          const currentBuf = buffers[room.id];
+                          if (!currentBuf) {
+                            updateBuf(room.id, {
+                              roomNumber: room.roomNumber,
+                              sharingCapacity: getRoomSharingCapacity(room),
+                              participantIds: pids,
+                            });
+                          }
+                          setEditingRoomId(room.id);
+                        }}
+                        style={{
+                          ...secondaryBtn,
+                          padding: "6px 12px",
+                          fontSize: 12,
+                          opacity: !assignmentOnly && newRoom ? 0.5 : 1,
+                        }}
+                        title={
+                          newRoom
+                            ? "Finish or cancel adding the room first"
+                            : assignmentOnly
+                              ? "Assign participants"
+                              : "Edit room"
                         }
-                      }}
-                      style={{ ...secondaryBtn, padding: "6px 12px", fontSize: 12 }}
-                      title="Edit room"
-                    >
-                      <Edit3 size={14} aria-hidden /> Edit
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => deleteRoom(room.id)}
-                      disabled={busyId === room.id}
-                      style={{ ...iconBtn, opacity: busyId === room.id ? 0.5 : 1 }}
-                      title="Delete room"
-                    >
-                      <Trash2 size={14} aria-hidden />
-                    </button>
-                  </div>}
+                      >
+                        {assignmentOnly ? (
+                          <Users size={14} aria-hidden />
+                        ) : (
+                          <Edit3 size={14} aria-hidden />
+                        )}
+                        {assignmentOnly ? "Assign participants" : "Edit room"}
+                      </button>
+                      {canDeleteRooms && !assignmentOnly && (
+                        <button
+                          type="button"
+                          onClick={() => deleteRoom(room.id)}
+                          disabled={busyId === room.id || pids.length > 0}
+                          style={{
+                            ...iconBtn,
+                            opacity:
+                              busyId === room.id || pids.length > 0 ? 0.5 : 1,
+                          }}
+                          title={
+                            pids.length > 0
+                              ? "Unassign participants in the teacher portal before deleting"
+                              : "Delete room"
+                          }
+                        >
+                          <Trash2 size={14} aria-hidden />
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -2998,12 +5935,27 @@ export function RoomingTab({ trip, notify, request = fetchApi, showExports = tru
       {/* Empty State */}
       {rooms.length === 0 && !newRoom && (
         <div style={listShell}>
-          <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+          <div
+            style={{
+              ...empty,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
             <BedDouble size={28} aria-hidden style={{ opacity: 0.4 }} />
-            <div>No rooming assignments yet</div>
-            {!readOnly && <div style={{ fontSize: 12, opacity: 0.75 }}>
-              Click <em>Add room</em> to start grouping participants into single, twin, triple or quad rooms.
-            </div>}
+            <div>
+              {assignmentOnly
+                ? "No rooms have been added by the trip admin yet"
+                : "No rooms configured yet"}
+            </div>
+            {!readOnly && canManageRooms && !assignmentOnly && (
+              <div style={{ fontSize: 12, opacity: 0.75 }}>
+                Add room numbers and sharing capacity. Teachers can then assign
+                participants to each room.
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -3012,162 +5964,483 @@ export function RoomingTab({ trip, notify, request = fetchApi, showExports = tru
 }
 
 function RoomCard({
-  buf, isNew, busy, participants,
-  onChangeRoomNumber, onChangeRoomType, onToggleParticipant,
-  onSave, onDelete, onCancel,
+  buf,
+  isNew,
+  busy,
+  participants,
+  mode = "configuration",
+  unavailableParticipantIds = new Set(),
+  onChangeRoomNumber,
+  onChangeSharingCapacity,
+  onToggleParticipant,
+  onSave,
+  onDelete,
+  onCancel,
 }) {
-  const capacity = ROOM_CAPACITY[buf.roomType] || 0;
+  const capacity = getRoomSharingCapacity(buf);
   const count = buf.participantIds.length;
-  const overCapacity = count > capacity;
   const atCapacity = count >= capacity;
+  const canSaveConfiguration = Boolean(
+    buf.roomNumber.trim() && isValidRoomSharingCapacity(buf.sharingCapacity),
+  );
 
-  const selectedParticipants = participants.filter((p) => buf.participantIds.includes(p.id));
-  const availableParticipants = participants.filter((p) => !buf.participantIds.includes(p.id));
+  const selectedParticipants = participants.filter((p) =>
+    buf.participantIds.includes(p.id),
+  );
+  const availableParticipants = participants.filter(
+    (p) => !buf.participantIds.includes(p.id),
+  );
 
   return (
-    <div style={{ ...listShell, marginBottom: 12, padding: 14 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
-        <input
-          type="text"
-          value={buf.roomNumber}
-          onChange={(e) => onChangeRoomNumber(e.target.value)}
-          placeholder="Room # (e.g. 101)"
-          style={{ ...input, flex: "1 1 140px" }}
-          aria-label="Room number"
-        />
-        <select
-          value={buf.roomType}
-          onChange={(e) => onChangeRoomType(e.target.value)}
-          style={{ ...input, flex: "0 0 140px" }}
-          aria-label="Room type"
+    <div
+      style={{
+        ...listShell,
+        marginBottom: 12,
+        padding: mode === "configuration" ? 18 : 14,
+      }}
+    >
+      {mode === "configuration" ? (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!busy && canSaveConfiguration) onSave();
+          }}
+          style={{ display: "grid", gap: 16 }}
         >
-          {ROOM_TYPES.map((t) => (
-            <option key={t} value={t}>{t} ({ROOM_CAPACITY[t]})</option>
-          ))}
-        </select>
-        <span style={{
-          fontSize: 12, fontWeight: 600,
-          color: overCapacity ? "var(--danger-color)" : "var(--text-secondary)",
-        }}>
-          {count} / {capacity} assigned
-        </span>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
-          <button
-            type="button"
-            onClick={onSave}
-            disabled={busy}
-            style={{ ...primaryBtn, opacity: busy ? 0.5 : 1, cursor: busy ? "not-allowed" : "pointer" }}
-            aria-label={isNew ? "Add room" : "Save room"}
+          <div>
+            <strong style={{ display: "block", fontSize: 16, marginBottom: 4 }}>
+              {isNew ? "Add room to inventory" : "Room details"}
+            </strong>
+            <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+              {isNew
+                ? "Set a room number and the maximum number of participants who can share it. Teachers can assign participants after the room is saved."
+                : "Update the room number or sharing capacity. Existing participant assignments stay with this room."}
+            </span>
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns:
+                "repeat(auto-fit, minmax(min(100%, 280px), 360px))",
+              alignItems: "start",
+              justifyContent: "start",
+              gap: 14,
+            }}
           >
-            <Save size={14} aria-hidden /> {busy ? (isNew ? "Adding…" : "Saving…") : (isNew ? "Add room" : "Save")}
-          </button>
-          {isNew ? (
-            <button type="button" onClick={onCancel} style={secondaryBtn} aria-label="Cancel new room">
-              Cancel
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={onDelete}
-              disabled={busy}
-              style={{ ...iconBtn, opacity: busy ? 0.5 : 1 }}
-              title="Delete room"
-              aria-label="Delete room"
+            <label
+              style={{
+                display: "grid",
+                gap: 6,
+                minWidth: 0,
+                fontSize: 13,
+                fontWeight: 600,
+              }}
             >
-              <Trash2 size={14} aria-hidden />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Participants Section */}
-      <div>
-        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>
-          Participants ({count} selected)
-        </div>
-
-        {/* Selected Participants Display */}
-        {selectedParticipants.length > 0 ? (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
-            {selectedParticipants.map((p) => (
-              <div
-                key={p.id}
+              <span>
+                Room number{" "}
+                <span
+                  aria-hidden="true"
+                  style={{ color: "var(--danger-color, #b42318)" }}
+                >
+                  *
+                </span>
+              </span>
+              <input
+                type="text"
+                value={buf.roomNumber}
+                onChange={(e) => onChangeRoomNumber(e.target.value)}
+                placeholder="e.g. 101"
+                autoComplete="off"
+                required
                 style={{
-                  display: "inline-flex", alignItems: "center", gap: 6,
-                  padding: "6px 10px", borderRadius: 6,
-                  background: "var(--primary-color)", color: "#fff",
-                  fontSize: 13, fontWeight: 500,
+                  ...input,
+                  width: "100%",
+                  boxSizing: "border-box",
+                  minWidth: 0,
+                }}
+                aria-label="Room number"
+              />
+              <small
+                style={{
+                  fontSize: 12,
+                  fontWeight: 400,
+                  color: "var(--text-secondary)",
                 }}
               >
-                <span>{p.fullName || `Participant #${p.id}`}</span>
-                <button
-                  type="button"
-                  onClick={() => onToggleParticipant(p.id)}
-                  style={{
-                    background: "transparent", border: "none", color: "#fff",
-                    cursor: "pointer", padding: "2px", display: "flex", alignItems: "center",
-                    fontSize: 16, lineHeight: 1,
-                  }}
-                  aria-label={`Remove ${p.fullName}`}
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 12, fontStyle: "italic" }}>
-            No participants selected
-          </div>
-        )}
+                Use the room number provided by the accommodation.
+              </small>
+            </label>
 
-        {/* Add Participant - Simple Select List */}
-        {!atCapacity && availableParticipants.length > 0 && (
-          <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 8 }}>
-              Add more participants:
-            </div>
-            <div style={{
-              display: "grid", gap: 6,
-              maxHeight: 200, overflowY: "auto",
-              padding: "8px", background: "var(--subtle-bg)", borderRadius: 6,
-            }}>
-              {availableParticipants.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => onToggleParticipant(p.id)}
+            <label
+              style={{
+                display: "grid",
+                gap: 6,
+                minWidth: 0,
+                fontSize: 13,
+                fontWeight: 600,
+              }}
+            >
+              <span>
+                Sharing capacity{" "}
+                <span
+                  aria-hidden="true"
+                  style={{ color: "var(--danger-color, #b42318)" }}
+                >
+                  *
+                </span>
+              </span>
+              <div style={{ position: "relative", minWidth: 0 }}>
+                <input
+                  type="number"
+                  min="1"
+                  max={MAX_ROOM_SHARING_CAPACITY}
+                  step="1"
+                  value={buf.sharingCapacity ?? ""}
+                  onChange={(e) =>
+                    onChangeSharingCapacity(
+                      e.target.value === "" ? "" : Number(e.target.value),
+                    )
+                  }
+                  placeholder="Enter a number"
+                  required
                   style={{
-                    textAlign: "left", padding: "8px 10px", background: "var(--bg-color, #111318)",
-                    border: "1px solid var(--border-color)", borderRadius: 4,
-                    cursor: "pointer", fontSize: 13, color: "var(--text-primary)",
-                    transition: "all 0.15s",
+                    ...input,
+                    width: "100%",
+                    boxSizing: "border-box",
+                    minWidth: 0,
+                    paddingRight: 100,
                   }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.background = "var(--primary-color)";
-                    e.currentTarget.style.color = "#fff";
-                    e.currentTarget.style.borderColor = "var(--primary-color)";
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.background = "var(--surface-color)";
-                    e.currentTarget.style.color = "var(--text-primary)";
-                    e.currentTarget.style.borderColor = "var(--border-color)";
+                  aria-label="Sharing capacity"
+                />
+                <span
+                  style={{
+                    position: "absolute",
+                    right: 10,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    fontSize: 12,
+                    fontWeight: 500,
+                    color: "var(--text-secondary)",
+                    pointerEvents: "none",
                   }}
                 >
-                  {p.fullName || `Participant #${p.id}`}
+                  participants
+                </span>
+              </div>
+              <small
+                style={{
+                  fontSize: 12,
+                  fontWeight: 400,
+                  color: "var(--text-secondary)",
+                }}
+              >
+                Maximum number of participants teachers can assign to this room.
+              </small>
+            </label>
+          </div>
+
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              gap: 12,
+              flexWrap: "wrap",
+            }}
+          >
+            <small
+              aria-live="polite"
+              style={{ fontSize: 12, color: "var(--text-secondary)" }}
+            >
+              {!buf.roomNumber.trim()
+                ? "Enter a room number to continue."
+                : !isValidRoomSharingCapacity(buf.sharingCapacity)
+                  ? "Enter a whole-number capacity of at least 1."
+                  : "Room is ready to save."}
+            </small>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+                marginLeft: "auto",
+              }}
+            >
+              {onDelete && (
+                <button
+                  type="button"
+                  onClick={onDelete}
+                  disabled={busy || count > 0}
+                  style={{ ...iconBtn, opacity: busy || count > 0 ? 0.5 : 1 }}
+                  title={
+                    count > 0
+                      ? "Unassign participants in the teacher portal before deleting"
+                      : "Delete room"
+                  }
+                  aria-label="Delete room"
+                >
+                  <Trash2 size={14} aria-hidden />
                 </button>
+              )}
+              <button
+                type="button"
+                onClick={onCancel}
+                style={secondaryBtn}
+                aria-label={isNew ? "Cancel new room" : "Cancel room edit"}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={busy || !canSaveConfiguration}
+                style={{
+                  ...primaryBtn,
+                  opacity: busy || !canSaveConfiguration ? 0.5 : 1,
+                  cursor:
+                    busy || !canSaveConfiguration ? "not-allowed" : "pointer",
+                }}
+                aria-label={isNew ? "Add room" : "Save room"}
+              >
+                <Save size={14} aria-hidden />{" "}
+                {busy
+                  ? isNew
+                    ? "Adding…"
+                    : "Saving…"
+                  : isNew
+                    ? "Add room"
+                    : "Save room"}
+              </button>
+            </div>
+          </div>
+        </form>
+      ) : (
+        <>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              marginBottom: 12,
+              flexWrap: "wrap",
+            }}
+          >
+            <strong style={{ fontSize: 15 }}>Room {buf.roomNumber}</strong>
+            <span
+              style={{
+                color: "var(--text-secondary)",
+                fontSize: 13,
+                textTransform: "capitalize",
+              }}
+            >
+              {capacity} sharing · {count}/{capacity} assigned
+            </span>
+            <div
+              style={{
+                marginLeft: "auto",
+                display: "flex",
+                gap: 6,
+                alignItems: "center",
+              }}
+            >
+              <button
+                type="button"
+                onClick={onSave}
+                disabled={busy}
+                style={{
+                  ...primaryBtn,
+                  opacity: busy ? 0.5 : 1,
+                  cursor: busy ? "not-allowed" : "pointer",
+                }}
+                aria-label="Save assignments"
+              >
+                <Save size={14} aria-hidden />{" "}
+                {busy ? "Saving…" : "Save assignments"}
+              </button>
+              <button type="button" onClick={onCancel} style={secondaryBtn}>
+                Cancel
+              </button>
+              {onDelete && (
+                <button
+                  type="button"
+                  onClick={onDelete}
+                  disabled={busy || count > 0}
+                  style={{ ...iconBtn, opacity: busy || count > 0 ? 0.5 : 1 }}
+                  title={
+                    count > 0
+                      ? "Unassign participants in the teacher portal before deleting"
+                      : "Delete room"
+                  }
+                  aria-label="Delete room"
+                >
+                  <Trash2 size={14} aria-hidden />
+                </button>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      {mode === "assignment" && (
+        <div>
+          <div
+            style={{
+              fontSize: 12,
+              fontWeight: 600,
+              color: "var(--text-secondary)",
+              marginBottom: 8,
+            }}
+          >
+            Participants ({count} selected)
+          </div>
+
+          {/* Selected Participants Display */}
+          {selectedParticipants.length > 0 ? (
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 6,
+                marginBottom: 12,
+              }}
+            >
+              {selectedParticipants.map((p) => (
+                <div
+                  key={p.id}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "6px 10px",
+                    borderRadius: 6,
+                    background: "var(--primary-color)",
+                    color: "#fff",
+                    fontSize: 13,
+                    fontWeight: 500,
+                  }}
+                >
+                  <span>{p.fullName || `Participant #${p.id}`}</span>
+                  <button
+                    type="button"
+                    onClick={() => onToggleParticipant(p.id)}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      color: "#fff",
+                      cursor: "pointer",
+                      padding: "2px",
+                      display: "flex",
+                      alignItems: "center",
+                      fontSize: 16,
+                      lineHeight: 1,
+                    }}
+                    aria-label={`Remove ${p.fullName}`}
+                  >
+                    ×
+                  </button>
+                </div>
               ))}
             </div>
-          </div>
-        )}
-      </div>
+          ) : (
+            <div
+              style={{
+                fontSize: 12,
+                color: "var(--text-secondary)",
+                marginBottom: 12,
+                fontStyle: "italic",
+              }}
+            >
+              No participants selected
+            </div>
+          )}
+
+          {/* Add Participant - Simple Select List */}
+          {availableParticipants.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <div
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  color: "var(--text-secondary)",
+                  marginBottom: 8,
+                }}
+              >
+                Add more participants:
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gap: 6,
+                  maxHeight: 200,
+                  overflowY: "auto",
+                  padding: "8px",
+                  background: "var(--subtle-bg)",
+                  borderRadius: 6,
+                }}
+              >
+                {availableParticipants.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => onToggleParticipant(p.id)}
+                    disabled={
+                      unavailableParticipantIds.has(p.id) ||
+                      (atCapacity && !buf.participantIds.includes(p.id))
+                    }
+                    style={{
+                      textAlign: "left",
+                      padding: "8px 10px",
+                      background: "var(--bg-color, #111318)",
+                      border: "1px solid var(--border-color)",
+                      borderRadius: 4,
+                      cursor:
+                        unavailableParticipantIds.has(p.id) || atCapacity
+                          ? "not-allowed"
+                          : "pointer",
+                      opacity:
+                        unavailableParticipantIds.has(p.id) || atCapacity
+                          ? 0.55
+                          : 1,
+                      fontSize: 13,
+                      color: "var(--text-primary)",
+                      transition: "all 0.15s",
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "var(--primary-color)";
+                      e.currentTarget.style.color = "#fff";
+                      e.currentTarget.style.borderColor =
+                        "var(--primary-color)";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "var(--surface-color)";
+                      e.currentTarget.style.color = "var(--text-primary)";
+                      e.currentTarget.style.borderColor = "var(--border-color)";
+                    }}
+                  >
+                    {p.fullName || `Participant #${p.id}`}
+                    {unavailableParticipantIds.has(p.id)
+                      ? " (assigned to another room)"
+                      : ""}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 // ─── Payment plan tab ────────────────────────────────────────────────
 
-export function PaymentTab({ trip, notify, onChange, request = fetchApi, readOnly = false }) {
+export function PaymentTab({
+  trip,
+  notify,
+  onChange,
+  request = fetchApi,
+  readOnly = false,
+}) {
   const [plan, setPlan] = useState(null);
   const [instalments, setInstalments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -3195,20 +6468,29 @@ export function PaymentTab({ trip, notify, onChange, request = fetchApi, readOnl
     // payment-plan; the dedicated catch handles it. Without silent, fetchApi
     // would red-toast "Payment plan not found" before the catch runs.
     Promise.all([
-      request(`/api/travel/trips/${trip.id}/payment-plan`, { silent: true }).catch(() => null),
-      request(`/api/travel/trips/${trip.id}/instalments`, { silent: true }).then((r) => r?.instalments || []).catch(() => []),
+      request(`/api/travel/trips/${trip.id}/payment-plan`, {
+        silent: true,
+      }).catch(() => null),
+      request(`/api/travel/trips/${trip.id}/instalments`, { silent: true })
+        .then((r) => r?.instalments || [])
+        .catch(() => []),
     ])
       .then(([p, ins]) => {
         // A slower request must not overwrite the result of a newer save or
         // refresh. This is especially important when the first no-plan GET
         // resolves after the PUT that created the plan.
-        if (requestId !== loadRequestRef.current || editorDirtyRef.current) return;
+        if (requestId !== loadRequestRef.current || editorDirtyRef.current)
+          return;
         setPlan(p);
         setInstalments(ins);
         if (p) {
           setGraceDays(p.graceDays ?? 0);
           let parsed = [];
-          try { parsed = JSON.parse(p.instalmentsJson || "[]"); } catch (_e) { /* ignore */ }
+          try {
+            parsed = JSON.parse(p.instalmentsJson || "[]");
+          } catch (_e) {
+            /* ignore */
+          }
           setEditInstalments(Array.isArray(parsed) ? parsed : []);
         } else {
           setGraceDays(0);
@@ -3227,15 +6509,21 @@ export function PaymentTab({ trip, notify, onChange, request = fetchApi, readOnl
   // this only controls when the view asks for the latest rows.
   useEffect(() => {
     const refreshForTrip = (message) => {
-      if (message?.tripId != null && Number(message.tripId) !== Number(trip.id)) return;
+      if (message?.tripId != null && Number(message.tripId) !== Number(trip.id))
+        return;
       load();
     };
     const handleMessage = (event) => {
-      if (event.origin !== window.location.origin || event.data?.type !== TRAVEL_PAYMENT_SYNC_EVENT) return;
+      if (
+        event.origin !== window.location.origin ||
+        event.data?.type !== TRAVEL_PAYMENT_SYNC_EVENT
+      )
+        return;
       refreshForTrip(event.data);
     };
     const handleChannelMessage = (event) => {
-      if (event.data?.type === TRAVEL_PAYMENT_SYNC_EVENT) refreshForTrip(event.data);
+      if (event.data?.type === TRAVEL_PAYMENT_SYNC_EVENT)
+        refreshForTrip(event.data);
     };
     let channel = null;
     try {
@@ -3256,7 +6544,6 @@ export function PaymentTab({ trip, notify, onChange, request = fetchApi, readOnl
     };
   }, [load, trip.id]);
 
-
   const buildInstalmentPortalUrl = (instalmentId) => {
     const id = Number(instalmentId);
     return Number.isInteger(id) && id > 0
@@ -3265,7 +6552,8 @@ export function PaymentTab({ trip, notify, onChange, request = fetchApi, readOnl
   };
 
   const onCopyPortalLink = (url) => {
-    navigator.clipboard?.writeText(url)
+    navigator.clipboard
+      ?.writeText(url)
       .then(() => notify.success("Payment portal link copied"))
       .catch(() => notify.error("Copy failed - select the link manually"));
   };
@@ -3283,7 +6571,9 @@ export function PaymentTab({ trip, notify, onChange, request = fetchApi, readOnl
 
   const updateInstalment = (idx, patch) => {
     markEditorDirty();
-    setEditInstalments(editInstalments.map((it, j) => (j === idx ? { ...it, ...patch } : it)));
+    setEditInstalments(
+      editInstalments.map((it, j) => (j === idx ? { ...it, ...patch } : it)),
+    );
   };
 
   const removeInstalment = (idx) => {
@@ -3319,7 +6609,9 @@ export function PaymentTab({ trip, notify, onChange, request = fetchApi, readOnl
         return;
       }
       if (previousDueDate && dueDate < previousDueDate) {
-        notify.error(`Instalment ${i + 1}: due date cannot be before instalment ${i}`);
+        notify.error(
+          `Instalment ${i + 1}: due date cannot be before instalment ${i}`,
+        );
         return;
       }
       if (!ins.amount || Number(ins.amount) <= 0) {
@@ -3339,8 +6631,11 @@ export function PaymentTab({ trip, notify, onChange, request = fetchApi, readOnl
         }),
       });
       onChange?.();
-      notify.success(`Payment plan saved (${editInstalments.length} instalments).`);
-      if (editorRevisionRef.current === savedRevision) editorDirtyRef.current = false;
+      notify.success(
+        `Payment plan saved (${editInstalments.length} instalments).`,
+      );
+      if (editorRevisionRef.current === savedRevision)
+        editorDirtyRef.current = false;
       load();
     } catch (e) {
       notify.error(e?.body?.error || "Failed to save payment plan");
@@ -3352,14 +6647,17 @@ export function PaymentTab({ trip, notify, onChange, request = fetchApi, readOnl
   const onDelete = async () => {
     const ok = await notify.confirm({
       title: "Delete payment plan",
-      message: "Delete payment plan? Per-participant instalments are NOT deleted.",
+      message:
+        "Delete payment plan? Per-participant instalments are NOT deleted.",
       confirmText: "Delete",
       destructive: true,
     });
     if (!ok) return;
     setDeleting(true);
     try {
-      await request(`/api/travel/trips/${trip.id}/payment-plan`, { method: "DELETE" });
+      await request(`/api/travel/trips/${trip.id}/payment-plan`, {
+        method: "DELETE",
+      });
       onChange?.();
       notify.success("Payment plan deleted.");
       editorDirtyRef.current = false;
@@ -3378,10 +6676,15 @@ export function PaymentTab({ trip, notify, onChange, request = fetchApi, readOnl
     }
     setGenerating(true);
     try {
-      const result = await request(`/api/travel/trips/${trip.id}/instalments/from-plan`, {
-        method: "POST",
-      });
-      notify.success(`Generated ${result.materialised} instalment(s) for ${result.participants} participant(s)`);
+      const result = await request(
+        `/api/travel/trips/${trip.id}/instalments/from-plan`,
+        {
+          method: "POST",
+        },
+      );
+      notify.success(
+        `Generated ${result.materialised} instalment(s) for ${result.participants} participant(s)`,
+      );
       load();
     } catch (e) {
       notify.error(e?.body?.error || "Failed to generate instalments");
@@ -3404,10 +6707,13 @@ export function PaymentTab({ trip, notify, onChange, request = fetchApi, readOnl
     const ins = instalments.find((i) => i.id === editingInstalment);
     if (!ins) return;
     try {
-      await request(`/api/travel/trips/${trip.id}/instalments/${editingInstalment}`, {
-        method: "PATCH",
-        body: JSON.stringify(instalmentEdit),
-      });
+      await request(
+        `/api/travel/trips/${trip.id}/instalments/${editingInstalment}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify(instalmentEdit),
+        },
+      );
       notify.success("Instalment updated");
       setEditingInstalment(null);
       load();
@@ -3416,207 +6722,369 @@ export function PaymentTab({ trip, notify, onChange, request = fetchApi, readOnl
     }
   };
 
-  const total = editInstalments.reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
+  const total = editInstalments.reduce(
+    (sum, it) => sum + (Number(it.amount) || 0),
+    0,
+  );
 
   if (loading) return <div style={empty}>Loading&hellip;</div>;
   return (
     <div>
-      {!readOnly && <section style={{ marginBottom: 20 }}>
-        <div style={{
-          display: "flex", alignItems: "center", justifyContent: "space-between",
-          marginBottom: 10, flexWrap: "wrap", gap: 8,
-        }}>
-          <h3 style={{ margin: 0, fontSize: 14 }}>
-            {plan ? "Edit payment plan" : "Create payment plan"}
-          </h3>
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
-            <span style={{ color: "var(--text-secondary)" }}>Grace days</span>
-            <input
-              type="number"
-              min="0"
-              value={graceDays}
-              onChange={(e) => {
-                markEditorDirty();
-                setGraceDays(e.target.value === "" ? 0 : Number(e.target.value));
+      {!readOnly && (
+        <section style={{ marginBottom: 20 }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: 10,
+              flexWrap: "wrap",
+              gap: 8,
+            }}
+          >
+            <h3 style={{ margin: 0, fontSize: 14 }}>
+              {plan ? "Edit payment plan" : "Create payment plan"}
+            </h3>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                fontSize: 13,
               }}
-              style={{ ...input, width: 70 }}
-              aria-label="Grace days"
-            />
-          </label>
-        </div>
+            >
+              <span style={{ color: "var(--text-secondary)" }}>Grace days</span>
+              <input
+                type="number"
+                min="0"
+                value={graceDays}
+                onChange={(e) => {
+                  markEditorDirty();
+                  setGraceDays(
+                    e.target.value === "" ? 0 : Number(e.target.value),
+                  );
+                }}
+                style={{ ...input, width: 70 }}
+                aria-label="Grace days"
+              />
+            </label>
+          </div>
 
-        <div style={listShell}>
-          {editInstalments.length === 0 ? (
-            <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
-              <Wallet size={28} aria-hidden style={{ opacity: 0.4 }} />
-              <div>No instalments yet</div>
-              <div style={{ fontSize: 12, opacity: 0.75 }}>
-                Click <em>Add instalment</em> below to schedule the first payment.
-              </div>
-            </div>
-          ) : (
-            <>
-              {/* Column header row — only shown when instalments exist. */}
-              <div style={{
-                display: "grid",
-                gridTemplateColumns: "32px minmax(180px, 1fr) minmax(180px, 1fr) 130px 90px",
-                gap: 8,
-                padding: "8px 14px",
-                fontSize: 10,
-                textTransform: "uppercase",
-                letterSpacing: 0.5,
-                color: "var(--text-secondary)",
-                background: "var(--subtle-bg)",
-                borderBottom: "1px solid var(--border-color)",
-              }}>
-                <span>#</span>
-                <span>Due date</span>
-                <span>Amount (₹)</span>
-                <span>Reminder (days)</span>
-                <span style={{ textAlign: "right" }}>Actions</span>
-              </div>
-              {editInstalments.map((ins, idx) => {
-                return <div key={idx} style={{
-                  display: "grid",
-                  gridTemplateColumns: "32px minmax(180px, 1fr) minmax(180px, 1fr) 130px 90px",
-                  gap: 8,
-                  padding: "10px 14px",
+          <div style={listShell}>
+            {editInstalments.length === 0 ? (
+              <div
+                style={{
+                  ...empty,
+                  display: "flex",
+                  flexDirection: "column",
                   alignItems: "center",
-                  borderTop: idx === 0 ? "none" : "1px solid var(--border-light)",
-                }}>
-                  <strong style={{ fontVariantNumeric: "tabular-nums", color: "var(--text-secondary)" }}>#{idx + 1}</strong>
-                  <input
-                    type="date"
-                    value={toDateInput(ins.dueDate)}
-                    min={getPaymentPlanDateMinimum(idx, editInstalments)}
-                    onChange={(e) => updateInstalment(idx, { dueDate: e.target.value })}
-                    style={{ ...input, width: "100%", boxSizing: "border-box" }}
-                    aria-label={`Instalment ${idx + 1} due date`}
-                  />
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    placeholder="0"
-                    value={ins.amount ?? ""}
-                    onChange={(e) => updateInstalment(idx, { amount: e.target.value === "" ? "" : Number(e.target.value) })}
-                    style={{ ...input, width: "100%", boxSizing: "border-box", fontVariantNumeric: "tabular-nums" }}
-                    aria-label={`Instalment ${idx + 1} amount`}
-                  />
-                  <input
-                    type="number"
-                    min="0"
-                    placeholder="blank = off"
-                    value={ins.reminderDays ?? ""}
-                    onChange={(e) => updateInstalment(idx, { reminderDays: e.target.value === "" ? null : Number(e.target.value) })}
-                    style={{ ...input, width: "100%", boxSizing: "border-box" }}
-                    aria-label={`Instalment ${idx + 1} reminder days before due`}
-                    title="Days before dueDate to fire reminder (blank = no reminder)"
-                  />
-                  <div style={{ display: "flex", justifyContent: "flex-end", gap: 2 }}>
-                    <button
-                      type="button"
-                      onClick={() => moveInstalment(idx, -1)}
-                      disabled={idx === 0}
-                      style={{ ...iconBtn, opacity: idx === 0 ? 0.4 : 1 }}
-                      title="Move up"
-                      aria-label={`Move instalment ${idx + 1} up`}
+                  gap: 8,
+                }}
+              >
+                <Wallet size={28} aria-hidden style={{ opacity: 0.4 }} />
+                <div>No instalments yet</div>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>
+                  Click <em>Add instalment</em> below to schedule the first
+                  payment.
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Column header row — only shown when instalments exist. */}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns:
+                      "32px minmax(180px, 1fr) minmax(180px, 1fr) 130px 90px",
+                    gap: 8,
+                    padding: "8px 14px",
+                    fontSize: 10,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.5,
+                    color: "var(--text-secondary)",
+                    background: "var(--subtle-bg)",
+                    borderBottom: "1px solid var(--border-color)",
+                  }}
+                >
+                  <span>#</span>
+                  <span>Due date</span>
+                  <span>Amount (₹)</span>
+                  <span>Reminder (days)</span>
+                  <span style={{ textAlign: "right" }}>Actions</span>
+                </div>
+                {editInstalments.map((ins, idx) => {
+                  return (
+                    <div
+                      key={idx}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns:
+                          "32px minmax(180px, 1fr) minmax(180px, 1fr) 130px 90px",
+                        gap: 8,
+                        padding: "10px 14px",
+                        alignItems: "center",
+                        borderTop:
+                          idx === 0 ? "none" : "1px solid var(--border-light)",
+                      }}
                     >
-                      <ChevronUp size={14} aria-hidden />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => moveInstalment(idx, 1)}
-                      disabled={idx === editInstalments.length - 1}
-                      style={{ ...iconBtn, opacity: idx === editInstalments.length - 1 ? 0.4 : 1 }}
-                      title="Move down"
-                      aria-label={`Move instalment ${idx + 1} down`}
-                    >
-                      <ChevronDown size={14} aria-hidden />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => removeInstalment(idx)}
-                      style={iconBtn}
-                      title="Remove instalment"
-                      aria-label={`Remove instalment ${idx + 1}`}
-                    >
-                      <Trash2 size={14} aria-hidden />
-                    </button>
-                  </div>
-                </div>;
-              })}
-            </>
-          )}
-        </div>
+                      <strong
+                        style={{
+                          fontVariantNumeric: "tabular-nums",
+                          color: "var(--text-secondary)",
+                        }}
+                      >
+                        #{idx + 1}
+                      </strong>
+                      <input
+                        type="date"
+                        value={toDateInput(ins.dueDate)}
+                        min={getPaymentPlanDateMinimum(idx, editInstalments)}
+                        onChange={(e) =>
+                          updateInstalment(idx, { dueDate: e.target.value })
+                        }
+                        style={{
+                          ...input,
+                          width: "100%",
+                          boxSizing: "border-box",
+                        }}
+                        aria-label={`Instalment ${idx + 1} due date`}
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="0"
+                        value={ins.amount ?? ""}
+                        onChange={(e) =>
+                          updateInstalment(idx, {
+                            amount:
+                              e.target.value === ""
+                                ? ""
+                                : Number(e.target.value),
+                          })
+                        }
+                        style={{
+                          ...input,
+                          width: "100%",
+                          boxSizing: "border-box",
+                          fontVariantNumeric: "tabular-nums",
+                        }}
+                        aria-label={`Instalment ${idx + 1} amount`}
+                      />
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="blank = off"
+                        value={ins.reminderDays ?? ""}
+                        onChange={(e) =>
+                          updateInstalment(idx, {
+                            reminderDays:
+                              e.target.value === ""
+                                ? null
+                                : Number(e.target.value),
+                          })
+                        }
+                        style={{
+                          ...input,
+                          width: "100%",
+                          boxSizing: "border-box",
+                        }}
+                        aria-label={`Instalment ${idx + 1} reminder days before due`}
+                        title="Days before dueDate to fire reminder (blank = no reminder)"
+                      />
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "flex-end",
+                          gap: 2,
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => moveInstalment(idx, -1)}
+                          disabled={idx === 0}
+                          style={{ ...iconBtn, opacity: idx === 0 ? 0.4 : 1 }}
+                          title="Move up"
+                          aria-label={`Move instalment ${idx + 1} up`}
+                        >
+                          <ChevronUp size={14} aria-hidden />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => moveInstalment(idx, 1)}
+                          disabled={idx === editInstalments.length - 1}
+                          style={{
+                            ...iconBtn,
+                            opacity:
+                              idx === editInstalments.length - 1 ? 0.4 : 1,
+                          }}
+                          title="Move down"
+                          aria-label={`Move instalment ${idx + 1} down`}
+                        >
+                          <ChevronDown size={14} aria-hidden />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeInstalment(idx)}
+                          style={iconBtn}
+                          title="Remove instalment"
+                          aria-label={`Remove instalment ${idx + 1}`}
+                        >
+                          <Trash2 size={14} aria-hidden />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </div>
 
-        <div style={{
-          display: "flex", justifyContent: "space-between", alignItems: "center",
-          marginTop: 10, flexWrap: "wrap", gap: 8,
-        }}>
-          <button type="button" onClick={addInstalment} style={addBtn}>
-            <Plus size={14} aria-hidden /> Add instalment
-          </button>
-          <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 13, color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              <span>
-                Per participant: <strong style={{ color: "var(--text-primary)", fontVariantNumeric: "tabular-nums" }}>
-                  ₹{total.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                </strong>
-              </span>
-              {(trip.participants || []).length > 0 && total > 0 && (
-                <span style={{ opacity: 0.7 }}>
-                  · × {trip.participants.length} = <strong style={{ color: "var(--text-primary)", fontVariantNumeric: "tabular-nums" }}>
-                    ₹{(total * trip.participants.length).toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                  </strong> gross
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginTop: 10,
+              flexWrap: "wrap",
+              gap: 8,
+            }}
+          >
+            <button type="button" onClick={addInstalment} style={addBtn}>
+              <Plus size={14} aria-hidden /> Add instalment
+            </button>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                flexWrap: "wrap",
+              }}
+            >
+              <span
+                style={{
+                  fontSize: 13,
+                  color: "var(--text-secondary)",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  flexWrap: "wrap",
+                }}
+              >
+                <span>
+                  Per participant:{" "}
+                  <strong
+                    style={{
+                      color: "var(--text-primary)",
+                      fontVariantNumeric: "tabular-nums",
+                    }}
+                  >
+                    ₹
+                    {total.toLocaleString(undefined, {
+                      maximumFractionDigits: 2,
+                    })}
+                  </strong>
                 </span>
+                {(trip.participants || []).length > 0 && total > 0 && (
+                  <span style={{ opacity: 0.7 }}>
+                    · × {trip.participants.length} ={" "}
+                    <strong
+                      style={{
+                        color: "var(--text-primary)",
+                        fontVariantNumeric: "tabular-nums",
+                      }}
+                    >
+                      ₹
+                      {(total * trip.participants.length).toLocaleString(
+                        undefined,
+                        { maximumFractionDigits: 2 },
+                      )}
+                    </strong>{" "}
+                    gross
+                  </span>
+                )}
+              </span>
+              {plan && (
+                <button
+                  type="button"
+                  onClick={onDelete}
+                  disabled={deleting}
+                  style={{ ...secondaryBtn, opacity: deleting ? 0.5 : 1 }}
+                  aria-label="Delete payment plan"
+                >
+                  <Trash2 size={14} aria-hidden />{" "}
+                  {deleting ? "Deleting…" : "Delete plan"}
+                </button>
               )}
-            </span>
-            {plan && (
               <button
                 type="button"
-                onClick={onDelete}
-                disabled={deleting}
-                style={{ ...secondaryBtn, opacity: deleting ? 0.5 : 1 }}
-                aria-label="Delete payment plan"
+                onClick={onSave}
+                disabled={saving}
+                style={{
+                  ...primaryBtn,
+                  opacity: saving ? 0.5 : 1,
+                  cursor: saving ? "not-allowed" : "pointer",
+                }}
+                aria-label="Save payment plan"
               >
-                <Trash2 size={14} aria-hidden /> {deleting ? "Deleting…" : "Delete plan"}
+                <Save size={14} aria-hidden />{" "}
+                {saving ? "Saving…" : "Save plan"}
               </button>
-            )}
-            <button
-              type="button"
-              onClick={onSave}
-              disabled={saving}
-              style={{ ...primaryBtn, opacity: saving ? 0.5 : 1, cursor: saving ? "not-allowed" : "pointer" }}
-              aria-label="Save payment plan"
-            >
-              <Save size={14} aria-hidden /> {saving ? "Saving…" : "Save plan"}
-            </button>
+            </div>
           </div>
-        </div>
-      </section>}
+        </section>
+      )}
 
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8, flexWrap: "wrap", gap: 8 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 8,
+          flexWrap: "wrap",
+          gap: 8,
+        }}
+      >
         <h3 style={{ fontSize: 14, margin: 0 }}>Per-participant instalments</h3>
         {!readOnly && plan && instalments.length === 0 && (
           <button
             type="button"
             onClick={onGenerateInstalments}
             disabled={generating}
-            style={{ ...addBtn, opacity: generating ? 0.5 : 1, cursor: generating ? "not-allowed" : "pointer" }}
+            style={{
+              ...addBtn,
+              opacity: generating ? 0.5 : 1,
+              cursor: generating ? "not-allowed" : "pointer",
+            }}
             aria-label="Generate instalments from plan"
           >
-            <Sparkles size={14} aria-hidden /> {generating ? "Generating…" : "Generate instalments"}
+            <Sparkles size={14} aria-hidden />{" "}
+            {generating ? "Generating…" : "Generate instalments"}
           </button>
         )}
       </div>
-      <div style={{ ...listShell, background: "var(--surface-color, var(--bg-color, #111318))" }}>
+      <div
+        style={{
+          ...listShell,
+          background: "var(--surface-color, var(--bg-color, #111318))",
+        }}
+      >
         {instalments.length === 0 ? (
-          <div style={{ ...empty, display: "flex", flexDirection: "column", alignItems: "center", gap: 6 }}>
+          <div
+            style={{
+              ...empty,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
             <Users size={24} aria-hidden style={{ opacity: 0.4 }} />
             <div>No per-participant instalments yet</div>
             <div style={{ fontSize: 12, opacity: 0.75 }}>
-              {plan ? "Click Generate instalments to create per-participant payment schedules." : "Once the plan is saved and participants are linked, individual instalments appear here."}
+              {plan
+                ? "Click Generate instalments to create per-participant payment schedules."
+                : "Once the plan is saved and participants are linked, individual instalments appear here."}
             </div>
           </div>
         ) : (
@@ -3627,99 +7095,273 @@ export function PaymentTab({ trip, notify, onChange, request = fetchApi, readOnl
               if (!acc[pid]) acc[pid] = [];
               acc[pid].push(i);
               return acc;
-            }, {})
+            }, {}),
           ).map(([participantId, participantInstalments]) => {
-            const participant = (trip.participants || []).find((p) => p.id === Number(participantId));
-            const name = participant?.fullName || `Participant #${participantId}`;
+            const participant = (trip.participants || []).find(
+              (p) => p.id === Number(participantId),
+            );
+            const name =
+              participant?.fullName || `Participant #${participantId}`;
             const isExpanded = expandedParticipant === Number(participantId);
 
             // Calculate totals for this participant
-            const totalDue = participantInstalments.reduce((sum, i) => sum + Number(i.amount), 0);
-            const totalPaid = participantInstalments.reduce((sum, i) => sum + Number(i.paidAmount || 0), 0);
-            const pendingCount = participantInstalments.filter((i) => i.status === "pending" || i.status === "partial" || i.status === "pending_verification").length;
+            const totalDue = participantInstalments.reduce(
+              (sum, i) => sum + Number(i.amount),
+              0,
+            );
+            const totalPaid = participantInstalments.reduce(
+              (sum, i) => sum + Number(i.paidAmount || 0),
+              0,
+            );
+            const pendingCount = participantInstalments.filter(
+              (i) =>
+                i.status === "pending" ||
+                i.status === "partial" ||
+                i.status === "pending_verification",
+            ).length;
 
             return (
-              <div key={participantId} style={{ borderBottom: "1px solid var(--border-color)" }}>
+              <div
+                key={participantId}
+                style={{ borderBottom: "1px solid var(--border-color)" }}
+              >
                 {/* Accordion Header */}
                 <button
                   type="button"
                   className="travel-payment-participant-row"
-                  onClick={() => setExpandedParticipant(isExpanded ? null : Number(participantId))}
+                  onClick={() =>
+                    setExpandedParticipant(
+                      isExpanded ? null : Number(participantId),
+                    )
+                  }
                   style={{
-                    width: "100%", background: "var(--surface-color, transparent)", border: "none",
-                    cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center",
-                    gap: 16, fontFamily: "inherit", fontSize: 13, fontWeight: 600, color: "var(--text-primary)",
+                    width: "100%",
+                    background: "var(--surface-color, transparent)",
+                    border: "none",
+                    cursor: "pointer",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 16,
+                    fontFamily: "inherit",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: "var(--text-primary)",
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1, minWidth: 0 }}>
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 10,
+                      flex: 1,
+                      minWidth: 0,
+                    }}
+                  >
                     <ChevronDown
                       size={15}
-                      style={{ transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)", transition: "transform 0.2s" }}
+                      style={{
+                        transform: isExpanded
+                          ? "rotate(0deg)"
+                          : "rotate(-90deg)",
+                        transition: "transform 0.2s",
+                      }}
                       aria-hidden
                     />
                     <div style={{ textAlign: "left", minWidth: 0, flex: 1 }}>
-                      <div style={{ fontSize: 13, lineHeight: 1.2, fontWeight: 650, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</div>
-                      <div style={{ fontSize: 11.5, lineHeight: 1.2, color: "var(--text-secondary)", marginTop: 3 }}>
-                        ₹{totalDue.toLocaleString()} total · {pendingCount} pending
+                      <div
+                        style={{
+                          fontSize: 13,
+                          lineHeight: 1.2,
+                          fontWeight: 650,
+                          whiteSpace: "nowrap",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                        }}
+                      >
+                        {name}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: 11.5,
+                          lineHeight: 1.2,
+                          color: "var(--text-secondary)",
+                          marginTop: 3,
+                        }}
+                      >
+                        ₹{totalDue.toLocaleString()} total · {pendingCount}{" "}
+                        pending
                       </div>
                     </div>
                   </div>
-                  <div style={{ textAlign: "right", fontVariantNumeric: "tabular-nums", fontSize: 13, fontWeight: 700, whiteSpace: "nowrap", paddingLeft: 12 }}>
+                  <div
+                    style={{
+                      textAlign: "right",
+                      fontVariantNumeric: "tabular-nums",
+                      fontSize: 13,
+                      fontWeight: 700,
+                      whiteSpace: "nowrap",
+                      paddingLeft: 12,
+                    }}
+                  >
                     ₹{(totalDue - totalPaid).toLocaleString()} due
                   </div>
                 </button>
 
                 {/* Accordion Content */}
                 {isExpanded && (
-                  <div style={{ background: "var(--subtle-bg)", padding: "0 14px 14px 14px", borderTop: "1px solid var(--border-color)" }}>
+                  <div
+                    style={{
+                      background: "var(--subtle-bg)",
+                      padding: "0 14px 14px 14px",
+                      borderTop: "1px solid var(--border-color)",
+                    }}
+                  >
                     {participantInstalments
                       .sort((a, b) => a.instalmentIndex - b.instalmentIndex)
                       .map((i) => {
                         const statusBg =
-                          i.status === "paid" ? "rgba(47,122,77,0.14)" :
-                          i.status === "partial" ? "rgba(200,154,78,0.18)" :
-                          i.status === "overdue" ? "rgba(168,50,63,0.14)" :
-                          "var(--surface-color)";
+                          i.status === "paid"
+                            ? "rgba(47,122,77,0.14)"
+                            : i.status === "partial"
+                              ? "rgba(200,154,78,0.18)"
+                              : i.status === "overdue"
+                                ? "rgba(168,50,63,0.14)"
+                                : "var(--surface-color)";
                         const statusColor =
-                          i.status === "paid" ? "#2F7A4D" :
-                          i.status === "partial" ? "#9A6F2E" :
-                          i.status === "overdue" ? "#A8323F" :
-                          "var(--text-secondary)";
+                          i.status === "paid"
+                            ? "#2F7A4D"
+                            : i.status === "partial"
+                              ? "#9A6F2E"
+                              : i.status === "overdue"
+                                ? "#A8323F"
+                                : "var(--text-secondary)";
 
                         const isEditing = editingInstalment === i.id;
 
                         if (isEditing) {
                           return (
-                            <div key={i.id} style={{ background: "var(--bg-color, #111318)", padding: 12, borderRadius: 6, marginTop: 10, flexDirection: "column", gap: 12, display: "flex" }}>
-                              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                                <strong style={{ fontSize: 13 }}>Due {fmt(i.dueDate)} · ₹{Number(i.amount).toLocaleString()}</strong>
+                            <div
+                              key={i.id}
+                              style={{
+                                background: "var(--bg-color, #111318)",
+                                padding: 12,
+                                borderRadius: 6,
+                                marginTop: 10,
+                                flexDirection: "column",
+                                gap: 12,
+                                display: "flex",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  alignItems: "flex-start",
+                                }}
+                              >
+                                <strong style={{ fontSize: 13 }}>
+                                  Due {fmt(i.dueDate)} · ₹
+                                  {Number(i.amount).toLocaleString()}
+                                </strong>
                               </div>
-                              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 150px), 1fr))", gap: 10 }}>
-                                <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                                  <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>Paid (₹)</span>
+                              <div
+                                style={{
+                                  display: "grid",
+                                  gridTemplateColumns:
+                                    "repeat(auto-fit, minmax(min(100%, 150px), 1fr))",
+                                  gap: 10,
+                                }}
+                              >
+                                <label
+                                  style={{
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    gap: 3,
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      fontSize: 11,
+                                      fontWeight: 600,
+                                      color: "var(--text-secondary)",
+                                    }}
+                                  >
+                                    Paid (₹)
+                                  </span>
                                   <input
                                     type="number"
                                     min="0"
                                     step="0.01"
                                     value={instalmentEdit.paidAmount ?? ""}
-                                    onChange={(e) => setInstalmentEdit({ ...instalmentEdit, paidAmount: e.target.value === "" ? 0 : Number(e.target.value) })}
-                                    style={{ ...input, fontSize: 12, fontVariantNumeric: "tabular-nums" }}
+                                    onChange={(e) =>
+                                      setInstalmentEdit({
+                                        ...instalmentEdit,
+                                        paidAmount:
+                                          e.target.value === ""
+                                            ? 0
+                                            : Number(e.target.value),
+                                      })
+                                    }
+                                    style={{
+                                      ...input,
+                                      fontSize: 12,
+                                      fontVariantNumeric: "tabular-nums",
+                                    }}
                                   />
                                 </label>
-                                <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                                  <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>Date</span>
+                                <label
+                                  style={{
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    gap: 3,
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      fontSize: 11,
+                                      fontWeight: 600,
+                                      color: "var(--text-secondary)",
+                                    }}
+                                  >
+                                    Date
+                                  </span>
                                   <input
                                     type="date"
                                     value={toDateInput(instalmentEdit.paidAt)}
-                                    onChange={(e) => setInstalmentEdit({ ...instalmentEdit, paidAt: e.target.value || null })}
+                                    onChange={(e) =>
+                                      setInstalmentEdit({
+                                        ...instalmentEdit,
+                                        paidAt: e.target.value || null,
+                                      })
+                                    }
                                     style={{ ...input, fontSize: 12 }}
                                   />
                                 </label>
-                                <label style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                                  <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-secondary)" }}>Status</span>
+                                <label
+                                  style={{
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    gap: 3,
+                                  }}
+                                >
+                                  <span
+                                    style={{
+                                      fontSize: 11,
+                                      fontWeight: 600,
+                                      color: "var(--text-secondary)",
+                                    }}
+                                  >
+                                    Status
+                                  </span>
                                   <select
                                     value={instalmentEdit.status ?? "pending"}
-                                    onChange={(e) => setInstalmentEdit({ ...instalmentEdit, status: e.target.value })}
+                                    onChange={(e) =>
+                                      setInstalmentEdit({
+                                        ...instalmentEdit,
+                                        status: e.target.value,
+                                      })
+                                    }
                                     style={{ ...input, fontSize: 12 }}
                                   >
                                     <option value="pending">Pending</option>
@@ -3729,18 +7371,32 @@ export function PaymentTab({ trip, notify, onChange, request = fetchApi, readOnl
                                   </select>
                                 </label>
                               </div>
-                              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end" }}>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  gap: 6,
+                                  justifyContent: "flex-end",
+                                }}
+                              >
                                 <button
                                   type="button"
                                   onClick={() => setEditingInstalment(null)}
-                                  style={{ ...secondaryBtn, padding: "6px 12px", fontSize: 12 }}
+                                  style={{
+                                    ...secondaryBtn,
+                                    padding: "6px 12px",
+                                    fontSize: 12,
+                                  }}
                                 >
                                   Cancel
                                 </button>
                                 <button
                                   type="button"
                                   onClick={onSaveInstalmentEdit}
-                                  style={{ ...primaryBtn, padding: "6px 12px", fontSize: 12 }}
+                                  style={{
+                                    ...primaryBtn,
+                                    padding: "6px 12px",
+                                    fontSize: 12,
+                                  }}
                                 >
                                   <Save size={12} aria-hidden /> Save
                                 </button>
@@ -3753,45 +7409,81 @@ export function PaymentTab({ trip, notify, onChange, request = fetchApi, readOnl
                           <div key={i.id} style={{ marginTop: 10 }}>
                             <div
                               style={{
-                                background: statusBg, padding: 10, borderRadius: 6,
-                                display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8,
+                                background: statusBg,
+                                padding: 10,
+                                borderRadius: 6,
+                                display: "flex",
+                                justifyContent: "space-between",
+                                alignItems: "center",
+                                gap: 8,
                               }}
                             >
                               <div style={{ minWidth: 0, flex: 1 }}>
-                                <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                                <div
+                                  style={{
+                                    fontSize: 12,
+                                    color: "var(--text-secondary)",
+                                  }}
+                                >
                                   Due {fmt(i.dueDate)}
                                 </div>
-                                <div style={{ fontSize: 13, fontWeight: 600, fontVariantNumeric: "tabular-nums", marginTop: 2 }}>
-                                  ₹{Number(i.paidAmount).toLocaleString()} of ₹{Number(i.amount).toLocaleString()}
+                                <div
+                                  style={{
+                                    fontSize: 13,
+                                    fontWeight: 600,
+                                    fontVariantNumeric: "tabular-nums",
+                                    marginTop: 2,
+                                  }}
+                                >
+                                  ₹{Number(i.paidAmount).toLocaleString()} of ₹
+                                  {Number(i.amount).toLocaleString()}
                                 </div>
                               </div>
-                              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  gap: 6,
+                                  alignItems: "center",
+                                }}
+                              >
                                 <span
                                   style={{
-                                    background: "transparent", color: statusColor, padding: "2px 6px", borderRadius: 4,
-                                    fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.3,
+                                    background: "transparent",
+                                    color: statusColor,
+                                    padding: "2px 6px",
+                                    borderRadius: 4,
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    textTransform: "uppercase",
+                                    letterSpacing: 0.3,
                                   }}
                                 >
                                   {i.status}
                                 </span>
                                 <button
                                   type="button"
-                                  onClick={() => onCopyPortalLink(buildInstalmentPortalUrl(i.id))}
+                                  onClick={() =>
+                                    onCopyPortalLink(
+                                      buildInstalmentPortalUrl(i.id),
+                                    )
+                                  }
                                   style={{ ...iconBtn, padding: "4px" }}
                                   title="Copy parent payment portal link"
                                   aria-label="Copy parent payment portal link"
                                 >
                                   <Link2 size={12} aria-hidden />
                                 </button>
-                                {!readOnly && <button
-                                  type="button"
-                                  onClick={() => onEditInstalment(i)}
-                                  style={{ ...iconBtn, padding: "4px" }}
-                                  title="Edit"
-                                  aria-label="Edit instalment"
-                                >
-                                  <Edit3 size={12} aria-hidden />
-                                </button>}
+                                {!readOnly && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onEditInstalment(i)}
+                                    style={{ ...iconBtn, padding: "4px" }}
+                                    title="Edit"
+                                    aria-label="Edit instalment"
+                                  >
+                                    <Edit3 size={12} aria-hidden />
+                                  </button>
+                                )}
                               </div>
                             </div>
                           </div>
@@ -3829,36 +7521,82 @@ function tripDurationDays(trip) {
 // falls back to the legacy lead-capture path.
 function LandingPageCard({ trip, page, loading }) {
   const location = useLocation();
-  const landingPagesReturnState = buildLandingPagesReturnState(trip, location.state || {});
+  const landingPagesReturnState = buildLandingPagesReturnState(
+    trip,
+    location.state || {},
+  );
   return (
     <div
-      id="trip-landing" className="ts-highlight-target" data-testid="landing-page-card"
-      style={!loading && !page ? {
-        border: "1px solid rgba(205, 117, 37, 0.55)",
-        borderRadius: 12,
+      id="trip-landing"
+      className="ts-highlight-target"
+      data-testid="landing-page-card"
+      style={{
+        background: "var(--surface-color)",
+        border: !loading && !page
+          ? "1px solid rgba(205, 117, 37, 0.55)"
+          : "1px solid var(--border-color)",
+        borderRadius: !loading && !page ? 12 : 10,
         padding: 14,
-        background: "linear-gradient(135deg, rgba(205,117,37,0.10), rgba(205,117,37,0.02))",
-        boxShadow: "0 8px 24px rgba(205, 117, 37, 0.10)",
-      } : undefined}
+      }}
     >
       <StepHighlight anchor="landing" />
-      <h3 style={{ margin: "0 0 12px", fontSize: 15, display: "flex", alignItems: "center", gap: 8, color: !loading && !page ? "#B86620" : "inherit" }}>
+      <h2
+        style={{
+          margin: 0,
+          fontSize: 16,
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          color: !loading && !page ? "#B86620" : "inherit",
+        }}
+      >
         <Globe size={16} aria-hidden /> Landing page
-        {!loading && !page && <span style={{ marginLeft: "auto", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.04em" }}>Action needed</span>}
-      </h3>
+        {!loading && !page && (
+          <span
+            style={{
+              marginLeft: "auto",
+              color: "var(--text-secondary)",
+              fontSize: 11,
+              fontWeight: 600,
+            }}
+          >
+            Not linked
+          </span>
+        )}
+      </h2>
       {loading ? (
-        <div style={{ color: "var(--text-secondary)", fontSize: 13 }}>Loading…</div>
+        <div
+          style={{
+            color: "var(--text-secondary)",
+            fontSize: 13,
+            marginTop: 12,
+          }}
+        >
+          Loading…
+        </div>
       ) : !page ? (
-        <div style={{
-          background: "linear-gradient(135deg, rgba(38,88,85,0.10), rgba(38,88,85,0.02))",
-          border: "1px solid var(--border-color)", borderRadius: 10, padding: 14,
-          display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
-        }}>
-          <div style={{
-            width: 36, height: 36, borderRadius: 8,
-            background: "var(--primary-color)", color: "#fff",
-            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
-          }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
+            marginTop: 12,
+          }}
+        >
+          <div
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 8,
+              background: "var(--surface-hover, var(--subtle-bg))",
+              color: "var(--text-secondary)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0,
+            }}
+          >
             <Sparkles size={18} aria-hidden />
           </div>
           <div style={{ minWidth: 0, flex: 1 }}>
@@ -3866,40 +7604,74 @@ function LandingPageCard({ trip, page, loading }) {
               No landing page created yet
             </div>
             <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-              Create a landing page for participant registration, then link it to <strong>{trip.tripCode}</strong>.
-              Generate, edit, and publish everything from the Landing Pages module.
+              Create a landing page for participant registration, then link it
+              to <strong>{trip.tripCode}</strong>. Generate, edit, and publish
+              everything from the Landing Pages module.
             </div>
           </div>
           <Link
             to="/landing-pages"
             state={landingPagesReturnState}
             data-testid="goto-landing-pages-link"
-            style={{ ...primaryBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}
+            style={{
+              ...primaryBtn,
+              textDecoration: "none",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              flex: "0 0 auto",
+              whiteSpace: "nowrap",
+              opacity: 1,
+              filter: "none",
+            }}
           >
             <ExternalLink size={14} aria-hidden /> Go to Landing Pages
           </Link>
         </div>
       ) : (
-        <div style={{
-          border: "1px solid var(--border-color)", borderRadius: 10, padding: 14,
-          background: "var(--bg-color, #111318)",
-          display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
-        }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
+            marginTop: 12,
+          }}
+        >
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, flexWrap: "wrap" }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                marginBottom: 4,
+                flexWrap: "wrap",
+              }}
+            >
               <strong style={{ fontSize: 14 }}>{page.title}</strong>
               <StatusBadge status={page.status} />
             </div>
             <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-              Edit, preview, publish, AI-generate — everything for this page happens in the Landing Pages module.
-              Published landing pages appear at <code style={{ fontSize: 11 }}>/trips</code>.
+              Edit, preview, publish, AI-generate — everything for this page
+              happens in the Landing Pages module. Published landing pages
+              appear at <code style={{ fontSize: 11 }}>/trips</code>.
             </div>
           </div>
           <Link
             to={`/landing-pages/builder/${page.id}`}
             state={landingPagesReturnState}
             data-testid="manage-landing-page-link"
-            style={{ ...primaryBtn, textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}
+            style={{
+              ...primaryBtn,
+              textDecoration: "none",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              flex: "0 0 auto",
+              whiteSpace: "nowrap",
+              opacity: 1,
+              filter: "none",
+            }}
           >
             <Edit3 size={14} aria-hidden /> Manage in Landing Pages
           </Link>
@@ -3910,16 +7682,31 @@ function LandingPageCard({ trip, page, loading }) {
 }
 
 const primaryBtnDisabled = {
-  display: "inline-flex", alignItems: "center", gap: 6,
-  padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13,
-  background: "var(--primary-color)", color: "#fff",
-  border: "none", opacity: 0.5, cursor: "not-allowed",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "8px 14px",
+  borderRadius: 6,
+  fontWeight: 600,
+  fontSize: 13,
+  background: "var(--primary-color, var(--accent-color))",
+  color: "#fff",
+  border: "none",
+  opacity: 0.5,
+  cursor: "not-allowed",
 };
 const dangerBtn = {
-  display: "inline-flex", alignItems: "center", gap: 6,
-  padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13,
-  background: "var(--bg-color, #111318)", color: "var(--danger-color)",
-  border: "1px solid var(--danger-color)", cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "8px 14px",
+  borderRadius: 6,
+  fontWeight: 600,
+  fontSize: 13,
+  background: "var(--bg-color, #111318)",
+  color: "var(--danger-color)",
+  border: "1px solid var(--danger-color)",
+  cursor: "pointer",
 };
 
 // ─── Shared styles ───────────────────────────────────────────────────
@@ -3962,13 +7749,20 @@ const overviewSupportGrid = {
   alignItems: "stretch",
 };
 const backLink = {
-  display: "inline-flex", alignItems: "center", gap: 4,
-  fontSize: 13, color: "var(--text-secondary)", textDecoration: "none",
-  padding: "4px 8px", borderRadius: 4,
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  fontSize: 13,
+  color: "var(--text-secondary)",
+  textDecoration: "none",
+  padding: "4px 8px",
+  borderRadius: 4,
 };
 const listShell = {
-  background: "var(--bg-color, #111318)", borderRadius: 8,
-  border: "1px solid var(--border-color)", overflow: "hidden",
+  background: "var(--bg-color, #111318)",
+  borderRadius: 8,
+  border: "1px solid var(--border-color)",
+  overflow: "hidden",
 };
 const participantScrollArea = {
   maxHeight: "min(60vh, 520px)",
@@ -3985,171 +7779,851 @@ const participantTableHeader = {
   fontWeight: 700,
 };
 const row = {
-  padding: "10px 14px", display: "flex", justifyContent: "space-between",
-  alignItems: "center", borderTop: "1px solid var(--border-light)",
+  padding: "10px 14px",
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  borderTop: "1px solid var(--border-light)",
 };
 const empty = {
-  padding: 32, textAlign: "center", color: "var(--text-secondary)", fontSize: 14,
+  padding: 32,
+  textAlign: "center",
+  color: "var(--text-secondary)",
+  fontSize: 14,
 };
 const input = {
-  padding: "8px 10px", borderRadius: 6,
-  border: "1px solid var(--border-color)", background: "var(--bg-color)",
-  color: "var(--text-primary)", fontSize: 13,
+  padding: "8px 10px",
+  borderRadius: 6,
+  border: "1px solid var(--border-color)",
+  background: "var(--bg-color)",
+  color: "var(--text-primary)",
+  fontSize: 13,
 };
 const primaryBtn = {
-  display: "inline-flex", alignItems: "center", gap: 6,
-  padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13,
-  background: "var(--primary-color)", color: "#fff",
-  border: "none", cursor: "pointer", textDecoration: "none",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "8px 14px",
+  borderRadius: 6,
+  fontWeight: 600,
+  fontSize: 13,
+  background: "var(--primary-color, var(--accent-color))",
+  color: "#fff",
+  border: "none",
+  cursor: "pointer",
+  textDecoration: "none",
 };
 const secondaryBtn = {
-  display: "inline-flex", alignItems: "center", gap: 6,
-  padding: "8px 14px", borderRadius: 6, fontWeight: 600, fontSize: 13,
-  background: "var(--bg-color, #111318)", color: "var(--text-primary)",
-  border: "1px solid var(--border-color)", cursor: "pointer",
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "8px 14px",
+  borderRadius: 6,
+  fontWeight: 600,
+  fontSize: 13,
+  background: "var(--bg-color, #111318)",
+  color: "var(--text-primary)",
+  border: "1px solid var(--border-color)",
+  cursor: "pointer",
 };
 const documentAdminCard = {
-  background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)",
-  borderRadius: 12, padding: 18, boxShadow: "0 8px 24px rgba(15, 23, 42, 0.04)",
+  background: "var(--surface-color, #fff)",
+  border: "1px solid var(--border-color)",
+  borderRadius: 12,
+  padding: 18,
+  boxShadow: "0 8px 24px rgba(15, 23, 42, 0.04)",
 };
 const documentAdminHeader = {
-  display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 14,
-  marginBottom: 16, color: "var(--text-primary)",
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  gap: 14,
+  marginBottom: 16,
+  color: "var(--text-primary)",
 };
-const documentRequirementRow = {
-  display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-  padding: "11px 12px", border: "1px solid var(--border-color)", borderRadius: 8,
-  background: "var(--bg-color, #111318)",
+const documentCollectionToggle = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 16,
+  width: "100%",
+  padding: 0,
+  border: 0,
+  background: "transparent",
+  color: "var(--text-primary)",
+  cursor: "pointer",
+  textAlign: "left",
+  font: "inherit",
+};
+const documentCollectionTitle = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  minWidth: 0,
+};
+const documentCollectionIcon = {
+  display: "grid",
+  placeItems: "center",
+  flex: "0 0 auto",
+  width: 38,
+  height: 38,
+  borderRadius: 10,
+  border: "1px solid var(--border-color)",
+  color: "var(--primary-color, var(--accent-color))",
+  background:
+    "color-mix(in srgb, var(--primary-color, var(--accent-color)) 9%, var(--surface-color))",
+};
+const documentCollectionControls = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "flex-end",
+  gap: 10,
+  color: "var(--text-secondary)",
+  flex: "0 0 auto",
+};
+const documentCollectionPanel = {
+  display: "grid",
+  gap: 14,
+  marginTop: 16,
+  paddingTop: 16,
+  borderTop: "1px solid var(--border-light, var(--border-color))",
+};
+const documentRequirementPrimaryRow = {
+  display: "grid",
+  alignItems: "start",
+  gap: 16,
+  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 320px), 1fr))",
+};
+const documentRequirementOptionsRow = {
+  display: "flex",
+  alignItems: "flex-end",
+  justifyContent: "space-between",
+  flexWrap: "wrap",
+  gap: 14,
+};
+const documentFileTypesFieldset = {
+  flex: "1 1 480px",
+  minWidth: 0,
+};
+const documentFormLabel = {
+  display: "grid",
+  alignContent: "start",
+  gap: 7,
+  minWidth: 0,
+  color: "var(--text-primary)",
+  fontSize: 12,
+  fontWeight: 700,
+};
+const documentFormFieldset = { border: 0, padding: 0, margin: 0, minWidth: 0 };
+const documentFormLegend = {
+  padding: 0,
+  marginBottom: 8,
+  color: "var(--text-primary)",
+  fontSize: 12,
+  fontWeight: 700,
+};
+const documentRequirementSubmit = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-end",
+  gap: 8,
+  flex: "0 0 auto",
+  flexWrap: "wrap",
+  marginLeft: "auto",
+};
+const documentConsentMethodHint = {
+  alignSelf: "center",
+  flex: "1 1 320px",
+  minWidth: 0,
+  color: "var(--text-secondary)",
+  fontSize: 11,
+};
+const consentFormEditor = {
+  display: "grid",
+  gap: 14,
+  padding: 14,
+  border: "1px solid var(--border-color)",
+  borderRadius: 10,
+  background: "var(--subtle-bg, var(--surface-color))",
+};
+const consentFormEditorHeader = {
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  gap: 12,
+};
+const consentFormEditorTools = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-end",
+  flexWrap: "wrap",
+  gap: 8,
+};
+const consentPreviewOverlay = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 1500,
+  display: "grid",
+  placeItems: "center",
+  padding: 20,
+  background: "rgba(10, 18, 32, 0.72)",
+};
+const consentPreviewDialog = {
+  display: "grid",
+  gap: 14,
+  width: "min(100%, 980px)",
+  maxHeight: "90vh",
+  overflow: "hidden",
+  padding: 18,
+  border: "1px solid var(--border-color)",
+  borderRadius: 12,
+  background: "var(--modal-bg, #fff)",
+  boxShadow: "0 24px 70px rgba(10, 18, 32, 0.28)",
+};
+const consentPreviewHeader = {
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  gap: 16,
+};
+const consentTermsPreview = {
+  display: "grid",
+  gap: 12,
+  maxHeight: "52vh",
+  overflowY: "auto",
+  padding: "16px 18px",
+  border: "1px solid var(--border-color)",
+  borderRadius: 9,
+  color: "var(--text-secondary)",
+  background: "var(--modal-bg, #fff)",
+  fontSize: 12,
+  lineHeight: 1.7,
+};
+const consentTermsPreviewTitle = {
+  margin: 0,
+  color: "var(--text-primary)",
+  fontSize: 14,
+  lineHeight: 1.45,
+  letterSpacing: 0.1,
+};
+const consentTermsPreviewIntro = { margin: 0, lineHeight: 1.7 };
+const consentTermsPreviewSection = {
+  display: "grid",
+  gap: 6,
+  paddingTop: 12,
+  borderTop: "1px solid var(--border-light, var(--border-color))",
+};
+const consentTermsPreviewHeading = {
+  margin: 0,
+  color: "var(--text-primary)",
+  fontSize: 12,
+  lineHeight: 1.45,
+  fontWeight: 750,
+};
+const consentTermsPreviewParagraph = { margin: 0, lineHeight: 1.7 };
+const consentTermsPreviewEmpty = {
+  margin: 0,
+  padding: 16,
+  border: "1px dashed var(--border-color)",
+  borderRadius: 9,
+  color: "var(--text-secondary)",
+  background: "var(--modal-bg, #fff)",
+  fontSize: 12,
+};
+const consentFormActions = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-end",
+  flexWrap: "wrap",
+  gap: 8,
+  paddingTop: 12,
+  borderTop: "1px solid var(--border-light, var(--border-color))",
+};
+const consentTemplateNotice = {
+  padding: "9px 11px",
+  border: "1px solid var(--border-color)",
+  borderRadius: 7,
+  color: "var(--text-secondary)",
+  background: "var(--surface-color)",
+  fontSize: 12,
+};
+const consentTemplateError = {
+  padding: "9px 11px",
+  border: "1px solid color-mix(in srgb, #b42318 35%, var(--border-color))",
+  borderRadius: 7,
+  color: "#b42318",
+  background: "color-mix(in srgb, #b42318 6%, var(--surface-color))",
+  fontSize: 12,
+};
+const consentTermsEditorInput = {
+  width: "100%",
+  boxSizing: "border-box",
+  minHeight: 360,
+  maxHeight: "60vh",
+  resize: "vertical",
+  padding: "14px 16px",
+  border: "1px solid var(--border-color)",
+  borderRadius: 9,
+  color: "var(--text-primary)",
+  background: "var(--surface-color, #fff)",
+  font: "inherit",
+  fontSize: 13,
+  fontWeight: 400,
+  lineHeight: 1.7,
+  whiteSpace: "pre-wrap",
+  boxShadow: "inset 0 1px 2px rgba(15, 23, 42, 0.04)",
+};
+const consentParentFieldsSection = {
+  display: "grid",
+  gap: 10,
+  padding: 13,
+  border: "1px solid var(--border-color)",
+  borderRadius: 9,
+  background: "var(--surface-color, #fff)",
+  color: "var(--text-primary)",
+};
+const consentParentFieldsGrid = {
+  display: "grid",
+  gap: 10,
+  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
+};
+const consentParentField = {
+  display: "grid",
+  alignContent: "start",
+  gap: 5,
+  minWidth: 0,
+  color: "var(--text-secondary)",
+  fontSize: 11,
+};
+const consentParentFieldInput = {
+  display: "block",
+  height: 32,
+  border: "1px solid var(--border-color)",
+  borderRadius: 6,
+  background: "var(--bg-color, var(--surface-color))",
+};
+const consentParentAgreement = {
+  display: "flex",
+  alignItems: "center",
+  gap: 7,
+  paddingTop: 9,
+  borderTop: "1px solid var(--border-light, var(--border-color))",
+  color: "var(--text-secondary)",
+  fontSize: 11,
+};
+const consentAgreementCheckbox = {
+  width: 14,
+  height: 14,
+  flex: "0 0 auto",
+  border: "1px solid var(--border-color)",
+  borderRadius: 3,
+};
+const configuredRequirementsSection = {
+  display: "grid",
+  gap: 12,
+  padding: 14,
+  border: "1px solid var(--border-color)",
+  borderRadius: 10,
+  background:
+    "color-mix(in srgb, var(--surface-color) 94%, var(--primary-color, var(--accent-color)))",
+};
+const configuredRequirementsHeader = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  flexWrap: "wrap",
+  gap: 12,
+  paddingBottom: 12,
+  borderBottom: "1px solid var(--border-light, var(--border-color))",
+};
+const configuredRequirementsHeading = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  minWidth: 0,
+};
+const configuredRequirementsIcon = {
+  display: "grid",
+  placeItems: "center",
+  flex: "0 0 auto",
+  width: 36,
+  height: 36,
+  border: "1px solid var(--border-color)",
+  borderRadius: 9,
+  color: "var(--primary-color, var(--accent-color))",
+  background:
+    "color-mix(in srgb, var(--primary-color, var(--accent-color)) 8%, var(--surface-color))",
+};
+const configuredRequirementsToolbar = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-end",
+  flex: "0 1 320px",
+  minWidth: 0,
+};
+const configuredRequirementsSearch = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  width: "100%",
+  minWidth: 0,
+  flex: "1 1 280px",
+  boxSizing: "border-box",
+  padding: "0 10px",
+  border: "1px solid var(--border-color)",
+  borderRadius: 8,
+  color: "var(--text-secondary)",
+  background: "var(--surface-color)",
+};
+const configuredRequirementsSearchInput = {
+  width: "100%",
+  minWidth: 0,
+  boxSizing: "border-box",
+  padding: "8px 0",
+  border: 0,
+  outline: "none",
+  background: "transparent",
+  color: "var(--text-primary)",
+  fontSize: 13,
+};
+const configuredRequirementsGrid = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 285px), 1fr))",
+  gap: 12,
+};
+const documentRequirementsEmpty = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  minWidth: 0,
+  padding: "12px 13px",
+  border: "1px dashed var(--border-color)",
+  borderRadius: 8,
+  background: "var(--surface-color, #fff)",
+};
+const documentRequirementsEmptyIcon = {
+  display: "grid",
+  placeItems: "center",
+  flex: "0 0 auto",
+  width: 32,
+  height: 32,
+  border: "1px solid var(--border-color)",
+  borderRadius: 8,
+  color: "var(--primary-color, var(--accent-color))",
+  background:
+    "color-mix(in srgb, var(--primary-color, var(--accent-color)) 8%, var(--surface-color))",
+};
+const documentRequirementCard = {
+  display: "grid",
+  alignContent: "space-between",
+  gap: 12,
+  minWidth: 0,
+  padding: 12,
+  border: "1px solid var(--border-color)",
+  borderRadius: 10,
+  background: "var(--surface-color, #fff)",
+  boxShadow: "0 2px 8px rgba(15, 23, 42, 0.035)",
+};
+const documentRequirementCardInfo = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  minWidth: 0,
+};
+const documentRequirementCardIcon = {
+  display: "grid",
+  placeItems: "center",
+  flex: "0 0 auto",
+  width: 38,
+  height: 38,
+  border: "1px solid var(--border-color)",
+  borderRadius: 9,
+  color: "var(--primary-color, var(--accent-color))",
+  background:
+    "color-mix(in srgb, var(--primary-color, var(--accent-color)) 8%, var(--surface-color))",
+};
+const documentRequirementRequiredBadge = {
+  display: "inline-flex",
+  alignItems: "center",
+  flex: "0 0 auto",
+  marginLeft: "auto",
+  padding: "5px 9px",
+  borderRadius: 999,
+  color: "var(--primary-color, var(--accent-color))",
+  background:
+    "color-mix(in srgb, var(--primary-color, var(--accent-color)) 10%, var(--surface-color))",
+  fontSize: 11,
+  fontWeight: 700,
+};
+const documentRequirementCardActions = {
+  display: "flex",
+  alignItems: "center",
+  flexWrap: "wrap",
+  gap: 8,
+  paddingTop: 10,
+  borderTop: "1px solid var(--border-light, var(--border-color))",
 };
 const fileTypeChoice = {
-  display: "inline-flex", alignItems: "center", gap: 7, padding: "7px 10px",
-  border: "1px solid var(--border-color)", borderRadius: 7, cursor: "pointer",
-  color: "var(--text-secondary)", fontSize: 12, fontWeight: 600,
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 7,
+  padding: "7px 10px",
+  border: "1px solid var(--border-color)",
+  borderRadius: 7,
+  cursor: "pointer",
+  color: "var(--text-secondary)",
+  fontSize: 12,
+  fontWeight: 600,
 };
 const fileTypeChoiceActive = {
-  borderColor: "var(--primary-color)", color: "var(--text-primary)", background: "rgba(79,70,229,0.08)",
+  borderColor: "var(--primary-color, var(--accent-color))",
+  color: "var(--text-primary)",
+  background:
+    "color-mix(in srgb, var(--primary-color, var(--accent-color)) 9%, var(--surface-color))",
 };
 const countBadge = {
-  display: "inline-flex", alignItems: "center", padding: "5px 9px", borderRadius: 999,
-  background: "var(--subtle-bg)", color: "var(--text-secondary)", fontSize: 11, fontWeight: 700,
+  display: "inline-flex",
+  alignItems: "center",
+  padding: "5px 9px",
+  borderRadius: 999,
+  background: "var(--subtle-bg)",
+  color: "var(--text-secondary)",
+  fontSize: 11,
+  fontWeight: 700,
   whiteSpace: "nowrap",
 };
 const documentMatrixGrid = {
-  display: "grid", alignItems: "center", gap: 10, padding: "11px 12px",
-  borderBottom: "1px solid var(--border-light, var(--border-color))", fontSize: 12,
+  display: "grid",
+  alignItems: "center",
+  gap: 10,
+  padding: "11px 12px",
+  borderBottom: "1px solid var(--border-light, var(--border-color))",
+  fontSize: 12,
 };
 const participantIdentityButton = {
-  display: "grid", gap: 3, width: "100%", minWidth: 0, padding: 0,
-  border: 0, background: "transparent", color: "var(--text-primary)",
-  textAlign: "left", cursor: "pointer", font: "inherit",
+  display: "grid",
+  gap: 3,
+  width: "100%",
+  minWidth: 0,
+  padding: 0,
+  border: 0,
+  background: "transparent",
+  color: "var(--text-primary)",
+  textAlign: "left",
+  cursor: "pointer",
+  font: "inherit",
 };
 const matrixUploaded = {
-  display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 4,
-  minWidth: 0, padding: "4px 7px", border: "1px solid rgba(47,122,77,0.35)", borderRadius: 6,
-  background: "rgba(47,122,77,0.08)", color: "var(--primary-color, #2F7A4D)", cursor: "pointer", fontSize: 10, fontWeight: 700, textAlign: "center", whiteSpace: "nowrap",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 4,
+  minWidth: 0,
+  padding: "4px 7px",
+  border: "1px solid rgba(47,122,77,0.35)",
+  borderRadius: 6,
+  background: "rgba(47,122,77,0.08)",
+  color: "var(--primary-color, #2F7A4D)",
+  cursor: "pointer",
+  fontSize: 10,
+  fontWeight: 700,
+  textAlign: "center",
+  whiteSpace: "nowrap",
 };
 const matrixUploadedActions = {
-  display: "flex", alignItems: "center", justifyContent: "flex-start", gap: 6, flexWrap: "wrap", width: "100%", minWidth: 0,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "flex-start",
+  gap: 6,
+  flexWrap: "wrap",
+  width: "100%",
+  minWidth: 0,
 };
 const matrixPending = {
-  display: "inline-flex", alignItems: "center", gap: 5, color: "var(--text-secondary)", fontSize: 11,
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 5,
+  color: "var(--text-secondary)",
+  fontSize: 11,
 };
 const addBtn = {
   ...primaryBtn,
 };
 const iconBtn = {
-  padding: 6, borderRadius: 4,
-  background: "transparent", color: "var(--text-secondary)",
-  border: "none", cursor: "pointer",
+  padding: 6,
+  borderRadius: 4,
+  background: "transparent",
+  color: "var(--text-secondary)",
+  border: "none",
+  cursor: "pointer",
 };
 const consentReviewStyles = {
   overlay: {
-    position: "fixed", inset: 0, zIndex: 1000, display: "grid", placeItems: "center", padding: 18,
-    background: "var(--bg-color, #0b0d14)", backdropFilter: "none",
+    position: "fixed",
+    inset: 0,
+    zIndex: 1000,
+    display: "grid",
+    placeItems: "center",
+    padding: 18,
+    background: "var(--bg-color, #0b0d14)",
+    backdropFilter: "none",
   },
   modal: {
-    width: "min(760px, 100%)", maxHeight: "92vh", overflowY: "auto", display: "grid", gap: 16,
-    padding: 24, border: "1px solid var(--border-color)", borderRadius: 18,
-    background: "var(--surface-color, #fff)", color: "var(--text-primary)",
+    width: "min(760px, 100%)",
+    maxHeight: "92vh",
+    overflowY: "auto",
+    display: "grid",
+    gap: 16,
+    padding: 24,
+    border: "1px solid var(--border-color)",
+    borderRadius: 18,
+    background: "var(--surface-color, #fff)",
+    color: "var(--text-primary)",
     boxShadow: "0 28px 80px rgba(0, 0, 0, 0.32)",
   },
-  header: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 },
+  header: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 16,
+  },
   headerCopy: { display: "grid", gap: 12, minWidth: 0 },
   titleRow: { display: "flex", alignItems: "center", gap: 11 },
   titleIcon: {
-    display: "grid", placeItems: "center", flex: "0 0 auto", width: 36, height: 36, borderRadius: 10,
-    background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", color: "#2F7A4D",
+    display: "grid",
+    placeItems: "center",
+    flex: "0 0 auto",
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    background: "var(--surface-color, #fff)",
+    border: "1px solid var(--border-color)",
+    color: "#2F7A4D",
   },
-  title: { margin: 0, color: "var(--text-primary)", fontSize: 20, lineHeight: 1.2 },
+  title: {
+    margin: 0,
+    color: "var(--text-primary)",
+    fontSize: 20,
+    lineHeight: 1.2,
+  },
   subtitle: { margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 12 },
-  submissionMeta: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: 9, color: "var(--text-secondary)", fontSize: 12 },
+  submissionMeta: {
+    display: "flex",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 9,
+    color: "var(--text-secondary)",
+    fontSize: 12,
+  },
   acceptedBadge: {
-    display: "inline-flex", alignItems: "center", gap: 5, padding: "5px 9px", borderRadius: 999,
-    background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)", color: "#2F7A4D", fontSize: 11, fontWeight: 750,
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 5,
+    padding: "5px 9px",
+    borderRadius: 999,
+    background: "var(--surface-color, #fff)",
+    border: "1px solid var(--border-color)",
+    color: "#2F7A4D",
+    fontSize: 11,
+    fontWeight: 750,
   },
   termsCard: {
-    display: "grid", gap: 14, padding: 16, border: "1px solid var(--border-color)",
-    borderRadius: 13, background: "var(--subtle-bg, var(--surface-color, #fff))",
+    display: "grid",
+    gap: 14,
+    padding: 16,
+    border: "1px solid var(--border-color)",
+    borderRadius: 13,
+    background: "var(--subtle-bg, var(--surface-color, #fff))",
   },
   detailsCard: {
-    display: "grid", gap: 14, padding: 16, border: "1px solid var(--border-color)",
-    borderRadius: 13, background: "var(--subtle-bg, #f7f8fa)",
+    display: "grid",
+    gap: 14,
+    padding: 16,
+    border: "1px solid var(--border-color)",
+    borderRadius: 13,
+    background: "var(--subtle-bg, #f7f8fa)",
   },
-  sectionHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 14 },
-  sectionEyebrow: { display: "block", marginBottom: 4, color: "var(--text-secondary)", fontSize: 10, fontWeight: 800, letterSpacing: 0.8, textTransform: "uppercase" },
-  sectionTitle: { margin: 0, color: "var(--text-primary)", fontSize: 15, lineHeight: 1.3 },
-  sectionHint: { margin: "4px 0 0", color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.45 },
+  sectionHeader: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 14,
+  },
+  sectionEyebrow: {
+    display: "block",
+    marginBottom: 4,
+    color: "var(--text-secondary)",
+    fontSize: 10,
+    fontWeight: 800,
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+  },
+  sectionTitle: {
+    margin: 0,
+    color: "var(--text-primary)",
+    fontSize: 15,
+    lineHeight: 1.3,
+  },
+  sectionHint: {
+    margin: "4px 0 0",
+    color: "var(--text-secondary)",
+    fontSize: 12,
+    lineHeight: 1.45,
+  },
   termsBadge: {
-    flex: "0 0 auto", padding: "6px 9px", borderRadius: 999, background: "var(--surface-color, #fff)", border: "1px solid var(--border-color)",
-    color: "#2F7A4D", fontSize: 10, fontWeight: 800, letterSpacing: 0.3, textTransform: "uppercase",
+    flex: "0 0 auto",
+    padding: "6px 9px",
+    borderRadius: 999,
+    background: "var(--surface-color, #fff)",
+    border: "1px solid var(--border-color)",
+    color: "#2F7A4D",
+    fontSize: 10,
+    fontWeight: 800,
+    letterSpacing: 0.3,
+    textTransform: "uppercase",
   },
   termsViewport: {
-    maxHeight: 360, overflowY: "auto", padding: "16px 17px", border: "1px solid var(--border-color)",
-    borderRadius: 10, background: "var(--surface-color, #fff)", scrollbarGutter: "stable",
+    maxHeight: 360,
+    overflowY: "auto",
+    padding: "16px 17px",
+    border: "1px solid var(--border-color)",
+    borderRadius: 10,
+    background: "var(--surface-color, #fff)",
+    scrollbarGutter: "stable",
   },
   termsContent: { display: "grid", gap: 16, color: "var(--text-primary)" },
   termSection: { display: "grid", gap: 5 },
-  termHeading: { margin: 0, color: "var(--text-primary)", fontSize: 12, lineHeight: 1.45, fontWeight: 800 },
-  termBody: { margin: 0, color: "var(--text-secondary)", fontSize: 12, lineHeight: 1.7, whiteSpace: "pre-wrap" },
+  termHeading: {
+    margin: 0,
+    color: "var(--text-primary)",
+    fontSize: 12,
+    lineHeight: 1.45,
+    fontWeight: 800,
+  },
+  termBody: {
+    margin: 0,
+    color: "var(--text-secondary)",
+    fontSize: 12,
+    lineHeight: 1.7,
+    whiteSpace: "pre-wrap",
+  },
   emptyTerms: { margin: 0, color: "var(--text-secondary)", fontSize: 12 },
-  detailsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 10 },
-  detailItem: { display: "grid", gap: 5, minWidth: 0, padding: "11px 12px", border: "1px solid var(--border-color)", borderRadius: 9, background: "var(--surface-color, #fff)" },
+  detailsGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
+    gap: 10,
+  },
+  detailItem: {
+    display: "grid",
+    gap: 5,
+    minWidth: 0,
+    padding: "11px 12px",
+    border: "1px solid var(--border-color)",
+    borderRadius: 9,
+    background: "var(--surface-color, #fff)",
+  },
   detailItemWide: { gridColumn: "1 / -1" },
-  detailLabel: { color: "var(--text-secondary)", fontSize: 10, fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase" },
-  detailValue: { color: "var(--text-primary)", fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap", overflowWrap: "anywhere" },
+  detailLabel: {
+    color: "var(--text-secondary)",
+    fontSize: 10,
+    fontWeight: 800,
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+  },
+  detailValue: {
+    color: "var(--text-primary)",
+    fontSize: 13,
+    lineHeight: 1.5,
+    whiteSpace: "pre-wrap",
+    overflowWrap: "anywhere",
+  },
   emptyDetails: { margin: 0, color: "var(--text-secondary)", fontSize: 12 },
 };
 const participantDetailsStyles = {
   overlay: {
-    position: "fixed", inset: 0, zIndex: 1000, display: "grid", placeItems: "center", padding: 18,
+    position: "fixed",
+    inset: 0,
+    zIndex: 1000,
+    display: "grid",
+    placeItems: "center",
+    padding: 18,
     background: "var(--bg-color, #0b0d14)",
   },
   modal: {
-    width: "min(560px, 100%)", maxHeight: "86vh", overflowY: "auto", display: "grid", gap: 18,
-    padding: 22, border: "1px solid var(--border-color)", borderRadius: 16,
-    background: "var(--surface-color, #fff)", color: "var(--text-primary)",
+    width: "min(560px, 100%)",
+    maxHeight: "86vh",
+    overflowY: "auto",
+    display: "grid",
+    gap: 18,
+    padding: 22,
+    border: "1px solid var(--border-color)",
+    borderRadius: 16,
+    background: "var(--surface-color, #fff)",
+    color: "var(--text-primary)",
     boxShadow: "0 28px 80px rgba(0, 0, 0, 0.32)",
   },
-  header: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 },
+  header: {
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 16,
+  },
   titleRow: { display: "flex", alignItems: "center", gap: 11, minWidth: 0 },
   titleIcon: {
-    display: "grid", placeItems: "center", flex: "0 0 auto", width: 36, height: 36, borderRadius: 10,
-    background: "var(--subtle-bg)", border: "1px solid var(--border-color)", color: "var(--primary-color, #4F46E5)",
+    display: "grid",
+    placeItems: "center",
+    flex: "0 0 auto",
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    background: "var(--subtle-bg)",
+    border: "1px solid var(--border-color)",
+    color: "var(--primary-color, #4F46E5)",
   },
-  title: { margin: 0, color: "var(--text-primary)", fontSize: 19, lineHeight: 1.2 },
+  title: {
+    margin: 0,
+    color: "var(--text-primary)",
+    fontSize: 19,
+    lineHeight: 1.2,
+  },
   subtitle: { margin: "5px 0 0", color: "var(--text-secondary)", fontSize: 12 },
-  detailsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))", gap: 10 },
+  detailsGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))",
+    gap: 10,
+  },
   detailItem: {
-    display: "grid", gap: 6, minWidth: 0, padding: "11px 12px", border: "1px solid var(--border-color)",
-    borderRadius: 9, background: "var(--subtle-bg, #f7f8fa)",
+    display: "grid",
+    gap: 6,
+    minWidth: 0,
+    padding: "11px 12px",
+    border: "1px solid var(--border-color)",
+    borderRadius: 9,
+    background: "var(--subtle-bg, #f7f8fa)",
   },
   detailItemWide: { gridColumn: "1 / -1" },
   detailLabel: {
-    display: "flex", alignItems: "center", gap: 5, color: "var(--text-secondary)", fontSize: 10,
-    fontWeight: 800, letterSpacing: 0.4, textTransform: "uppercase",
+    display: "flex",
+    alignItems: "center",
+    gap: 5,
+    color: "var(--text-secondary)",
+    fontSize: 10,
+    fontWeight: 800,
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
   },
-  detailValue: { color: "var(--text-primary)", fontSize: 13, lineHeight: 1.45, overflowWrap: "anywhere" },
-  empty: { gridColumn: "1 / -1", margin: 0, color: "var(--text-secondary)", fontSize: 12 },
+  detailValue: {
+    color: "var(--text-primary)",
+    fontSize: 13,
+    lineHeight: 1.45,
+    overflowWrap: "anywhere",
+  },
+  empty: {
+    gridColumn: "1 / -1",
+    margin: 0,
+    color: "var(--text-secondary)",
+    fontSize: 12,
+  },
 };
 const importSchemaTh = {
   padding: "7px 9px",
@@ -4170,6 +8644,13 @@ const importSchemaTd = {
 // Visually hidden but still in the accessibility tree (display:none would
 // drop it for screen readers AND RTL label queries).
 const visuallyHiddenInput = {
-  position: "absolute", width: 1, height: 1, padding: 0, margin: -1,
-  overflow: "hidden", clip: "rect(0 0 0 0)", whiteSpace: "nowrap", border: 0,
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
 };

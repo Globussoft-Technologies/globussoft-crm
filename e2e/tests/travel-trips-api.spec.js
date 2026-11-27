@@ -837,6 +837,7 @@ test.describe("Travel trips API — slim-shape opt-in (#920 S3)", () => {
     const trip = body.trips[0];
     expect(trip).toHaveProperty("legalEntity");
     expect(trip).toHaveProperty("_count");
+    expect(typeof trip._count.rooming).toBe("number");
   });
 
   test("GET /trips?fields=full equals default (non-exact opt-in value)", async ({ request }) => {

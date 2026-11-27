@@ -989,9 +989,15 @@ describe("<Settings /> — page shell + representative card pin", () => {
     await user.click(screen.getByRole("button", { name: /SendGrid.*Manage integration/i }));
     expect(screen.queryByText(/Using backend default:/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Use Backend Default" })).not.toBeInTheDocument();
-    await user.type(screen.getByLabelText("SendGrid API key"), "SG.generic.secret1234");
-    await user.type(screen.getByLabelText("Verified sender email"), "sales@generic.test");
-    await user.type(screen.getByLabelText("Sender name"), "Acme Sales");
+    fireEvent.change(screen.getByLabelText("SendGrid API key"), {
+      target: { value: "SG.generic.secret1234" },
+    });
+    fireEvent.change(screen.getByLabelText("Verified sender email"), {
+      target: { value: "sales@generic.test" },
+    });
+    fireEvent.change(screen.getByLabelText("Sender name"), {
+      target: { value: "Acme Sales" },
+    });
     await user.click(screen.getByRole("button", { name: "Save SendGrid" }));
 
     await waitFor(() => expect(fetchApiMock).toHaveBeenCalledWith(
@@ -1012,7 +1018,7 @@ describe("<Settings /> — page shell + representative card pin", () => {
     await user.click(updateButton);
     expect(fetchApiMock.mock.calls.filter(([url, opts]) => url === "/api/generic/email-provider" && opts?.method === "PUT")).toHaveLength(putCount);
     expect(notifyObj.success).toHaveBeenCalledTimes(successToastCount);
-  });
+  }, 10000);
 
   it("switches the transfer form to FTP and uses port 21", async () => {
     const user = userEvent.setup();

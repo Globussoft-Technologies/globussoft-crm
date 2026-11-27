@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation, useParams } from 'react-router-dom';
 
 const { fetchApiMock, notifyObj, permissionState, subBrandState } = vi.hoisted(() => ({
   fetchApiMock: vi.fn(),
@@ -31,6 +31,12 @@ vi.mock('../utils/subBrand', () => ({
 import { AuthContext } from '../App';
 import TmcTeacherManagement from '../pages/travel/TmcTeacherManagement';
 
+function TripOverviewRouteProbe() {
+  const { tripId } = useParams();
+  const location = useLocation();
+  return <div>Trip overview route: {tripId}{location.search}</div>;
+}
+
 function renderPage({
   activeSubBrand = 'tmc',
   subBrandAccess = null,
@@ -52,6 +58,7 @@ function renderPage({
         <Routes>
           <Route path="/travel/tmc/teachers" element={<TmcTeacherManagement />} />
           <Route path="/travel/tmc/teachers/:teacherId" element={<TmcTeacherManagement />} />
+          <Route path="/travel/trips/:tripId" element={<TripOverviewRouteProbe />} />
         </Routes>
       </MemoryRouter>
     </AuthContext.Provider>,
@@ -154,12 +161,25 @@ describe('TMC teacher onboarding pages', () => {
     expect(screen.getByRole('heading', { name: 'Recent assigned trips' })).toBeInTheDocument();
   });
 
+  it('opens a recent assigned trip in its TMC Trips overview', async () => {
+    renderPage({ path: '/travel/tmc/teachers/7' }, withTeacher());
+
+    expect(await screen.findByRole('heading', { name: 'Asha Rao' })).toBeInTheDocument();
+    const tripLink = screen.getByRole('link', { name: 'Open Darjeeling in TMC Trips' });
+    expect(tripLink).toHaveAttribute('href', '/travel/trips/41?tab=overview');
+
+    fireEvent.click(tripLink);
+
+    expect(await screen.findByText('Trip overview route: 41?tab=overview')).toBeInTheDocument();
+  });
+
   it('shows assigned trips and trip-specific parent and student details with timestamps', async () => {
     renderPage({ path: '/travel/tmc/teachers/7' }, withTeacher());
 
     expect(await screen.findByRole('heading', { name: 'Asha Rao' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('tab', { name: /Assigned Trips/ }));
     expect(await screen.findByText('DAR-2026')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Darjeeling in TMC Trips' })).toHaveAttribute('href', '/travel/trips/41?tab=overview');
     expect(screen.getByRole('button', { name: 'Copy parent portal link for Darjeeling' })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('tab', { name: /Parents & Students/ }));

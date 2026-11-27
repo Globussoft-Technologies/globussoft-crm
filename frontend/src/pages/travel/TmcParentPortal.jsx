@@ -1375,6 +1375,11 @@ const styles = {
   cardTitle: { margin: 0, color: "var(--tmc-parent-heading)", fontSize: 17 },
   documentInfoCard: { display: "flex", alignItems: "flex-start", gap: 13, padding: 18, border: "1px solid var(--tmc-parent-border)", borderRadius: 14, background: "linear-gradient(115deg, var(--tmc-parent-surface) 0%, var(--tmc-parent-surface-soft) 100%)" },
   documentInfoIcon: { flex: "0 0 auto", display: "grid", placeItems: "center", width: 42, height: 42, borderRadius: 11, background: "var(--tmc-parent-profile-bg)", color: "var(--tmc-parent-primary)" },
+  documentUploadToggle: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, width: "100%", padding: 0, border: 0, background: "transparent", color: "var(--tmc-parent-text)", cursor: "pointer", textAlign: "left" },
+  documentUploadToggleCopy: { display: "grid", gap: 5, minWidth: 0 },
+  documentUploadToggleTitle: { color: "var(--tmc-parent-heading)", fontSize: 17, fontWeight: 750, lineHeight: 1.25 },
+  documentUploadToggleIcon: { display: "inline-flex", alignItems: "center", gap: 10, flex: "0 0 auto", color: "var(--tmc-parent-primary)" },
+  documentUploadContent: { marginTop: 16 },
   documentForm: { display: "grid", gap: 13 },
   digitalConsentPanel: { display: "grid", gap: 13, padding: 14, border: "1px solid var(--tmc-parent-border)", borderRadius: 10, background: "var(--tmc-parent-surface-soft)" },
   digitalConsentTerms: { display: "grid", gap: 0, overflow: "hidden", borderRadius: 9, background: "var(--tmc-parent-surface)", border: "1px solid var(--tmc-parent-border-light)" },
@@ -1581,6 +1586,7 @@ const styles = {
 };
 function DynamicParentDocumentsView({ documents, documentRequirements, trips, participants, contact, loading, token, onRefresh, themeMode }) {
   const [tripId, setTripId] = useState("");
+  const [uploadExpanded, setUploadExpanded] = useState(false);
   const [requirementId, setRequirementId] = useState("");
   const [file, setFile] = useState(null);
   const [fileInputKey, setFileInputKey] = useState(0);
@@ -1833,13 +1839,24 @@ function DynamicParentDocumentsView({ documents, documentRequirements, trips, pa
         </div>
       </section>
       <section style={styles.card} aria-labelledby="parent-document-upload-heading">
-        <div style={styles.cardHeader}>
-          <div>
-            <h2 id="parent-document-upload-heading" style={styles.cardTitle}>{selectedRequirementIsDigitalConsent ? "Complete consent form" : "Upload a document"}</h2>
-            <p style={styles.muted}>{selectedRequirementIsDigitalConsent ? "Complete the required details, agree to the terms, and submit the form securely in this portal." : "The trip admin controls the document names and accepted file types. Files up to 10 MB."}</p>
-          </div>
-          {selectedRequirementIsDigitalConsent ? <CheckCircle2 size={19} color={styles.colors.primary} aria-hidden="true" /> : <Upload size={19} color={styles.colors.primary} aria-hidden="true" />}
-        </div>
+        <button
+          type="button"
+          style={styles.documentUploadToggle}
+          data-tmc-no-hover
+          aria-expanded={uploadExpanded}
+          aria-controls="parent-document-upload-content"
+          onClick={() => setUploadExpanded((expanded) => !expanded)}
+        >
+          <span style={styles.documentUploadToggleCopy}>
+            <span id="parent-document-upload-heading" style={styles.documentUploadToggleTitle}>Upload a document</span>
+            <span style={styles.muted}>Choose a trip and upload one of its requested documents.</span>
+          </span>
+          <span style={styles.documentUploadToggleIcon}>
+            <Upload size={17} aria-hidden="true" />
+            <ChevronDown size={17} aria-hidden="true" style={{ transform: uploadExpanded ? "rotate(180deg)" : "none", transition: "transform 160ms ease" }} />
+          </span>
+        </button>
+        <div id="parent-document-upload-content" hidden={!uploadExpanded} style={styles.documentUploadContent}>
         <form onSubmit={selectedRequirementIsDigitalConsent ? submitConsent : submit} style={styles.documentForm}>
           <label htmlFor="parent-document-trip" style={styles.label}>
             <span style={styles.labelText}>Select trip <span style={styles.requiredLabel}>*</span></span>
@@ -1933,6 +1950,7 @@ function DynamicParentDocumentsView({ documents, documentRequirements, trips, pa
           {documentError && <div role="alert" style={styles.error}>{documentError}</div>}
           {message && <div role="status" style={styles.successMessage}>{message}</div>}
         </form>
+        </div>
       </section>
       <section style={styles.card} aria-labelledby="parent-documents-heading">
         <div style={styles.cardHeader}>

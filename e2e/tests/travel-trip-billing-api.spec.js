@@ -117,42 +117,31 @@ test.afterAll(async ({ request }) => {
 // ─── Rooming ─────────────────────────────────────────────────────────
 
 test.describe("Travel trip billing — rooming", () => {
-  test("POST /rooming creates a twin room with 2 participants", async ({ request }) => {
+  test("POST /rooming creates an empty custom-capacity room for later participant assignment", async ({ request }) => {
     const token = await getTravelAdmin(request);
-    if (!token || !tripId || !participantId) test.skip(true, "deps missing");
+    if (!token || !tripId) test.skip(true, "deps missing");
     const res = await post(request, token, `/api/travel/trips/${tripId}/rooming`, {
       roomNumber: "101",
-      roomType: "twin",
-      participantIds: [participantId],
+      sharingCapacity: 5,
     });
     expect(res.status(), `create: ${await res.text()}`).toBe(201);
     const body = await res.json();
     expect(body.roomNumber).toBe("101");
+    expect(body.sharingCapacity).toBe(5);
+    expect(JSON.parse(body.participantIds)).toEqual([]);
     created.roomIds.push(body.id);
   });
 
-  test("POST /rooming with duplicate participant assignment → 409 DUPLICATE_ASSIGNMENT", async ({ request }) => {
+  test("POST /rooming rejects participant assignment in the admin inventory flow", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token || !tripId || !participantId) test.skip(true, "deps missing");
     const res = await post(request, token, `/api/travel/trips/${tripId}/rooming`, {
       roomNumber: "102",
-      roomType: "twin",
+      sharingCapacity: 2,
       participantIds: [participantId],
     });
-    expect(res.status()).toBe(409);
-    expect((await res.json()).code).toBe("DUPLICATE_ASSIGNMENT");
-  });
-
-  test("POST /rooming with too many participants → 400 ROOM_CAPACITY_EXCEEDED", async ({ request }) => {
-    const token = await getTravelAdmin(request);
-    if (!token || !tripId || !participantId) test.skip(true, "deps missing");
-    const res = await post(request, token, `/api/travel/trips/${tripId}/rooming`, {
-      roomNumber: "102",
-      roomType: "single",
-      participantIds: [participantId, participantId],
-    });
-    expect(res.status()).toBe(400);
-    expect((await res.json()).code).toBe("ROOM_CAPACITY_EXCEEDED");
+    expect(res.status()).toBe(403);
+    expect((await res.json()).code).toBe("PARTICIPANT_ASSIGNMENT_TEACHER_ONLY");
   });
 
   test("POST /rooming with duplicate room number → 409 DUPLICATE_ROOM_NUMBER", async ({ request }) => {
@@ -161,35 +150,31 @@ test.describe("Travel trip billing — rooming", () => {
     // Try to create a room with same number as first room (which is "101")
     const res = await post(request, token, `/api/travel/trips/${tripId}/rooming`, {
       roomNumber: "101",
-      roomType: "twin",
-      participantIds: [],
+      sharingCapacity: 2,
     });
     expect(res.status()).toBe(409);
     expect((await res.json()).code).toBe("DUPLICATE_ROOM_NUMBER");
   });
 
-  test("POST /rooming with bad roomType → 400 INVALID_ROOM_TYPE", async ({ request }) => {
+  test("POST /rooming with fractional sharing capacity → 400 INVALID_SHARING_CAPACITY", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token || !tripId) test.skip(true, "no trip");
     const res = await post(request, token, `/api/travel/trips/${tripId}/rooming`, {
       roomNumber: "103",
-      roomType: "penthouse",
-      participantIds: [],
+      sharingCapacity: 1.5,
     });
     expect(res.status()).toBe(400);
-    expect((await res.json()).code).toBe("INVALID_ROOM_TYPE");
+    expect((await res.json()).code).toBe("INVALID_SHARING_CAPACITY");
   });
 
-  test("POST /rooming with participant from another trip → 400 PARTICIPANTS_OFF_TRIP", async ({ request }) => {
+  test("PATCH /rooming rejects assignment changes from staff configuration API", async ({ request }) => {
     const token = await getTravelAdmin(request);
-    if (!token || !tripId) test.skip(true, "no trip");
-    const res = await post(request, token, `/api/travel/trips/${tripId}/rooming`, {
-      roomNumber: "104",
-      roomType: "twin",
-      participantIds: [9999999], // not on this trip
+    if (!token || !tripId || created.roomIds.length === 0) test.skip(true, "no room");
+    const res = await patch(request, token, `/api/travel/trips/${tripId}/rooming/${created.roomIds[0]}`, {
+      participantIds: [9999999],
     });
-    expect(res.status()).toBe(400);
-    expect((await res.json()).code).toBe("PARTICIPANTS_OFF_TRIP");
+    expect(res.status()).toBe(403);
+    expect((await res.json()).code).toBe("PARTICIPANT_ASSIGNMENT_TEACHER_ONLY");
   });
 
   test("GET /rooming lists assignments", async ({ request }) => {
@@ -200,14 +185,15 @@ test.describe("Travel trip billing — rooming", () => {
     expect(Array.isArray((await res.json()).rooming)).toBe(true);
   });
 
-  test("PATCH /rooming amends roomNumber", async ({ request }) => {
+  test("PATCH /rooming updates roomNumber and custom sharing capacity", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token || !tripId || created.roomIds.length === 0) test.skip(true, "no rooms");
     const res = await patch(request, token, `/api/travel/trips/${tripId}/rooming/${created.roomIds[0]}`, {
       roomNumber: "101A",
+      sharingCapacity: 6,
     });
     expect(res.status()).toBe(200);
-    expect((await res.json()).roomNumber).toBe("101A");
+    expect(await res.json()).toMatchObject({ roomNumber: "101A", sharingCapacity: 6 });
   });
 
   test("PATCH /rooming with duplicate room number → 409 DUPLICATE_ROOM_NUMBER", async ({ request }) => {
@@ -216,8 +202,7 @@ test.describe("Travel trip billing — rooming", () => {
     // First, create a second room with number "102"
     const createRes = await post(request, token, `/api/travel/trips/${tripId}/rooming`, {
       roomNumber: "102",
-      roomType: "twin",
-      participantIds: [],
+      sharingCapacity: 2,
     });
     if (!createRes.ok()) test.skip(true, "failed to create second room");
     const room2Id = (await createRes.json()).id;
@@ -351,17 +336,15 @@ test.describe("Travel trip billing — rooming XLSX export", () => {
     expect(buf.length).toBeGreaterThan(100);
   });
 
-  test("POST /rooming/auto allocates unassigned participants", async ({ request }) => {
+  test("POST /rooming/auto is disabled because admins configure rooms before teacher assignment", async ({ request }) => {
     const token = await getTravelAdmin(request);
     if (!token || !tripId) test.skip(true, "no trip");
     const res = await post(request, token, `/api/travel/trips/${tripId}/rooming/auto`, {
       roomTypes: ["twin"],
       startingRoomNumber: 200,
     });
-    expect(res.status()).toBe(201);
-    const body = await res.json();
-    expect(typeof body.created).toBe("number");
-    expect(typeof body.skipped).toBe("number");
+    expect(res.status()).toBe(403);
+    expect((await res.json()).code).toBe("ROOM_AUTO_ALLOCATION_DISABLED");
   });
 });
 

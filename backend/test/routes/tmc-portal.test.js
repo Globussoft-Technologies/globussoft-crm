@@ -255,6 +255,14 @@ describe('TMC teacher catalogue selection', () => {
     expect(prisma.tmcTeacherCatalogueResponse.findUnique).toHaveBeenCalledWith(expect.objectContaining({
       where: { tenantId_teacherContactId: { tenantId: 7, teacherContactId: 41 } },
     }));
+
+    const driveScanCallCount = travelKnowledgeBaseSync.listFolderChildren.mock.calls.length;
+    const cachedRes = await request(makeApp())
+      .get('/api/portal/tmc/teacher/catalogues')
+      .set(bearer());
+    expect(cachedRes.status).toBe(200);
+    expect(cachedRes.body.catalogues).toEqual(res.body.catalogues);
+    expect(travelKnowledgeBaseSync.listFolderChildren).toHaveBeenCalledTimes(driveScanCallCount);
   });
 
   test('keeps the brochure library available when the response table is not synced yet', async () => {
@@ -274,6 +282,40 @@ describe('TMC teacher catalogue selection', () => {
       catalogues: [expect.objectContaining({ driveFileId: 'tmc-pdf-1' })],
       response: null,
     });
+  });
+
+  test('lists sibling Drive folders concurrently on a cold catalogue load', async () => {
+    let activeFolderReads = 0;
+    let maxConcurrentFolderReads = 0;
+    travelKnowledgeBaseSync.listFolderChildren = vi.fn(async (_drive, folderId) => {
+      if (folderId === 'root-folder') {
+        return [{ id: 'tmc-folder', name: 'TMC', mimeType: 'application/vnd.google-apps.folder' }];
+      }
+      if (folderId === 'tmc-folder') {
+        return Array.from({ length: 6 }, (_, index) => ({
+          id: `folder-${index + 1}`,
+          name: `Folder ${index + 1}`,
+          mimeType: 'application/vnd.google-apps.folder',
+        }));
+      }
+      activeFolderReads += 1;
+      maxConcurrentFolderReads = Math.max(maxConcurrentFolderReads, activeFolderReads);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      activeFolderReads -= 1;
+      return [{
+        id: `pdf-${folderId}`,
+        name: `${folderId}.pdf`,
+        mimeType: 'application/pdf',
+      }];
+    });
+
+    const res = await request(makeApp())
+      .get('/api/portal/tmc/teacher/catalogues')
+      .set(bearer(portalToken({ tenantId: 72 })));
+
+    expect(res.status).toBe(200);
+    expect(res.body.catalogues).toHaveLength(6);
+    expect(maxConcurrentFolderReads).toBeGreaterThan(1);
   });
 
   test('rejects an empty catalogue selection without writing a response', async () => {
@@ -435,7 +477,7 @@ describe('TMC teacher trip management', () => {
       { id: 9, tripId: 100, participantId: 501, instalmentIndex: 0, amount: 100000, paidAmount: 100000, status: 'paid' },
     ]);
     prisma.roomingAssignment.findMany.mockResolvedValue([
-      { id: 12, tripId: 100, roomNumber: '101', roomType: 'twin', participantIds: '[501,502]' },
+      { id: 12, tripId: 100, roomNumber: '101', roomType: 'twin', sharingCapacity: 2, participantIds: '[501,502]' },
     ]);
 
     const [paymentPlan, instalments, rooming] = await Promise.all([
@@ -450,6 +492,7 @@ describe('TMC teacher trip management', () => {
     expect(instalments.body.instalments).toHaveLength(1);
     expect(rooming.status).toBe(200);
     expect(rooming.body.rooming[0].roomNumber).toBe('101');
+    expect(rooming.body.rooming[0].sharingCapacity).toBe(2);
     expect(prisma.tmcTrip.findFirst).toHaveBeenCalledWith(expect.objectContaining({
       where: {
         id: 100,
@@ -462,29 +505,119 @@ describe('TMC teacher trip management', () => {
     }));
   });
 
-  test('teacher can create rooming only for participants on the assigned trip', async () => {
-    prisma.tripParticipant.count.mockResolvedValue(2);
-    prisma.roomingAssignment.findMany.mockResolvedValue([]);
-    prisma.roomingAssignment.create.mockResolvedValue({
+  test('teacher assigns participants to an admin-configured room', async () => {
+    prisma.roomingAssignment.findFirst.mockResolvedValue({
       id: 22,
       tripId: 100,
       roomNumber: '201',
       roomType: 'twin',
-      participantIds: '[501,502]',
+      participantIds: '[]',
+    });
+    prisma.tripParticipant.count.mockResolvedValue(1);
+    prisma.roomingAssignment.findMany.mockResolvedValue([]);
+    prisma.roomingAssignment.update.mockResolvedValue({
+      id: 22,
+      tripId: 100,
+      roomNumber: '201',
+      roomType: 'twin',
+      participantIds: '[501]',
     });
 
     const res = await request(makeApp())
+      .patch('/api/portal/tmc/teacher/trips/100/rooming/22')
+      .set(bearer())
+      .send({ participantIds: [501] });
+
+    expect(res.status).toBe(200);
+    expect(prisma.tripParticipant.count).toHaveBeenCalledWith({
+      where: { id: { in: [501] }, tripId: 100 },
+    });
+    expect(prisma.roomingAssignment.update).toHaveBeenCalledWith({
+      where: { id: 22 },
+      data: { participantIds: '[501]' },
+    });
+  });
+
+  test('teacher cannot create, edit room configuration, delete, or auto-create rooms', async () => {
+    const create = await request(makeApp())
       .post('/api/portal/tmc/teacher/trips/100/rooming')
       .set(bearer())
-      .send({ roomNumber: '201', roomType: 'twin', participantIds: [501, 502] });
+      .send({ roomNumber: '201', roomType: 'twin' });
+    expect(create.status).toBe(403);
+    expect(create.body.code).toBe('ROOM_CONFIGURATION_ADMIN_ONLY');
 
-    expect(res.status).toBe(201);
+    prisma.roomingAssignment.findFirst.mockResolvedValue({
+      id: 22, tripId: 100, roomNumber: '201', roomType: 'twin', participantIds: '[]',
+    });
+    const editConfiguration = await request(makeApp())
+      .patch('/api/portal/tmc/teacher/trips/100/rooming/22')
+      .set(bearer())
+      .send({ roomNumber: '202', roomType: 'quad' });
+    expect(editConfiguration.status).toBe(403);
+    expect(editConfiguration.body.code).toBe('ROOM_CONFIGURATION_ADMIN_ONLY');
+
+    const remove = await request(makeApp())
+      .delete('/api/portal/tmc/teacher/trips/100/rooming/22')
+      .set(bearer());
+    expect(remove.status).toBe(403);
+    expect(remove.body.code).toBe('ROOM_CONFIGURATION_ADMIN_ONLY');
+
+    const auto = await request(makeApp())
+      .post('/api/portal/tmc/teacher/trips/100/rooming/auto')
+      .set(bearer());
+    expect(auto.status).toBe(403);
+    expect(prisma.roomingAssignment.create).not.toHaveBeenCalled();
+    expect(prisma.roomingAssignment.delete).not.toHaveBeenCalled();
+    expect(prisma.roomingAssignment.update).not.toHaveBeenCalled();
+  });
+
+  test('teacher assignments respect a custom sharing capacity configured by the admin', async () => {
+    prisma.roomingAssignment.findFirst.mockResolvedValue({
+      id: 22, tripId: 100, roomNumber: '201', roomType: 'custom', sharingCapacity: 5, participantIds: '[]',
+    });
+    const res = await request(makeApp())
+      .patch('/api/portal/tmc/teacher/trips/100/rooming/22')
+      .set(bearer())
+      .send({ participantIds: [501, 502, 503, 504, 505, 506] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('ROOM_CAPACITY_EXCEEDED');
+    expect(prisma.tripParticipant.count).not.toHaveBeenCalled();
+    expect(prisma.roomingAssignment.update).not.toHaveBeenCalled();
+  });
+
+  test('teacher cannot assign a participant outside the assigned trip', async () => {
+    prisma.roomingAssignment.findFirst.mockResolvedValue({
+      id: 22, tripId: 100, roomNumber: '201', roomType: 'twin', participantIds: '[]',
+    });
+    prisma.tripParticipant.count.mockResolvedValue(0);
+    const res = await request(makeApp())
+      .patch('/api/portal/tmc/teacher/trips/100/rooming/22')
+      .set(bearer())
+      .send({ participantIds: [999] });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('PARTICIPANTS_OFF_TRIP');
     expect(prisma.tripParticipant.count).toHaveBeenCalledWith({
-      where: { id: { in: [501, 502] }, tripId: 100 },
+      where: { id: { in: [999] }, tripId: 100 },
     });
-    expect(prisma.roomingAssignment.create).toHaveBeenCalledWith({
-      data: { tripId: 100, roomNumber: '201', roomType: 'twin', participantIds: '[501,502]' },
+    expect(prisma.roomingAssignment.update).not.toHaveBeenCalled();
+  });
+
+  test('teacher cannot assign the same participant to two rooms', async () => {
+    prisma.roomingAssignment.findFirst.mockResolvedValue({
+      id: 22, tripId: 100, roomNumber: '201', roomType: 'twin', participantIds: '[]',
     });
+    prisma.tripParticipant.count.mockResolvedValue(1);
+    prisma.roomingAssignment.findMany.mockResolvedValue([{ participantIds: '[501]' }]);
+    const res = await request(makeApp())
+      .patch('/api/portal/tmc/teacher/trips/100/rooming/22')
+      .set(bearer())
+      .send({ participantIds: [501] });
+
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('DUPLICATE_ASSIGNMENT');
+    expect(prisma.roomingAssignment.update).not.toHaveBeenCalled();
   });
 });
 

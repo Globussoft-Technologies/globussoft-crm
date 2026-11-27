@@ -258,6 +258,7 @@ describe("TmcParentPortal", () => {
 
     await screen.findByRole("heading", { name: "Dashboard" });
     fireEvent.click(screen.getByRole("button", { name: /Travel Documents/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Upload a document/ }));
     const tripSelect = await screen.findByRole("combobox", { name: "Related trip" });
 
     expect(tripSelect).toHaveStyle({ colorScheme: "light" });
@@ -286,6 +287,7 @@ describe("TmcParentPortal", () => {
     expect(screen.queryByRole("combobox", { name: "Document type" })).not.toBeInTheDocument();
     expect(screen.queryByText(/Aadhaar card|Consent form|Visa documents/)).not.toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: /Upload a document/ }));
     const tripSelect = screen.getByRole("combobox", { name: "Related trip" });
     fireEvent.change(tripSelect, { target: { value: "7" } });
     const uploadedRequirement = screen.getAllByText("Travel insurance certificate", { exact: true })[0].closest("button");
@@ -403,6 +405,7 @@ describe("TmcParentPortal", () => {
     render(<TmcParentPortal />);
     await screen.findByRole("heading", { name: "Dashboard" });
     fireEvent.click(screen.getByRole("button", { name: /Travel Documents/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Upload a document/ }));
     fireEvent.change(await screen.findByRole("combobox", { name: "Related trip" }), { target: { value: "7" } });
     fireEvent.click(await screen.findByRole("button", { name: /Parent consent form/ }));
 

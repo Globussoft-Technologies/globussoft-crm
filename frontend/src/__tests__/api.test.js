@@ -193,6 +193,21 @@ describe('utils/api — fetchApi', () => {
     expect(out).toEqual({ hello: 'world' });
   });
 
+  it('preserves intentional request aborts without showing a network-error toast', async () => {
+    const notifyError = vi.fn();
+    registerGlobalNotify({ error: notifyError });
+    const controller = new AbortController();
+    const abortError = new DOMException('The operation was aborted.', 'AbortError');
+    vi.spyOn(global, 'fetch').mockImplementation(() => {
+      controller.abort();
+      return Promise.reject(abortError);
+    });
+
+    await expect(fetchApi('/api/notifications?page=1', { signal: controller.signal }))
+      .rejects.toMatchObject({ name: 'AbortError' });
+    expect(notifyError).not.toHaveBeenCalled();
+  });
+
   it('returns true for DELETE method', async () => {
     mockFetch({ status: 200, body: {}, method: 'DELETE' });
     const out = await fetchApi('/api/x/1', { method: 'DELETE' });

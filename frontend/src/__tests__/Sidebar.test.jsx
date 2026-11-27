@@ -891,6 +891,16 @@ describe('Sidebar — load-bearing render surface', () => {
       expect(reportsLink).toHaveTextContent('Reports');
     });
 
+    it('shows Notifications inside Administration and opens the view-all route', () => {
+      renderSidebar({ vertical: 'travel', role: 'ADMIN', path: '/notifications' });
+      const administration = screen.getByRole('button', { name: 'Administration' });
+      expect(administration).toHaveAttribute('aria-expanded', 'true');
+      const notificationsLink = document.querySelector('#travel-nav-administration a[href="/notifications"]');
+      expect(notificationsLink).toBeTruthy();
+      expect(notificationsLink).toHaveTextContent('Notifications');
+      expect(notificationsLink).toHaveClass('active');
+    });
+
     it('supports collapsing the travel sidebar chrome', () => {
       renderSidebar({ vertical: 'travel', role: 'ADMIN' });
       const sidebar = document.querySelector('#app-sidebar');

@@ -2,6 +2,104 @@ const router = require("express").Router();
 const prisma = require("../lib/prisma");
 const { notify, notifyTenant, resolve } = require("../lib/notificationService");
 const { writeAudit } = require("../lib/audit");
+const { verifyRole } = require("../middleware/auth");
+const { validateDateRange } = require("../lib/validateDateRange");
+const {
+  SETTING_KEY: EMAIL_CC_SETTING_KEY,
+  MAX_RECIPIENTS: MAX_EMAIL_CC_RECIPIENTS,
+  EMAIL_PATTERN,
+  normalizeEmail,
+  parseRecipients,
+} = require("../lib/notificationEmailCc");
+
+function normalizeEmailCcBody(body) {
+  if (!body || !Array.isArray(body.staffUserIds) || !Array.isArray(body.externalEmails)) {
+    return { error: "staffUserIds and externalEmails must be arrays.", code: "INVALID_EMAIL_CC_RECIPIENTS" };
+  }
+  const staffUserIds = [];
+  for (const value of body.staffUserIds) {
+    const userId = Number(value);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return { error: "Each staffUserId must be a positive integer.", code: "INVALID_STAFF_RECIPIENT" };
+    }
+    if (!staffUserIds.includes(userId)) staffUserIds.push(userId);
+  }
+
+  const externalEmails = [];
+  for (const value of body.externalEmails) {
+    if (typeof value !== "string") {
+      return { error: "Each additional email address must be a string.", code: "INVALID_EMAIL_CC_ADDRESS" };
+    }
+    const email = normalizeEmail(value);
+    if (!EMAIL_PATTERN.test(email)) {
+      return { error: `Invalid email address: ${value}`, code: "INVALID_EMAIL_CC_ADDRESS" };
+    }
+    if (!externalEmails.includes(email)) externalEmails.push(email);
+  }
+  if (staffUserIds.length + externalEmails.length > MAX_EMAIL_CC_RECIPIENTS) {
+    return { error: `A maximum of ${MAX_EMAIL_CC_RECIPIENTS} CC recipients is allowed.`, code: "TOO_MANY_EMAIL_CC_RECIPIENTS" };
+  }
+  const receiverEmailSpecified = Object.prototype.hasOwnProperty.call(body, "receiverEmail");
+  let receiverEmail = null;
+  if (receiverEmailSpecified && body.receiverEmail !== null && body.receiverEmail !== "") {
+    if (typeof body.receiverEmail !== "string") {
+      return { error: "receiverEmail must be a valid email address or empty.", code: "INVALID_NOTIFICATION_RECEIVER_EMAIL" };
+    }
+    receiverEmail = normalizeEmail(body.receiverEmail);
+    if (receiverEmail.length > 254 || !EMAIL_PATTERN.test(receiverEmail)) {
+      return { error: "receiverEmail must be a valid email address.", code: "INVALID_NOTIFICATION_RECEIVER_EMAIL" };
+    }
+  }
+  return {
+    recipients: { staffUserIds, externalEmails },
+    receiverEmail,
+    receiverEmailSpecified,
+  };
+}
+const NOTIFICATION_TYPE_FILTERS = {
+  diagnostic: { entityType: "TravelDiagnostic" },
+  // Catalogue-selection notifications predate a dedicated entityType. Keep
+  // matching their canonical deep-link so historical rows remain filterable;
+  // the entityType branch also supports newly tagged producers.
+  catalogue: {
+    OR: [
+      { entityType: "TmcCatalogueResponse" },
+      { link: { contains: "tab=catalogues" } },
+    ],
+  },
+  lead: { entityType: { in: ["lead", "lead_domain", "lead.merge_prompt"] } },
+  task: { entityType: "Task" },
+  ticket: { entityType: "ticket" },
+  approval: { entityType: "approval" },
+  payment: {
+    OR: [
+      { entityType: { in: ["payment", "Payment", "TripInstalmentPayment"] } },
+      { link: { contains: "/payments" } },
+    ],
+  },
+  quote: { link: { contains: "/travel/quotes" } },
+  travel: {
+    OR: [
+      { entityType: "Itinerary" },
+      { link: { contains: "/travel/itinerar" } },
+      { link: { contains: "/travel/trips" } },
+    ],
+  },
+  visa: {
+    OR: [
+      { entityType: "VisaApplication" },
+      { link: { contains: "/travel/visa" } },
+    ],
+  },
+  web_checkin: { entityType: "WebCheckin" },
+  contact: { entityType: "Contact" },
+  calendar: { entityType: "calendar_alert" },
+  expense: { entityType: "expense" },
+  leave: { entityType: "leave" },
+  signature: { entityType: "signature" },
+  automation: { entityType: { in: ["AutomationRule", "ai-management", "tenant-management"] } },
+  system: { entityType: null },
+};
 
 // GET / — list notifications (paginated) with optional filters
 router.get("/", async (req, res) => {
@@ -21,6 +119,35 @@ router.get("/", async (req, res) => {
     if (req.query.status === "unread") where.isRead = false;
     if (req.query.priority) where.priority = req.query.priority;
     if (req.query.entityType) where.entityType = req.query.entityType;
+    const fromDateInput = req.query.fromDate
+      ? `${String(req.query.fromDate).trim()}T00:00:00.000Z`
+      : null;
+    const toDateInput = req.query.toDate
+      ? `${String(req.query.toDate).trim()}T23:59:59.999Z`
+      : null;
+    const dateRange = validateDateRange({ from: fromDateInput, to: toDateInput });
+    if (dateRange.error) {
+      return res.status(dateRange.error.status).json({
+        error: dateRange.error.error,
+        code: dateRange.error.code,
+      });
+    }
+    if (dateRange.fromDate || dateRange.toDate) {
+      where.createdAt = {};
+      if (dateRange.fromDate) where.createdAt.gte = dateRange.fromDate;
+      if (dateRange.toDate) where.createdAt.lte = dateRange.toDate;
+    }
+    if (req.query.notificationType) {
+      const notificationType = String(req.query.notificationType).trim().toLowerCase();
+      const typeWhere = NOTIFICATION_TYPE_FILTERS[notificationType];
+      if (!typeWhere) {
+        return res.status(400).json({
+          error: `notificationType must be one of: ${Object.keys(NOTIFICATION_TYPE_FILTERS).join(", ")}`,
+          code: "INVALID_NOTIFICATION_TYPE_FILTER",
+        });
+      }
+      Object.assign(where, typeWhere);
+    }
 
     console.log('[notifications.get] Fetching notifications for user:', { userId: req.user.userId, tenantId: req.user.tenantId, where });
 
@@ -284,6 +411,8 @@ const DEFAULT_PREFERENCES = {
     leave: true,
     expense: true,
     tmc_catalogue: true,
+    travel_quote: true,
+    travel_visa: true,
   },
   channels: {
     db: true,
@@ -295,6 +424,123 @@ const DEFAULT_PREFERENCES = {
   quietHoursEnd: null,
   timezone: null,
 };
+
+// GET /email-cc-recipients — tenant-admin recipient list for notification emails.
+router.get("/email-cc-recipients", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const [row, staff, admin] = await Promise.all([
+      prisma.tenantSetting.findUnique({
+        where: { tenantId_key: { tenantId, key: EMAIL_CC_SETTING_KEY } },
+        select: { value: true },
+      }),
+      prisma.user.findMany({
+        where: {
+          tenantId,
+          userType: { in: ["STAFF", "OWNER"] },
+          role: { not: "CUSTOMER" },
+          deactivatedAt: null,
+          email: { not: "" },
+        },
+        select: { id: true, name: true, email: true },
+        orderBy: [{ name: "asc" }, { id: "asc" }],
+      }),
+      prisma.user.findUnique({
+        where: { id: req.user.userId },
+        select: { email: true },
+      }),
+    ]);
+    const recipients = row
+      ? parseRecipients(row.value)
+      : { staffUserIds: [], externalEmails: [], receiverEmail: null };
+    const defaultReceiverEmail = normalizeEmail(admin?.email);
+    const receiverEmail = recipients.receiverEmail || defaultReceiverEmail;
+    const staffWithEmail = staff.filter((member) => member.email);
+    const activeStaffIds = new Set(staffWithEmail.map((member) => member.id));
+    res.json({
+      staff: staffWithEmail,
+      recipients: {
+        staffUserIds: [...new Set(recipients.staffUserIds
+          .map(Number)
+          .filter((id) => Number.isInteger(id) && id > 0 && activeStaffIds.has(id)))],
+        externalEmails: [...new Set(recipients.externalEmails.map(normalizeEmail).filter((email) => EMAIL_PATTERN.test(email)))].slice(0, MAX_EMAIL_CC_RECIPIENTS),
+      },
+      receiverEmail,
+      defaultReceiverEmail,
+    });
+  } catch (err) {
+    console.error("[Notifications] Get email CC recipients error:", err);
+    res.status(500).json({ error: "Failed to fetch email CC recipients", code: "EMAIL_CC_RECIPIENTS_READ_FAILED" });
+  }
+});
+
+// PUT /email-cc-recipients — full replace, restricted to active users in this tenant.
+router.put("/email-cc-recipients", verifyRole(["ADMIN"]), async (req, res) => {
+  try {
+    const validation = normalizeEmailCcBody(req.body);
+    if (validation.error) return res.status(400).json(validation);
+
+    const { staffUserIds, externalEmails } = validation.recipients;
+    const tenantId = req.user.tenantId;
+    const admin = await prisma.user.findUnique({
+      where: { id: req.user.userId },
+      select: { email: true },
+    });
+    const defaultReceiverEmail = normalizeEmail(admin?.email);
+    let receiverEmail = validation.receiverEmail;
+    if (!validation.receiverEmailSpecified) {
+      const current = await prisma.tenantSetting.findUnique({
+        where: { tenantId_key: { tenantId, key: EMAIL_CC_SETTING_KEY } },
+        select: { value: true },
+      });
+      receiverEmail = current ? parseRecipients(current.value).receiverEmail : null;
+    }
+    receiverEmail = receiverEmail || defaultReceiverEmail;
+    const staff = staffUserIds.length
+      ? await prisma.user.findMany({
+        where: {
+          tenantId,
+          id: { in: staffUserIds },
+          userType: { in: ["STAFF", "OWNER"] },
+          role: { not: "CUSTOMER" },
+          deactivatedAt: null,
+          email: { not: "" },
+        },
+        select: { id: true },
+      })
+      : [];
+    if (staff.length !== staffUserIds.length) {
+      return res.status(400).json({
+        error: "Selected staff recipients must be active users in your organization with an email address.",
+        code: "INVALID_STAFF_RECIPIENT",
+      });
+    }
+
+    const recipients = { staffUserIds, externalEmails, receiverEmail };
+    const value = JSON.stringify(recipients);
+    const saved = await prisma.tenantSetting.upsert({
+      where: { tenantId_key: { tenantId, key: EMAIL_CC_SETTING_KEY } },
+      create: { tenantId, key: EMAIL_CC_SETTING_KEY, value, category: "notification-email" },
+      update: { value, category: "notification-email" },
+    });
+    await writeAudit("TenantSetting", "UPDATE", saved.id, req.user.userId, tenantId, {
+      key: EMAIL_CC_SETTING_KEY,
+      staffRecipientCount: staffUserIds.length,
+      externalRecipientCount: externalEmails.length,
+      hasCustomReceiverEmail: Boolean(receiverEmail && receiverEmail !== defaultReceiverEmail),
+    });
+    res.json({
+      status: "ok",
+      code: "EMAIL_CC_RECIPIENTS_SAVED",
+      recipients: { staffUserIds, externalEmails },
+      receiverEmail,
+      defaultReceiverEmail,
+    });
+  } catch (err) {
+    console.error("[Notifications] Save email CC recipients error:", err);
+    res.status(500).json({ error: "Failed to save email CC recipients", code: "EMAIL_CC_RECIPIENTS_SAVE_FAILED" });
+  }
+});
 
 // GET /preferences — fetch user's notification preferences with defaults
 router.get("/preferences", async (req, res) => {

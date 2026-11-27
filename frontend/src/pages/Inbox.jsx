@@ -903,6 +903,7 @@ export default function Inbox({
       const result = await fetchApi("/api/communications/send-email", {
         method: "POST",
         body: requestBody,
+        silent: true,
       });
 
       if (result?.delivered !== true) {
@@ -921,7 +922,12 @@ export default function Inbox({
       }
     } catch (err) {
       console.error(err);
-      notify.error(err?.message || "Failed to send email. Please try again.");
+      const message = err?.message || "Failed to send email. Please try again.";
+      if (/sender address|verified in SendGrid|email provider/i.test(message)) {
+        notify.info(message, { onClick: () => navigate("/settings") });
+      } else {
+        notify.error(message);
+      }
     }
   };
 

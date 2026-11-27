@@ -502,16 +502,16 @@ export default function ItineraryEditor() {
       } : prev));
     } catch (e) {
       if (e?.body?.code === "DRIVE_NOT_CONNECTED") {
-        notify.error("Connect Google Drive in Travel Knowledge Base settings first");
+        notify.info("Connect Google Drive in Travel Knowledge Base settings first", { onClick: () => navigate("/travel/trip-knowledge") });
       } else if (e?.body?.code === "KB_ROOT_NOT_CONFIGURED") {
-        notify.error("Configure the Knowledge Base Drive root folder first (Travel Knowledge Base settings)");
+        notify.info("Configure the Knowledge Base Drive root folder first (Travel Knowledge Base settings)", { onClick: () => navigate("/travel/trip-knowledge") });
       } else {
         notify.error(e?.body?.error || e?.message || "Failed to add to catalogue");
       }
     } finally {
       setAddingToCatalogue(false);
     }
-  }, [id, notify, addingToCatalogue]);
+  }, [addingToCatalogue, id, navigate, notify]);
 
   const handleExtractToDiagnosticKb = useCallback(async () => {
     if (extractingToKb) return;

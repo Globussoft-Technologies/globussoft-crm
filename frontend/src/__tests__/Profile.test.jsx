@@ -347,6 +347,8 @@ describe('<Profile /> - Edit Profile form', () => {
 
     await waitFor(() => expect(screen.getByText('Bob Baseline')).toBeInTheDocument());
 
+    fireEvent.click(screen.getByRole('button', { name: /edit profile details/i }));
+
     // Change name only.
     const nameInput = screen.getByPlaceholderText('Your name');
     fireEvent.change(nameInput, { target: { value: 'Bob Updated' } });
@@ -369,6 +371,8 @@ describe('<Profile /> - Edit Profile form', () => {
     await waitFor(() =>
       expect(screen.getByText(/profile updated successfully/i)).toBeInTheDocument()
     );
+    expect(screen.queryByRole('button', { name: /save changes/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /edit profile details/i })).toBeInTheDocument();
 
     // AuthContext.setUser was called with the merged user (Sidebar
     // header re-render depends on this).
@@ -378,7 +382,7 @@ describe('<Profile /> - Edit Profile form', () => {
     expect(setUserArg.email).toBe('bob@base.test');
   });
 
-  it('shows "No changes to save" and DOES NOT call PUT when the form is unchanged (#606)', async () => {
+  it('keeps Save disabled and DOES NOT call PUT when the form is unchanged (#606)', async () => {
     const profile = {
       id: 61, name: 'Carol Constant', email: 'carol@const.test',
       role: 'USER', wellnessRole: null, createdAt: '2026-01-01T00:00:00Z',
@@ -401,13 +405,8 @@ describe('<Profile /> - Edit Profile form', () => {
 
     await waitFor(() => expect(screen.getByText('Carol Constant')).toBeInTheDocument());
 
-    // Submit without changing anything.
-    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
-
-    // "No changes to save" message.
-    await waitFor(() =>
-      expect(screen.getByText(/no changes to save/i)).toBeInTheDocument()
-    );
+    fireEvent.click(screen.getByRole('button', { name: /edit profile details/i }));
+    expect(screen.getByRole('button', { name: /save changes/i })).toBeDisabled();
 
     // No PUT call was made  fetchApiMock should only have the
     // initial GET.
@@ -446,6 +445,8 @@ describe('<Profile /> - Edit Profile form', () => {
 
     await waitFor(() => expect(screen.getByText('Dave Doomed')).toBeInTheDocument());
 
+    fireEvent.click(screen.getByRole('button', { name: /edit profile details/i }));
+
     // Change email so the PUT actually fires.
     const emailInput = screen.getByPlaceholderText('Your email');
     fireEvent.change(emailInput, { target: { value: 'dave2@doom.test' } });
@@ -456,6 +457,8 @@ describe('<Profile /> - Edit Profile form', () => {
     await waitFor(() =>
       expect(screen.getByText(/duplicate email/i)).toBeInTheDocument()
     );
+    expect(emailInput).toHaveValue('dave2@doom.test');
+    expect(screen.getByRole('button', { name: /cancel/i })).toBeInTheDocument();
   });
 });
 

@@ -46,6 +46,8 @@
  *   GET /preferences     — DEFAULT_PREFERENCES when no row, persisted row
  *                          surfaced verbatim including the channels Json
  *                          blob (handles both {enabled} and boolean shapes).
+ *   GET/PUT /email-cc-recipients — tenant-admin-only staff/email CC list,
+ *                          tenant scope, address validation, and persistence.
  *   PUT /preferences     — upsert with HH:MM validation on quietHoursStart/
  *                          End; returns {status,code,preferences}.
  *   POST /preferences/reset — delete-then-default; surfaces DEFAULT_PREFERENCES.
@@ -98,6 +100,11 @@ prisma.notificationPreference = {
 prisma.user = prisma.user || {};
 prisma.user.findMany = vi.fn();
 prisma.user.findUnique = vi.fn();
+prisma.tenantSetting = {
+  findUnique: vi.fn(),
+  upsert: vi.fn(),
+};
+prisma.tenant = { findUnique: vi.fn() };
 prisma.auditLog = prisma.auditLog || {};
 prisma.auditLog.create = vi.fn().mockResolvedValue({ id: 1 });
 prisma.auditLog.findFirst = vi.fn().mockResolvedValue(null);
@@ -150,6 +157,9 @@ beforeEach(() => {
   prisma.notificationPreference.delete.mockReset();
   prisma.user.findMany.mockReset();
   prisma.user.findUnique.mockReset();
+  prisma.tenantSetting.findUnique.mockReset();
+  prisma.tenantSetting.upsert.mockReset();
+  prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
   prisma.auditLog.create.mockClear();
   prisma.auditLog.findFirst.mockClear();
 });
@@ -235,6 +245,85 @@ describe('GET / — list notifications', () => {
 
     const args = prisma.notification.findMany.mock.calls[0][0];
     expect(args.where).toMatchObject({ priority: 'high', entityType: 'ticket' });
+  });
+
+  test('applies an inclusive createdAt range from fromDate + toDate', async () => {
+    prisma.notification.findMany.mockResolvedValue([]);
+    prisma.notification.count.mockResolvedValue(0);
+
+    const res = await request(makeApp())
+      .get('/api/notifications?fromDate=2026-11-01&toDate=2026-11-27')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(200);
+    expect(prisma.notification.findMany.mock.calls[0][0].where.createdAt).toEqual({
+      gte: new Date('2026-11-01T00:00:00.000Z'),
+      lte: new Date('2026-11-27T23:59:59.999Z'),
+    });
+  });
+
+  test('rejects an inverted notification date range', async () => {
+    const res = await request(makeApp())
+      .get('/api/notifications?fromDate=2026-11-27&toDate=2026-11-01')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVERTED_DATE_RANGE' });
+    expect(prisma.notification.findMany).not.toHaveBeenCalled();
+  });
+
+  test('maps diagnostic and catalogue notification-type filters to persisted fields', async () => {
+    prisma.notification.findMany.mockResolvedValue([]);
+    prisma.notification.count.mockResolvedValue(0);
+
+    await request(makeApp())
+      .get('/api/notifications?notificationType=diagnostic')
+      .set('Authorization', makeBearer());
+    expect(prisma.notification.findMany.mock.calls[0][0].where).toMatchObject({
+      userId: 7,
+      tenantId: 1,
+      entityType: 'TravelDiagnostic',
+    });
+
+    prisma.notification.findMany.mockClear();
+    await request(makeApp())
+      .get('/api/notifications?notificationType=catalogue')
+      .set('Authorization', makeBearer());
+    expect(prisma.notification.findMany.mock.calls[0][0].where.OR).toEqual([
+      { entityType: 'TmcCatalogueResponse' },
+      { link: { contains: 'tab=catalogues' } },
+    ]);
+  });
+
+  test('rejects unsupported notification-type filters', async () => {
+    const res = await request(makeApp())
+      .get('/api/notifications?notificationType=unknown')
+      .set('Authorization', makeBearer());
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: 'INVALID_NOTIFICATION_TYPE_FILTER' });
+    expect(prisma.notification.findMany).not.toHaveBeenCalled();
+  });
+
+  test('maps common CRM notification-type filters to their entity domains', async () => {
+    prisma.notification.findMany.mockResolvedValue([]);
+    prisma.notification.count.mockResolvedValue(0);
+
+    await request(makeApp())
+      .get('/api/notifications?notificationType=lead')
+      .set('Authorization', makeBearer());
+    expect(prisma.notification.findMany.mock.calls[0][0].where.entityType).toEqual({
+      in: ['lead', 'lead_domain', 'lead.merge_prompt'],
+    });
+
+    prisma.notification.findMany.mockClear();
+    await request(makeApp())
+      .get('/api/notifications?notificationType=visa')
+      .set('Authorization', makeBearer());
+    expect(prisma.notification.findMany.mock.calls[0][0].where.OR).toEqual([
+      { entityType: 'VisaApplication' },
+      { link: { contains: '/travel/visa' } },
+    ]);
   });
 
   test('caps limit at 100 even when caller asks for more (DOS guardrail)', async () => {
@@ -883,6 +972,169 @@ describe('POST /preferences/reset', () => {
     expect(res.body.preferences.channels.db).toBe(true);
     expect(prisma.notificationPreference.delete).toHaveBeenCalledWith({
       where: { userId: 7 },
+    });
+  });
+
+  // ── Admin-managed notification email CC recipients ─────────────────
+
+  describe('notification email CC recipients', () => {
+    test('GET returns tenant staff and the saved recipient configuration for admins', async () => {
+      prisma.user.findUnique.mockResolvedValue({ email: 'admin@example.com' });
+      prisma.tenantSetting.findUnique.mockResolvedValue({
+        value: JSON.stringify({ staffUserIds: [8], externalEmails: ['copy@example.com'] }),
+      });
+      prisma.user.findMany.mockResolvedValue([
+        { id: 8, name: 'Staff User', email: 'staff@example.com' },
+      ]);
+
+      const res = await request(makeApp())
+        .get('/api/notifications/email-cc-recipients')
+        .set('Authorization', makeBearer({ userId: 7, tenantId: 3, role: 'ADMIN' }));
+
+      expect(res.status).toBe(200);
+      expect(res.body.staff).toEqual([{ id: 8, name: 'Staff User', email: 'staff@example.com' }]);
+      expect(res.body.recipients).toEqual({
+        staffUserIds: [8],
+        externalEmails: ['copy@example.com'],
+      });
+      expect(res.body.receiverEmail).toBe('admin@example.com');
+      expect(res.body.defaultReceiverEmail).toBe('admin@example.com');
+      expect(prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: {
+          tenantId: 3,
+          userType: { in: ['STAFF', 'OWNER'] },
+          role: { not: 'CUSTOMER' },
+          deactivatedAt: null,
+          email: { not: '' },
+        },
+      }));
+      expect(prisma.tenantSetting.findUnique).toHaveBeenCalledWith({
+        where: { tenantId_key: { tenantId: 3, key: 'notifications.emailCcRecipients' } },
+        select: { value: true },
+      });
+      expect(prisma.user.findUnique).toHaveBeenCalledWith({
+        where: { id: 7 },
+        select: { email: true },
+      });
+    });
+
+    test('GET denies non-admins', async () => {
+      const res = await request(makeApp())
+        .get('/api/notifications/email-cc-recipients')
+        .set('Authorization', makeBearer({ userId: 9, tenantId: 3, role: 'USER' }));
+
+      expect(res.status).toBe(403);
+      expect(prisma.tenantSetting.findUnique).not.toHaveBeenCalled();
+      expect(prisma.user.findMany).not.toHaveBeenCalled();
+    });
+
+    test('PUT normalizes addresses, validates tenant staff, and stores the tenant-scoped config', async () => {
+      prisma.user.findUnique.mockResolvedValue({ email: 'admin@example.com' });
+      prisma.user.findMany.mockResolvedValue([{ id: 8 }]);
+      prisma.tenantSetting.upsert.mockResolvedValue({ id: 41 });
+      const res = await request(makeApp())
+        .put('/api/notifications/email-cc-recipients')
+        .set('Authorization', makeBearer({ userId: 7, tenantId: 3, role: 'ADMIN' }))
+        .send({
+          staffUserIds: ['8', 8],
+          externalEmails: [' Copy@Example.com ', 'copy@example.com'],
+          receiverEmail: ' Alerts@Example.com ',
+        });
+
+      expect(res.status).toBe(200);
+      expect(res.body.recipients).toEqual({
+        staffUserIds: [8],
+        externalEmails: ['copy@example.com'],
+      });
+      expect(res.body.receiverEmail).toBe('alerts@example.com');
+      expect(prisma.user.findMany).toHaveBeenCalledWith({
+        where: {
+          tenantId: 3,
+          id: { in: [8] },
+          userType: { in: ['STAFF', 'OWNER'] },
+          role: { not: 'CUSTOMER' },
+          deactivatedAt: null,
+          email: { not: '' },
+        },
+        select: { id: true },
+      });
+      expect(prisma.tenantSetting.upsert).toHaveBeenCalledWith({
+        where: { tenantId_key: { tenantId: 3, key: 'notifications.emailCcRecipients' } },
+        create: {
+          tenantId: 3,
+          key: 'notifications.emailCcRecipients',
+          value: JSON.stringify({ staffUserIds: [8], externalEmails: ['copy@example.com'], receiverEmail: 'alerts@example.com' }),
+          category: 'notification-email',
+        },
+        update: {
+          value: JSON.stringify({ staffUserIds: [8], externalEmails: ['copy@example.com'], receiverEmail: 'alerts@example.com' }),
+          category: 'notification-email',
+        },
+      });
+    });
+
+    test('PUT rejects invalid additional addresses and staff outside the tenant', async () => {
+      const invalidEmail = await request(makeApp())
+        .put('/api/notifications/email-cc-recipients')
+        .set('Authorization', makeBearer({ role: 'ADMIN' }))
+        .send({ staffUserIds: [], externalEmails: ['not-an-email'] });
+      expect(invalidEmail.status).toBe(400);
+      expect(invalidEmail.body.code).toBe('INVALID_EMAIL_CC_ADDRESS');
+
+      prisma.user.findMany.mockResolvedValue([]);
+      const invalidStaff = await request(makeApp())
+        .put('/api/notifications/email-cc-recipients')
+        .set('Authorization', makeBearer({ role: 'ADMIN' }))
+        .send({ staffUserIds: [999], externalEmails: [] });
+      expect(invalidStaff.status).toBe(400);
+      expect(invalidStaff.body.code).toBe('INVALID_STAFF_RECIPIENT');
+      expect(prisma.tenantSetting.upsert).not.toHaveBeenCalled();
+    });
+
+    test('PUT rejects invalid receiver addresses', async () => {
+      const res = await request(makeApp())
+        .put('/api/notifications/email-cc-recipients')
+        .set('Authorization', makeBearer({ role: 'ADMIN' }))
+        .send({ staffUserIds: [], externalEmails: [], receiverEmail: 'not-an-email' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('INVALID_NOTIFICATION_RECEIVER_EMAIL');
+      expect(prisma.tenantSetting.upsert).not.toHaveBeenCalled();
+    });
+
+    test('PUT uses the signed-in admin email when no receiver address is supplied', async () => {
+      prisma.user.findUnique.mockResolvedValue({ email: 'admin@example.com' });
+      prisma.tenantSetting.upsert.mockResolvedValue({ id: 41 });
+      const res = await request(makeApp())
+        .put('/api/notifications/email-cc-recipients')
+        .set('Authorization', makeBearer({ userId: 7, tenantId: 3, role: 'ADMIN' }))
+        .send({ staffUserIds: [], externalEmails: [] });
+
+      expect(res.status).toBe(200);
+      expect(res.body.receiverEmail).toBe('admin@example.com');
+      expect(prisma.tenantSetting.upsert).toHaveBeenCalledWith(expect.objectContaining({
+        create: expect.objectContaining({
+          value: JSON.stringify({
+            staffUserIds: [],
+            externalEmails: [],
+            receiverEmail: 'admin@example.com',
+          }),
+        }),
+      }));
+    });
+
+    test('PUT caps the combined staff and alternate-address recipient count', async () => {
+      const res = await request(makeApp())
+        .put('/api/notifications/email-cc-recipients')
+        .set('Authorization', makeBearer({ role: 'ADMIN' }))
+        .send({
+          staffUserIds: [],
+          externalEmails: Array.from({ length: 26 }, (_, index) => `person${index}@example.com`),
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('TOO_MANY_EMAIL_CC_RECIPIENTS');
+      expect(prisma.tenantSetting.upsert).not.toHaveBeenCalled();
     });
   });
 

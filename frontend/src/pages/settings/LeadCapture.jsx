@@ -38,6 +38,7 @@ import {
   Settings as SettingsIcon,
 } from "lucide-react";
 import { fetchApi } from "../../utils/api";
+import "../../styles/settings-typography.css";
 import { useNotify } from "../../utils/notify";
 import TopScrollSync from "../../components/TopScrollSync";
 
@@ -249,7 +250,7 @@ export default function LeadCapture() {
 
   if (loading) {
     return (
-      <div style={{ padding: 24 }}>
+      <div className="settings-nested-page" style={{ padding: 24 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--text-secondary)" }}>
           <Loader size={16} /> Loading lead-capture settings&hellip;
         </div>
@@ -258,7 +259,7 @@ export default function LeadCapture() {
   }
 
   return (
-    <div style={{ padding: 0, width: "100%", minWidth: 0, boxSizing: "border-box" }}>
+    <div className="settings-nested-page" style={{ padding: 0, width: "100%", minWidth: 0, boxSizing: "border-box" }}>
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 16 }}>
         <div>
           <h1 style={{ display: "flex", alignItems: "center", gap: 10, margin: 0 }}>

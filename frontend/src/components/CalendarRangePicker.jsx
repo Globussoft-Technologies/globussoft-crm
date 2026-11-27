@@ -95,6 +95,7 @@ export default function CalendarRangePicker({
   const [draftStart, setDraftStart] = useState(committedFrom);
   const [draftEnd, setDraftEnd] = useState(committedTo);
   const [hoverDate, setHoverDate] = useState(null);
+  const [popoverPosition, setPopoverPosition] = useState(null);
   const rootRef = useRef(null);
 
   useEffect(() => {
@@ -117,6 +118,22 @@ export default function CalendarRangePicker({
 
   useEffect(() => {
     if (!open) return undefined;
+    const positionPopover = () => {
+      const anchor = rootRef.current?.getBoundingClientRect();
+      if (!anchor) return;
+      const widthPx = Math.min(300, window.innerWidth - 32);
+      const estimatedHeight = 390;
+      const topBelow = anchor.bottom + 6;
+      const top = topBelow + estimatedHeight <= window.innerHeight - 8
+        ? topBelow
+        : Math.max(8, anchor.top - estimatedHeight - 6);
+      const preferredLeft = align === 'right' ? anchor.right - widthPx : anchor.left;
+      const left = Math.max(16, Math.min(preferredLeft, window.innerWidth - widthPx - 16));
+      setPopoverPosition({ top, left, width: widthPx });
+    };
+    positionPopover();
+    window.addEventListener('resize', positionPopover);
+    window.addEventListener('scroll', positionPopover, true);
     const onDocClick = (e) => {
       if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false);
     };
@@ -126,8 +143,10 @@ export default function CalendarRangePicker({
     return () => {
       document.removeEventListener('mousedown', onDocClick);
       document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', positionPopover);
+      window.removeEventListener('scroll', positionPopover, true);
     };
-  }, [open]);
+  }, [align, open]);
 
   const goMonth = (delta) => {
     const d = new Date(viewYear, viewMonth + delta, 1);
@@ -216,9 +235,9 @@ export default function CalendarRangePicker({
           role="dialog"
           aria-label="Select date range"
           style={{
-            position: 'absolute',
-            top: 'calc(100% + 6px)',
-            ...(align === 'right' ? { right: 0 } : { left: 0 }),
+            position: 'fixed',
+            top: popoverPosition?.top ?? 8,
+            left: popoverPosition?.left ?? 16,
             zIndex: 50,
             // --card-bg is not defined by either theme, so this always fell
             // through to the hardcoded dark #1a1a1a. Under the light theme
@@ -228,7 +247,7 @@ export default function CalendarRangePicker({
             background: 'var(--bg-color)', color: 'var(--text-primary)',
             border: '1px solid var(--border-color, rgba(255,255,255,0.1))',
             borderRadius: 12, boxShadow: 'var(--shadow-lg, 0 12px 32px rgba(0,0,0,0.4))',
-            padding: '0.85rem', width: 'min(300px, calc(100vw - 32px))', boxSizing: 'border-box',
+            padding: '0.85rem', width: popoverPosition?.width ?? 'min(300px, calc(100vw - 32px))', boxSizing: 'border-box',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>

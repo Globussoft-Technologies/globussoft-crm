@@ -476,8 +476,11 @@ describe("POST /api/travel/diagnostics/public/form/:tenantSlug/:subBrand/submit"
         contactLabel: "Yasin",
         score: 6,
         classificationLabel: "Regular",
+        reportPdfUrl: "/api/uploads/diagnostics/diag-1-abc.pdf",
       }),
     );
+    expect(pdfModule.generateDiagnosticPdfBestEffort.mock.invocationCallOrder[0])
+      .toBeLessThan(diagnosticNotifications.notifyDiagnosticSubmitted.mock.invocationCallOrder[0]);
   });
 
   test("a notification failure never blocks the submit response", async () => {

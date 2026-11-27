@@ -12,7 +12,7 @@ import { AuthContext } from '../App';
  *     QA selectors, screen-readers) rely on.
  *   - Badge renders with unread count when > 0; absent when 0.
  *   - Clicking the bell opens the dropdown (aria-expanded flips true) and
- *     fetches the first 25 notifications; scrolling loads later pages.
+ *     fetches only the 25 most recent notifications.
  *   - Empty state copy renders when the notification list is empty.
  *   - mark-all-read clears the badge AND sends PUT to /api/notifications/read-all.
  *   - Socket push events (#345): `notification_new` bumps the badge for the
@@ -20,7 +20,7 @@ import { AuthContext } from '../App';
  *     resets the badge for the current user and is a no-op otherwise.
  *   - Row-link navigation: clicking a notification with a `link` navigates
  *     and closes the panel.
- *   - Footer "View all" (#853) is currently hidden.
+ *   - Footer "View all" (#853) opens the complete notifications page.
  *   - Outside-click dismissal closes the dropdown.
  *   - Badge text boundary: "99" at exactly 99, "99+" at 100+.
  *   - Fetch failures fail silently — no crash, no badge.
@@ -254,38 +254,34 @@ describe('<NotificationBell />', () => {
     expect(screen.getByRole('button', { name: /Notifications \(137 unread\)/ })).toHaveTextContent('99+');
   });
 
-  it('loads 25 notifications per page on scroll, without duplicates or requests after the last page', async () => {
+  it('shows only the 25 most recent notifications and does not load more on scroll', async () => {
     const user = userEvent.setup();
     const makeItem = (id) => ({
       id, title: `Notice ${id}`, message: `Message ${id}`, type: 'info',
       isRead: false, createdAt: new Date(2026, 0, id).toISOString(),
     });
     fetchApi
-      .mockResolvedValueOnce({ count: 51 })
-      .mockResolvedValueOnce({ notifications: Array.from({ length: 25 }, (_, i) => makeItem(i + 1)), total: 51, unreadTotal: 51 })
-      .mockResolvedValueOnce({ notifications: [makeItem(25), ...Array.from({ length: 24 }, (_, i) => makeItem(i + 26))], total: 51, unreadTotal: 51 })
-      .mockResolvedValueOnce({ notifications: [makeItem(51)], total: 51, unreadTotal: 51 });
+      .mockResolvedValueOnce({ count: 30 })
+      .mockResolvedValueOnce({
+        notifications: Array.from({ length: 30 }, (_, i) => makeItem(i + 1)),
+        total: 30,
+        unreadTotal: 30,
+      });
 
-    renderWithAuth(<NotificationBell />);
-    await user.click(await screen.findByRole('button', { name: /Notifications \(51 unread\)/ }));
-    await screen.findByText('Notice 25');
+    renderWithAuth(<NotificationBell />, {
+      user: { id: 1, name: 'Travel Agent', tenant: { vertical: 'travel' } },
+    });
+    await user.click(await screen.findByRole('button', { name: /Notifications \(30 unread\)/ }));
+    await screen.findByText('Notice 30');
 
     const panel = screen.getByLabelText('Notification list');
-    Object.defineProperties(panel, {
-      scrollTop: { configurable: true, value: 400 },
-      clientHeight: { configurable: true, value: 400 },
-      scrollHeight: { configurable: true, value: 800 },
-    });
     fireEvent.scroll(panel);
-    await screen.findByText('Notice 49');
-    expect(screen.getAllByText('Notice 25')).toHaveLength(1);
-    fireEvent.scroll(panel);
-    await screen.findByText('Notice 51');
-    fireEvent.scroll(panel);
-    expect(fetchApi).toHaveBeenCalledTimes(4); // unread count + three pages
-    expect(fetchApi).toHaveBeenCalledWith('/api/notifications?page=2&limit=25');
-    expect(fetchApi).toHaveBeenCalledWith('/api/notifications?page=3&limit=25');
-    expect(screen.getByRole('button', { name: /Notifications \(51 unread\)/ })).toBeInTheDocument();
+
+    expect(screen.getAllByText(/^Notice \d+$/)).toHaveLength(25);
+    expect(screen.queryByText('Notice 5')).not.toBeInTheDocument();
+    expect(fetchApi).toHaveBeenCalledTimes(2); // unread count + one preview request
+    expect(fetchApi).not.toHaveBeenCalledWith('/api/notifications?page=2&limit=25');
+    expect(screen.getByRole('button', { name: /view all notifications/i })).toBeInTheDocument();
   });
 
   it('#622: invalidates panel + badge when user identity changes (role switch)', async () => {
@@ -554,7 +550,31 @@ describe('<NotificationBell />', () => {
     expect(navigateMock).toHaveBeenCalledWith('/travel/leads/111');
   });
 
-  it('#853: the footer does not expose a "View all notifications" button', async () => {
+  it('#853: the footer navigates to the full notifications page', async () => {
+    const user = userEvent.setup();
+    fetchApi
+      .mockResolvedValueOnce({ count: 0 })
+      .mockResolvedValueOnce({
+        notifications: [
+          { id: 1, title: 'one', message: 'm', type: 'info', isRead: true, createdAt: new Date().toISOString() },
+        ],
+      });
+
+    renderWithAuth(<NotificationBell />, {
+      user: { id: 1, name: 'Travel Agent', tenant: { vertical: 'travel' } },
+    });
+
+    const bell = await screen.findByRole('button', { name: /notifications/i });
+    await user.click(bell);
+
+    await screen.findByText('one');
+    await user.click(screen.getByRole('button', { name: /view all notifications/i }));
+
+    expect(navigateMock).toHaveBeenCalledWith('/notifications');
+    expect(bell).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('#853: the full-page notifications footer is hidden outside Travel CRM', async () => {
     const user = userEvent.setup();
     fetchApi
       .mockResolvedValueOnce({ count: 0 })
@@ -565,11 +585,9 @@ describe('<NotificationBell />', () => {
       });
 
     renderWithAuth(<NotificationBell />);
-
-    const bell = await screen.findByRole('button', { name: /notifications/i });
-    await user.click(bell);
-
+    await user.click(await screen.findByRole('button', { name: /notifications/i }));
     await screen.findByText('one');
+
     expect(screen.queryByRole('button', { name: /view all notifications/i })).not.toBeInTheDocument();
   });
 

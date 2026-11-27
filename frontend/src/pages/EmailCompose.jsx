@@ -300,7 +300,7 @@ export default function EmailCompose() {
       } else {
         payload = JSON.stringify({ to: to.join(", "), cc: cc.join(", "), bcc: bcc.join(", "), subject: subject.trim(), body });
       }
-      const result = await fetchApi("/api/communications/send-email", { method: "POST", body: payload });
+      const result = await fetchApi("/api/communications/send-email", { method: "POST", body: payload, silent: true });
       if (result?.delivered !== true) {
         if (result?.reason === "sendgrid_error_403") {
           throw new Error("Email was not sent because the configured sender address is not verified in SendGrid.");
@@ -311,7 +311,12 @@ export default function EmailCompose() {
       try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
       navigate("/inbox");
     } catch (err) {
-      notify.error(err?.message || "Failed to send email. Please try again.");
+      const message = err?.message || "Failed to send email. Please try again.";
+      if (/sender address|verified in SendGrid|email provider/i.test(message)) {
+        notify.info(message, { onClick: () => navigate("/settings") });
+      } else {
+        notify.error(message);
+      }
     } finally {
       setSending(false);
     }

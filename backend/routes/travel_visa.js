@@ -604,6 +604,7 @@ async function maybeAdvanceOnChecklist({ applicationId, tenantId, actorUserId })
       title: "Visa application ready to file",
       message: `Application #${applicationId}: all required documents verified — advanced to Filed.`,
       type: "info",
+      category: "travel_visa",
       link: `/travel/visa/applications/${applicationId}`,
     }).catch(() => {});
   } catch {

@@ -864,6 +864,7 @@ export default function Itineraries() {
       };
       const res = await fetchApi("/api/travel/itineraries/suggest", {
         method: "POST",
+        silent: true,
         body: JSON.stringify(body),
       });
       // When real-mode tried but failed, the backend returns the stub
@@ -871,12 +872,16 @@ export default function Itineraries() {
       // instead of silently showing the synthetic [STUB] content as
       // if it were a real Gemini suggestion.
       if (res?.stub && res?.realModeError) {
-        notify.error(friendlyAiError(res.realModeError));
+        const message = friendlyAiError(res.realModeError);
+        if (/AI provider/i.test(message)) notify.info(message, { onClick: () => navigate("/settings") });
+        else notify.error(message);
         return;
       }
       setSuggestResult(res);
     } catch (err) {
-      notify.error(friendlyAiError(err?.body?.error || err?.message || ""));
+      const message = friendlyAiError(err?.body?.error || err?.message || "");
+      if (/AI provider/i.test(message)) notify.info(message, { onClick: () => navigate("/settings") });
+      else notify.error(message);
     } finally {
       setSuggestLoading(false);
     }

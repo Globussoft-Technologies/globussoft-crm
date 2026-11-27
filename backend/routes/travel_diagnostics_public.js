@@ -679,24 +679,6 @@ router.post(
         },
       });
 
-      // Notify whoever the admin configured in the Notifications tab (db /
-      // email / WhatsApp, per person) — falls back to every ADMIN/MANAGER,
-      // in-app only, when nothing's configured yet (see
-      // diagnosticNotifications.js for the zero-config fallback).
-      try {
-        await diagnosticNotifications.notifyDiagnosticSubmitted({
-          tenantId: tenant.id,
-          subBrand,
-          diagnosticId: diag.id,
-          contactLabel: cleanName || cleanEmail || `Diagnostic #${diag.id}`,
-          score: result.score,
-          classificationLabel: result.classificationLabel,
-          recommendedTier: result.recommendedTier,
-        });
-      } catch (notifyErr) {
-        console.warn("[diag-public-form] notification failed (non-fatal):", notifyErr.message);
-      }
-
       // RAG + PDF best-effort, never blocks submission.
       let ragResult = null;
       try {
@@ -729,6 +711,23 @@ router.post(
         console.warn("[diag-public-form] PDF failed (non-fatal):", e.message);
         return null;
       });
+
+      // Generate and persist the customer PDF before notifying admins so the
+      // email's report link opens the PDF rather than the HTML report page.
+      try {
+        await diagnosticNotifications.notifyDiagnosticSubmitted({
+          tenantId: tenant.id,
+          subBrand,
+          diagnosticId: diag.id,
+          contactLabel: cleanName || cleanEmail || `Diagnostic #${diag.id}`,
+          score: result.score,
+          classificationLabel: result.classificationLabel,
+          recommendedTier: result.recommendedTier,
+          reportPdfUrl,
+        });
+      } catch (notifyErr) {
+        console.warn("[diag-public-form] notification failed (non-fatal):", notifyErr.message);
+      }
 
       const reportSlug = buildReportSlug(diag.id, reportSlugToken);
       res.status(201).json({

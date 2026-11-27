@@ -118,6 +118,7 @@ const LeadCapture = lazy(() => import("./pages/settings/LeadCapture"));
 const LeadFields = lazy(() => import("./pages/settings/LeadFields"));
 const FieldConfig = lazy(() => import("./pages/settings/FieldConfig"));
 const UserSettings = lazy(() => import("./pages/UserSettings"));
+const NotificationsCenter = lazy(() => import("./pages/NotificationsCenter"));
 const Developer = lazy(() => import("./pages/Developer"));
 const Portal = lazy(() => import("./pages/Portal"));
 // Super Admin Portal  fully separate auth system (env-based credentials,
@@ -1800,6 +1801,10 @@ export default function App() {
                       path="/p/tmc/report/:slug"
                       element={<TmcReadinessReport />}
                     />
+                    <Route
+                      path="/tmc/report/:slug"
+                      element={<TmcReadinessReport />}
+                    />
                     {/* Public branded diagnostic form + report (Travel CRM v3.9.4). */}
                     <Route
                       path="/diagnostic-form/:tenantSlug/:subBrand"
@@ -3036,6 +3041,10 @@ export default function App() {
                       <Route
                         path="notification-settings"
                         element={<UserSettings />}
+                      />
+                      <Route
+                        path="notifications"
+                        element={<TravelOnly><NotificationsCenter /></TravelOnly>}
                       />
                       {/* #589: Audit Log is ADMIN-only (mirrors Sidebar's
                         adminOnly visibility + the "System Admin Required"

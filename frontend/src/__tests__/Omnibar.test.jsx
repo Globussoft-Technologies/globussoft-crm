@@ -482,6 +482,32 @@ describe('Omnibar (inline top-bar)', () => {
     expect(navigateMock).toHaveBeenCalledWith('/travel/trip-knowledge');
   });
 
+  it('matches the Notifications page for Travel users', async () => {
+    fetchApi.mockImplementation((url) => {
+      if (url === '/api/pages/me') {
+        return Promise.resolve({
+          pages: [{ path: '/notifications', label: 'Notifications', description: 'View all notifications', category: 'User' }],
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    await renderOmnibarWithAuth({
+      user: { userId: 1 },
+      token: 'tk',
+      tenant: { vertical: 'travel' },
+      loading: false,
+    });
+
+    const input = screen.getByPlaceholderText(PLACEHOLDER);
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: 'notification' } });
+
+    const row = await screen.findByRole('option', { name: /Notifications/i }, { timeout: 2000 });
+    fireEvent.click(row);
+    expect(navigateMock).toHaveBeenCalledWith('/notifications');
+  });
+
   it('uses the optimized travel search API response and opens travel record routes', async () => {
     fetchApi.mockImplementation((url) => {
       if (url === '/api/pages/me') return Promise.resolve({ pages: [] });

@@ -119,8 +119,21 @@ router.get("/templates/:id/preview", ...admin, async (req, res) => {
     const id = cleanId(req.params.id, "template id");
     const template = await prisma.travelEmailTemplate.findFirst({ where: { id, tenantId: req.user.tenantId, isArchived: false } });
     if (!template) return res.status(404).json({ error: "Travel email template not found", code: "NOT_FOUND" });
-    const context = await automation.buildContext(req.user.tenantId, { subBrand: template.subBrand, recipientEmail: "customer@example.com", recipientName: "Travel Customer", destination: "Your next adventure", signInLink: "/travel/portal" });
-    res.json({ subject: automation.renderText(template.subject, context), body: automation.renderText(template.body, context), eventKey: template.eventKey });
+    const previewSubBrand = cleanBrand(req.query.subBrand) || template.subBrand;
+    const defaultLogoUrl = String(req.query.defaultLogoUrl || "");
+    if (defaultLogoUrl && !/^https?:\/\/[^\s]+$/i.test(defaultLogoUrl) && !/^\/[A-Za-z0-9._/-]+$/.test(defaultLogoUrl)) {
+      return res.status(400).json({ error: "Invalid default logo URL", code: "INVALID_LOGO_URL" });
+    }
+    const context = await automation.buildContext(req.user.tenantId, { subBrand: previewSubBrand, recipientEmail: "customer@example.com", recipientName: "Travel Customer", destination: "Your next adventure", signInLink: "/travel/portal" });
+    const renderedBody = automation.renderText(template.body, context);
+    const body = await automation.renderTravelEmailHtml({
+      tenantId: req.user.tenantId,
+      subBrand: previewSubBrand,
+      body: renderedBody,
+      tenantName: context.tenant?.name,
+      defaultLogoUrl,
+    });
+    res.json({ subject: automation.renderText(template.subject, context), body, eventKey: template.eventKey });
   } catch (error) { res.status(error.status || 500).json({ error: error.message || "Failed to preview Travel email template", code: "TRAVEL_EMAIL_TEMPLATE_PREVIEW_FAILED" }); }
 });
 

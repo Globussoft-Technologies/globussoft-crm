@@ -889,9 +889,9 @@ function TeacherDashboard({ contact, trips, diagnosticReports, teacherReviews, l
       <section data-tmc-hover-card="true" style={{ ...styles.card, ...styles.dashboardCard }} aria-labelledby="teacher-dashboard-reports">
         <div style={styles.dashboardSectionHeader}>
           <div><h2 id="teacher-dashboard-reports" style={styles.sectionTitle}>Diagnostic reports</h2><p style={styles.muted}>Your school-readiness results.</p></div>
-          <button type="button" onClick={onOpenDiagnostic} style={styles.textButton}>Open <ArrowRight size={15} /></button>
+          {latestReports[0]?.reportSlug ? <a href={`/p/tmc/report/${encodeURIComponent(latestReports[0].reportSlug)}`} target="_blank" rel="noreferrer" style={styles.textButton}>Open readiness profile <ArrowRight size={15} /></a> : <button type="button" onClick={onOpenDiagnostic} style={styles.textButton}>Open <ArrowRight size={15} /></button>}
         </div>
-        {latestReports.length === 0 ? <div style={styles.empty}>Complete the diagnostic to create your first report.</div> : <div style={styles.dashboardList}>{latestReports.map((report) => <div key={report.id} style={styles.reportSummary}><div><strong>Readiness report #{report.id}</strong><div style={styles.muted}>{formatDate(report.createdAt)}</div></div><button type="button" onClick={onOpenDiagnostic} style={styles.reportLink}>Open diagnostic</button></div>)}</div>}
+        {latestReports.length === 0 ? <div style={styles.empty}>Complete the diagnostic to create your first report.</div> : <div style={styles.dashboardList}>{latestReports.map((report) => <div key={report.id} style={styles.reportSummary}><div><strong>Readiness report #{report.id}</strong><div style={styles.muted}>{formatDate(report.createdAt)}</div></div>{report.reportSlug ? <a href={`/p/tmc/report/${encodeURIComponent(report.reportSlug)}`} target="_blank" rel="noreferrer" style={styles.reportLink}>Open readiness profile</a> : <button type="button" onClick={onOpenDiagnostic} style={styles.reportLink}>Open diagnostic</button>}</div>)}</div>}
       </section>
     </div>
   </div>;

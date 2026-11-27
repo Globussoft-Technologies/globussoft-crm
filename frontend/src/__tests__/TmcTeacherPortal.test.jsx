@@ -41,7 +41,7 @@ describe("TmcTeacherPortal", () => {
       if (url === "/api/portal/tmc/teacher/diagnostics") {
         return Promise.resolve({
           ok: true,
-            json: () => Promise.resolve({ diagnostics: [{ id: 12, createdAt: "2026-09-09T00:00:00.000Z", reportPdfUrl: "/api/travel/diagnostics/12/readiness-report.pdf" }] }),
+            json: () => Promise.resolve({ diagnostics: [{ id: 12, createdAt: "2026-09-09T00:00:00.000Z", reportPdfUrl: "/api/travel/diagnostics/12/readiness-report.pdf", reportSlug: "12-0123456789abcdef" }] }),
         });
       }
       if (url === "/api/portal/tmc/teacher/catalogues") {
@@ -238,16 +238,13 @@ describe("TmcTeacherPortal", () => {
     expect(screen.getByRole("tab", { name: "Participants" })).toHaveAttribute("aria-selected", "true");
   });
 
-  it("opens the authenticated native diagnostic from a dashboard report", async () => {
+  it("opens the readiness profile from a dashboard report", async () => {
     render(<TmcTeacherPortal />);
 
     await screen.findByRole("heading", { name: "Dashboard" });
     const reportSection = screen.getByRole("heading", { name: "Diagnostic reports" }).closest("section");
-    fireEvent.click(within(reportSection).getByRole("button", { name: "Open diagnostic" }));
-
-    expect(await screen.findByRole("heading", { name: "Teacher diagnostic" })).toBeInTheDocument();
-    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes("/diagnostics/public/form/"))).toBe(false);
-    expect(fetchSpy.mock.calls.some(([url]) => url === "/api/portal/tmc/teacher/diagnostic")).toBe(true);
+    expect(within(reportSection).getAllByRole("link", { name: "Open readiness profile" })).toHaveLength(2);
+    expect(within(reportSection).getAllByRole("link", { name: "Open readiness profile" })[0]).toHaveAttribute("href", "/p/tmc/report/12-0123456789abcdef");
   });
 
   it("filters assigned trips by destination or trip code", async () => {

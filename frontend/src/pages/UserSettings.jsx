@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useContext } from 'react';
-import { Bell, Zap, Monitor, Mail } from 'lucide-react';
+import React, { useState, useEffect, useContext, useRef } from 'react';
+import { Bell, Zap, Monitor, Mail, Settings2 } from 'lucide-react';
 import { fetchApi } from '../utils/api';
 import { useNotify } from '../utils/notify';
 import ProductTourSettings from '../components/ProductTourSettings';
 import { AuthContext } from '../App';
+import NotificationEmailCcSettings from '../components/NotificationEmailCcSettings';
 
 // Notification categories ⇄ sidebar paths. A category renders only when at
 // least one of its mapped paths is in /api/pages/me, so the preferences
@@ -39,12 +40,15 @@ const categoryOptions = [
 
 export default function UserSettings() {
   const notify = useNotify();
-  const { tenant } = useContext(AuthContext);
+  const { tenant, user } = useContext(AuthContext);
   const isTravel = tenant?.vertical === 'travel';
   const [prefs, setPrefs] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [channelSaving, setChannelSaving] = useState(null);
   const [accessiblePaths, setAccessiblePaths] = useState(null);
+  const [emailSettingsOpen, setEmailSettingsOpen] = useState(false);
+  const savedPrefsRef = useRef(null);
 
   const visibleCategories = (() => {
     const travelOnly = (cat) =>
@@ -91,7 +95,9 @@ export default function UserSettings() {
   const load = async () => {
     try {
       const data = await fetchApi('/api/notifications/preferences');
-      setPrefs(withCategoryChannels(data));
+      const normalized = withCategoryChannels(data);
+      savedPrefsRef.current = normalized;
+      setPrefs(normalized);
     } catch (err) {
       console.error('Failed to load preferences:', err);
       notify.error('Failed to load notification preferences');
@@ -131,11 +137,39 @@ export default function UserSettings() {
     });
   };
 
-  const handleChannelToggle = (channel) => {
-    setPrefs({
-      ...prefs,
-      channels: { ...prefs.channels, [channel]: !prefs.channels[channel] },
-    });
+  const handleChannelToggle = async (channel) => {
+    if (channelSaving) return;
+
+    const previousValue = prefs.channels[channel] !== false;
+    const nextValue = !previousValue;
+    setPrefs((current) => ({
+      ...current,
+      channels: { ...current.channels, [channel]: nextValue },
+    }));
+    setChannelSaving(channel);
+
+    // Persist only the delivery-channel change. Category and quiet-hour edits
+    // remain drafts until the user chooses Save Preferences.
+    const persisted = savedPrefsRef.current || prefs;
+    const nextPersisted = {
+      ...persisted,
+      channels: { ...persisted.channels, [channel]: nextValue },
+    };
+    try {
+      await fetchApi('/api/notifications/preferences', {
+        method: 'PUT',
+        body: JSON.stringify(nextPersisted),
+      });
+      savedPrefsRef.current = nextPersisted;
+    } catch {
+      setPrefs((current) => ({
+        ...current,
+        channels: { ...current.channels, [channel]: previousValue },
+      }));
+      notify.error('Failed to update delivery channel');
+    } finally {
+      setChannelSaving(null);
+    }
   };
 
   const handleCategoryChannelToggle = (category, channel) => {
@@ -161,6 +195,7 @@ export default function UserSettings() {
         method: 'PUT',
         body: JSON.stringify(prefs),
       });
+      savedPrefsRef.current = prefs;
       notify.success('Notification preferences saved');
     } catch (err) {
       notify.error('Failed to save notification preferences');
@@ -204,14 +239,46 @@ export default function UserSettings() {
 
           <div style={{ marginBottom: '2rem' }}>
             <h4 style={{ fontSize: '0.95rem', fontWeight: '600', marginBottom: '0.4rem', color: 'var(--text-primary)' }}>Delivery Channels</h4>
-            <p style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginBottom: '0.8rem' }}>Enable or disable how notifications arrive.</p>
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', marginBottom: '0.8rem' }}>Enable or disable how notifications arrive. Changes save automatically.</p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 245px), 1fr))', gap: '0.65rem', marginBottom: '1.25rem' }}>
               {channelOptions.map(channel => {
                 const Icon = channel.icon;
                 const enabled = prefs.channels[channel.key] !== false;
-                return <label key={channel.key} style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', minWidth: 0, padding: '0.7rem 0.8rem', border: '1px solid var(--border-color)', borderRadius: 8, background: 'var(--surface-color)', cursor: 'pointer' }}><Icon size={18} strokeWidth={1.8} color="var(--text-secondary)" aria-hidden="true" /><span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}><span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{channel.label}</span><span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{channel.description}</span></span><span style={{ position: 'relative', width: 34, height: 20, flexShrink: 0 }}><input aria-label={channel.label} type="checkbox" checked={enabled} onChange={() => handleChannelToggle(channel.key)} style={{ opacity: 0, position: 'absolute', inset: 0, margin: 0, cursor: 'pointer', zIndex: 1 }} /><span aria-hidden="true" style={{ display: 'block', width: 34, height: 20, borderRadius: 999, background: enabled ? 'var(--accent-color)' : 'var(--border-color)', transition: 'background 0.15s ease' }}><span style={{ display: 'block', width: 14, height: 14, borderRadius: '50%', background: '#fff', transform: enabled ? 'translate(17px, 3px)' : 'translate(3px, 3px)', transition: 'transform 0.15s ease', boxShadow: '0 1px 2px rgba(0,0,0,0.18)' }} /></span></span></label>;
+                return (
+                  <div key={channel.key} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, padding: '0.7rem 0.65rem', border: '1px solid var(--border-color)', borderRadius: 8, background: 'var(--surface-color)', opacity: channelSaving && channelSaving !== channel.key ? 0.7 : 1 }}>
+                    <label htmlFor={`notification-channel-${channel.key}`} style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', flex: 1, minWidth: 0, cursor: channelSaving ? 'wait' : 'pointer' }}>
+                      <Icon size={18} strokeWidth={1.8} color="var(--text-secondary)" aria-hidden="true" />
+                      <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{channel.label}</span>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{channel.description}</span>
+                      </span>
+                      <span style={{ position: 'relative', width: 34, height: 20, flexShrink: 0 }}>
+                        <input id={`notification-channel-${channel.key}`} aria-label={channel.label} type="checkbox" checked={enabled} disabled={Boolean(channelSaving)} onChange={() => handleChannelToggle(channel.key)} style={{ opacity: 0, position: 'absolute', inset: 0, margin: 0, cursor: 'pointer', zIndex: 1 }} />
+                        <span aria-hidden="true" style={{ display: 'block', width: 34, height: 20, borderRadius: 999, background: enabled ? 'var(--accent-color)' : 'var(--border-color)', transition: 'background 0.15s ease' }}>
+                          <span style={{ display: 'block', width: 14, height: 14, borderRadius: '50%', background: '#fff', transform: enabled ? 'translate(17px, 3px)' : 'translate(3px, 3px)', transition: 'transform 0.15s ease', boxShadow: '0 1px 2px rgba(0,0,0,0.18)' }} />
+                        </span>
+                      </span>
+                    </label>
+                    {channel.key === 'email' && user?.role === 'ADMIN' && (
+                      <button
+                        type="button"
+                        aria-label={emailSettingsOpen ? 'Close email notification settings' : 'Open email notification settings'}
+                        aria-expanded={emailSettingsOpen}
+                        title="Email notification settings"
+                        onClick={() => setEmailSettingsOpen((open) => !open)}
+                        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 32, height: 32, flexShrink: 0, padding: 0, border: '1px solid var(--border-color)', borderRadius: 8, background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer', lineHeight: 0, alignSelf: 'center' }}
+                      >
+                        <Settings2 size={16} aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
+                );
               })}
             </div>
+            <span aria-live="polite" style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0, 0, 0, 0)', whiteSpace: 'nowrap', border: 0 }}>{channelSaving ? 'Saving delivery channel' : ''}</span>
+            {emailSettingsOpen && user?.role === 'ADMIN' && (
+              <NotificationEmailCcSettings isAdmin onClose={() => setEmailSettingsOpen(false)} />
+            )}
             <div style={{ marginTop: '0.5rem' }}>
               <h4 style={{ fontSize: '0.95rem', fontWeight: 600, margin: '0 0 0.2rem', color: 'var(--text-primary)' }}>Channel Preferences</h4>
               <p style={{ color: 'var(--text-secondary)', fontSize: '0.78rem', margin: '0 0 0.7rem' }}>Customize notification methods for each type.</p>

@@ -50,6 +50,7 @@ prisma.visaLetterDocument = { ...(prisma.visaLetterDocument || {}), findFirst: v
 prisma.visaLetterGeneration = { ...(prisma.visaLetterGeneration || {}), update: vi.fn() };
 prisma.user = { ...(prisma.user || {}), findMany: vi.fn() };
 prisma.tenantSetting = { ...(prisma.tenantSetting || {}), findUnique: vi.fn() };
+prisma.brandKit = { findFirst: vi.fn() };
 prisma.travelKnowledgeBaseFile = { ...(prisma.travelKnowledgeBaseFile || {}), findMany: vi.fn() };
 prisma.itinerary = { ...(prisma.itinerary || {}), findMany: vi.fn() };
 prisma.tmcTeacherCatalogueResponse = {
@@ -114,6 +115,7 @@ function contact(persona, overrides = {}) {
 beforeEach(() => {
   eventBus.emitEvent.mockClear();
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ id: 7, vertical: 'travel', slug: 'tmc' });
+  prisma.brandKit.findFirst.mockReset().mockResolvedValue(null);
   prisma.contact.findFirst.mockReset();
   prisma.contact.findMany.mockReset().mockResolvedValue([]);
   prisma.tmcTrip.findMany.mockReset().mockResolvedValue([]);
@@ -377,12 +379,21 @@ describe('TMC teacher catalogue selection', () => {
       tenantId: 7,
       title: 'TMC catalogue selection received',
       message: expect.stringContaining('TEACHER Contact submitted a selection of 1 catalogue for review'),
+      emailHtml: expect.stringContaining('Open TMC Catalogue Responses'),
+      category: 'tmc_catalogue',
       type: 'info',
       priority: 'high',
       link: '/travel/diagnostics?tab=catalogues&teacherId=41',
       channels: ['db', 'socket'],
-      ignorePreferences: true,
     }));
+    const notification = notificationService.notifyMany.mock.calls[0][0];
+    const { emailHtml } = notification;
+    expect(notification.message).not.toContain('<table');
+    expect(notification.message).not.toContain('Open TMC Catalogue Responses');
+    expect(emailHtml).toContain('teacher@example.test');
+    expect(emailHtml).toContain('Nepal School Trip.pdf');
+    expect(emailHtml).toContain('Teacher contact ID');
+    expect(emailHtml).toContain('Submitted (UTC)');
   });
 
   test('keeps a successful catalogue submission when admin notification delivery fails', async () => {

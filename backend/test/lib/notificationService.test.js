@@ -69,6 +69,8 @@ beforeAll(() => {
   prisma.notification = { create: vi.fn(), findFirst: vi.fn(), update: vi.fn() };
   prisma.user = { findUnique: vi.fn(), findMany: vi.fn() };
   prisma.tenant = { findUnique: vi.fn() };
+  prisma.tenantSetting = { findUnique: vi.fn() };
+  prisma.brandKit = { findFirst: vi.fn() };
   // PR #710 / #702 — notify() now reads NotificationPreference before
   // routing. Default to "no custom prefs row" so the helper falls back
   // to DEFAULT_PREFERENCES (every category + every channel enabled).
@@ -86,6 +88,8 @@ beforeEach(() => {
   prisma.user.findUnique.mockReset();
   prisma.user.findMany.mockReset();
   prisma.tenant.findUnique.mockReset().mockResolvedValue({ vertical: 'generic' });
+  prisma.tenantSetting.findUnique.mockReset().mockResolvedValue(null);
+  prisma.brandKit.findFirst.mockReset().mockResolvedValue(null);
   sendTenantEmail.mockReset().mockResolvedValue({ sent: true, source: 'tenant' });
   prisma.notificationPreference.findUnique.mockReset();
   // PR #710 (#702) — DEFAULT_PREFERENCES has `channels.email = false` and
@@ -206,15 +210,17 @@ describe('lib/notificationService — notify', () => {
   test('email channel: Travel uses tenant delivery while Generic and Wellness remain on the platform provider', async () => {
     prisma.user.findUnique.mockResolvedValue({ email: 'traveller@example.com' });
     prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+    const emailHtml = '<table><tr><td>Catalogue details</td></tr></table>';
 
-    await notify({ userId: 1, tenantId: 73, title: 'Trip update', message: 'Ready', channels: ['db', 'email'] });
+    await notify({ userId: 1, tenantId: 73, title: 'Trip update', message: 'Ready', emailHtml, channels: ['db', 'email'] });
 
     expect(sendTenantEmail).toHaveBeenCalledWith({
       tenantId: 73,
       to: 'traveller@example.com',
+      cc: [],
       subject: 'Trip update',
       text: 'Ready',
-      html: 'Ready',
+      html: emailHtml,
     });
     expect(global.fetch).not.toHaveBeenCalled();
 
@@ -226,6 +232,59 @@ describe('lib/notificationService — notify', () => {
       expect(sendTenantEmail).not.toHaveBeenCalled();
       expect(global.fetch).toHaveBeenCalledOnce();
     }
+  });
+
+  test('email channel: copies the configured receiver on Travel notifications', async () => {
+    prisma.user.findUnique.mockResolvedValue({ email: 'traveller@example.com' });
+    prisma.tenant.findUnique.mockResolvedValue({ vertical: 'travel' });
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({ staffUserIds: [], externalEmails: [], receiverEmail: 'alerts@travel.example' }),
+    });
+
+    await notify({
+      userId: 1,
+      tenantId: 73,
+      title: 'Trip update',
+      message: 'Ready',
+      channels: ['db', 'email'],
+    });
+
+    expect(sendTenantEmail).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 73,
+      to: 'traveller@example.com',
+      cc: ['alerts@travel.example'],
+    }));
+  });
+
+  test('email channel: Travel notifications use branded details and absolute action links', async () => {
+    prisma.user.findUnique.mockResolvedValue({ email: 'admin@example.com' });
+    prisma.tenant.findUnique.mockResolvedValue({
+      vertical: 'travel',
+      name: 'Travel Stall',
+      logoUrl: null,
+      brandColor: null,
+    });
+
+    await notify({
+      userId: 1,
+      tenantId: 73,
+      title: 'Diagnostic submitted',
+      message: 'Teacher: Asha Rao\nSelected catalogues: 2',
+      link: '/travel/diagnostics?tab=catalogues&teacherId=41',
+      channels: ['db', 'email'],
+    });
+
+    const email = sendTenantEmail.mock.calls[0][0];
+    const publicOrigin = String(process.env.FRONTEND_URL || 'https://crm.globusdemos.com').replace(/\/+$/, '');
+    expect(email.text).toContain('Selected catalogues: 2');
+    expect(email.text).toContain(`View details: ${publicOrigin}/travel/diagnostics?tab=catalogues&teacherId=41`);
+    expect(email.html).toContain('Diagnostic submitted');
+    expect(email.html).toContain('Teacher: Asha Rao<br>Selected catalogues: 2');
+    expect(email.html).toContain('Received (UTC):');
+    expect(email.html).toContain(`href="${publicOrigin}/travel/diagnostics?tab=catalogues&amp;teacherId=41"`);
+    expect(email.html).toContain('Travel Stall');
+    expect(prisma.notification.create.mock.calls[0][0].data.message)
+      .toBe('Teacher: Asha Rao\nSelected catalogues: 2');
   });
 
   // PR #511 SendGrid contract: assert the request hits the right URL,
@@ -269,6 +328,76 @@ describe('lib/notificationService — notify', () => {
     const plain = payload.content.find((c) => c.type === 'text/plain');
     expect(html.value).toContain('<br>');
     expect(plain.value).toBe('Line 1\nLine 2');
+  });
+
+  test('email channel: adds configured staff and alternate addresses as CC without duplicating the primary recipient', async () => {
+    prisma.user.findUnique.mockResolvedValue({ email: 'primary@example.com' });
+    prisma.user.findMany.mockResolvedValue([
+      { email: 'staff@example.com' },
+      { email: 'PRIMARY@example.com' },
+    ]);
+    prisma.tenantSetting.findUnique.mockResolvedValue({
+      value: JSON.stringify({
+        staffUserIds: [2, 3],
+        externalEmails: ['copy@example.com', 'staff@example.com'],
+        receiverEmail: 'admin@example.com',
+      }),
+    });
+    global.fetch.mockResolvedValue({ ok: true });
+
+    await notify({
+      userId: 1,
+      tenantId: 1,
+      title: 'Update',
+      message: 'Details',
+      channels: ['db', 'email'],
+    });
+
+    const [, options] = global.fetch.mock.calls[0];
+    const payload = JSON.parse(options.body);
+    expect(payload.personalizations).toEqual([{
+      to: [{ email: 'primary@example.com' }],
+      cc: [
+        { email: 'staff@example.com' },
+        { email: 'copy@example.com' },
+        { email: 'admin@example.com' },
+      ],
+    }]);
+    expect(payload.from.email).not.toBe('admin@example.com');
+    expect(prisma.user.findMany).toHaveBeenCalledWith({
+      where: {
+        tenantId: 1,
+        id: { in: [2, 3] },
+        userType: { in: ['STAFF', 'OWNER'] },
+        role: { not: 'CUSTOMER' },
+        deactivatedAt: null,
+      },
+      select: { email: true },
+    });
+  });
+
+  test('email channel: custom HTML changes the email body without replacing plain text', async () => {
+    prisma.user.findUnique.mockResolvedValue({ email: 'recipient@example.com' });
+    global.fetch.mockResolvedValue({ ok: true });
+    const emailHtml = '<table><tr><td>Catalogue details</td></tr></table>';
+
+    await notify({
+      userId: 1,
+      tenantId: 1,
+      title: 'Catalogue selection',
+      message: 'Teacher selected a catalogue.',
+      emailHtml,
+      channels: ['db', 'email'],
+    });
+
+    const [, options] = global.fetch.mock.calls[0];
+    const payload = JSON.parse(options.body);
+    expect(payload.content.find((content) => content.type === 'text/plain').value)
+      .toBe('Teacher selected a catalogue.');
+    expect(payload.content.find((content) => content.type === 'text/html').value).toBe(emailHtml);
+    expect(prisma.notification.create.mock.calls[0][0].data.message)
+      .toBe('Teacher selected a catalogue.');
+    expect(prisma.notification.create.mock.calls[0][0].data).not.toHaveProperty('emailHtml');
   });
 
   test('email channel: returns notification row even when SendGrid 4xx (best-effort)', async () => {

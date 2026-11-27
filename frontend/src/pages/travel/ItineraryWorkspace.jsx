@@ -689,6 +689,7 @@ export default function ItineraryWorkspace() {
     try {
       const res = await fetchApi("/api/travel/itineraries/suggest", {
         method: "POST",
+        silent: true,
         body: JSON.stringify({
           destination: itin.destination,
           days: dayCount,
@@ -741,11 +742,16 @@ export default function ItineraryWorkspace() {
       await load();
       notify.success(`AI filled ${creates.length} item${creates.length === 1 ? "" : "s"} — review and edit freely.`);
     } catch (e) {
-      notify.error(e?.body?.error || e?.message || "AI suggestion failed");
+      const message = e?.body?.error || e?.message || "AI suggestion failed";
+      if (/AI provider|AI key|GEMINI_API_KEY|not configured/i.test(message)) {
+        notify.info(message, { onClick: () => navigate("/settings") });
+      } else {
+        notify.error(message);
+      }
     } finally {
       setAiFillBusy(false);
     }
-  }, [aiFillBusy, itin, dayCount, id, load, notify]);
+  }, [aiFillBusy, itin, dayCount, id, load, navigate, notify]);
 
   const handleAddToCatalogue = async () => {
     setBusyAction("catalogue");
@@ -759,8 +765,8 @@ export default function ItineraryWorkspace() {
       }));
     } catch (e) {
       const code = e?.body?.code;
-      if (code === "DRIVE_NOT_CONNECTED") notify.error("Connect Google Drive in Travel Knowledge Base settings first");
-      else if (code === "KB_ROOT_NOT_CONFIGURED") notify.error("Configure the Knowledge Base Drive root folder first");
+      if (code === "DRIVE_NOT_CONNECTED") notify.info("Connect Google Drive in Travel Knowledge Base settings first", { onClick: () => navigate("/travel/trip-knowledge") });
+      else if (code === "KB_ROOT_NOT_CONFIGURED") notify.info("Configure the Knowledge Base Drive root folder first", { onClick: () => navigate("/travel/trip-knowledge") });
       else notify.error(e?.body?.error || "Failed to add to catalogue");
     } finally { setBusyAction(null); }
   };

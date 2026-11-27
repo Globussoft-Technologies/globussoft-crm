@@ -329,6 +329,18 @@
   .travel-editor-toolbar .travel-ai-write { flex-basis: 100%; }
 }
 
+.travel-email-preview-card { box-sizing:border-box; width:min(760px, calc(100vw - 40px)) !important; max-width:calc(100vw - 40px) !important; }
+.travel-email-preview-header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:16px; }
+.travel-email-preview-header small { color:var(--text-secondary); font-size:.75rem; text-transform:uppercase; letter-spacing:.08em; }
+.travel-email-preview-header h2 { margin:4px 0 0 !important; font-size:1.1rem !important; }
+.travel-email-preview-frame { display:block; box-sizing:border-box; width:100%; max-width:100%; height:min(620px, 68vh); min-height:360px; border:1px solid var(--border-color); border-radius:10px; overflow:hidden; background:#f3f6f8; }
+.travel-email-preview-card > footer { display:flex; justify-content:flex-end; margin-top:16px; }
+
+@media (max-width:480px) {
+  .travel-email-preview-card { width:calc(100vw - 24px) !important; max-width:calc(100vw - 24px) !important; padding:16px !important; }
+  .travel-email-preview-frame { overflow-x:hidden; }
+}
+
 /* Template cards: status under the title, content in the middle, and stable
    left/right action groups pinned to the card footer. */
 .travel-template-badges {

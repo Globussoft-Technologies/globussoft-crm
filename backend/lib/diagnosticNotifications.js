@@ -30,6 +30,7 @@
 const prisma = require("./prisma");
 const diagnosticNotificationSettings = require("./diagnosticNotificationSettings");
 const { notify, notifyMany } = require("./notificationService");
+const { getNotificationEmailConfig } = require("./notificationEmailCc");
 const { sendEmail } = require("./emailSender");
 const whatsappWebClient = require("../services/whatsappWebClient");
 
@@ -51,6 +52,45 @@ function buildCopy({ subBrand, diagnosticId, contactLabel, score, classification
   };
 }
 
+function escapeHtml(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function absoluteCrmUrl(path) {
+  const base = String(process.env.FRONTEND_URL || "https://crm.globusdemos.com").replace(/\/$/, "");
+  return `${base}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+function buildDiagnosticEmail({ subBrand, diagnosticId, contactLabel, score, classificationLabel, recommendedTier, link, reportPdfUrl }) {
+  // Keep both email affordances pointed at the downloadable diagnostic PDF.
+  const reportUrl = absoluteCrmUrl(reportPdfUrl || link || `/travel/diagnostics/${diagnosticId}`);
+  const reportLabel = "Open diagnostic report";
+  const label = SUB_BRAND_LABELS[subBrand] || subBrand;
+  const rows = [
+    ["Diagnostic", `#${diagnosticId}`],
+    ["Sub-brand", label],
+    ["Customer", contactLabel || "Not provided"],
+    ["Score", Number.isFinite(Number(score)) ? String(score) : "Not scored"],
+    ["Classification", classificationLabel || "Not classified"],
+    ["Recommended tier", recommendedTier || "Not assigned"],
+  ];
+  const text = [
+    `New ${label} diagnostic submission`,
+    "",
+    ...rows.map(([name, value]) => `${name}: ${value}`),
+    "",
+    `Open the diagnostic report: ${reportUrl}`,
+  ].join("\n");
+  const htmlRows = rows.map(([name, value]) => `<tr><td style="padding:8px 12px;color:#667085;font-weight:600">${escapeHtml(name)}</td><td style="padding:8px 12px">${escapeHtml(value)}</td></tr>`).join("");
+  const html = `<div style="font-family:Arial,sans-serif;color:#1d2939;max-width:640px"><h2>New ${escapeHtml(label)} diagnostic submission</h2><table style="border-collapse:collapse;width:100%;border:1px solid #eaecf0">${htmlRows}</table><p style="margin-top:24px"><a href="${escapeHtml(reportUrl)}" style="display:inline-block;background:#4f46e5;color:#fff;padding:12px 18px;border-radius:6px;text-decoration:none">${reportLabel}</a></p><p style="color:#667085;font-size:12px">If the button does not work, open: ${escapeHtml(reportUrl)}</p></div>`;
+  return { text, html };
+}
+
 /**
  * Fire the "a diagnostic was just submitted" notification. Never throws.
  *
@@ -66,20 +106,53 @@ function buildCopy({ subBrand, diagnosticId, contactLabel, score, classification
  */
 async function notifyDiagnosticSubmitted({
   tenantId, subBrand, diagnosticId, contactLabel, score, classificationLabel, recommendedTier, link,
+  reportPdfUrl: submittedReportPdfUrl,
 }) {
   try {
     const recipients = await diagnosticNotificationSettings.getNotificationRecipients({ tenantId, subBrand });
     const { title, message } = buildCopy({ subBrand, diagnosticId, contactLabel, score, classificationLabel, recommendedTier });
-    const resolvedLink = link || "/travel/diagnostics";
+    const resolvedLink = link || `/travel/diagnostics/${diagnosticId}`;
+    const diagnostic = prisma.travelDiagnostic?.findFirst
+      ? await prisma.travelDiagnostic.findFirst({
+        where: { id: Number(diagnosticId), tenantId },
+        select: { reportPdfUrl: true, reportSlugToken: true },
+      }).catch(() => null)
+      : null;
+    const reportPdfUrl = submittedReportPdfUrl || diagnostic?.reportPdfUrl || null;
+    const tenant = diagnostic?.reportSlugToken && prisma.tenant?.findUnique
+      ? await prisma.tenant.findUnique({
+        where: { id: tenantId },
+        select: { slug: true },
+      }).catch(() => null)
+      : null;
+    const publicReportLink = String(subBrand || "").toLowerCase() === "tmc" && diagnostic?.reportSlugToken
+      && tenant?.slug
+      ? `/diagnostic-form/${encodeURIComponent(tenant.slug)}/tmc/report/${encodeURIComponent(`${diagnosticId}-${diagnostic.reportSlugToken}`)}`
+      : resolvedLink;
+    const reportLink = reportPdfUrl || publicReportLink;
+    const email = buildDiagnosticEmail({
+      subBrand,
+      diagnosticId,
+      contactLabel,
+      score,
+      classificationLabel,
+      recommendedTier,
+      link: reportLink,
+      reportPdfUrl,
+    });
+    let tenantEmailConfig = null;
+    try {
+      tenantEmailConfig = await getNotificationEmailConfig(prisma, tenantId);
+    } catch (error) {
+      console.error("[diagnosticNotifications] tenant email settings lookup failed:", error.message);
+    }
 
     if (!recipients.length) {
-      // Zero-config fallback — every ADMIN/MANAGER, in-app only. Preserves
-      // exactly what this feature replaces so an un-configured tenant never
-      // silently loses the notification it gets today just because nobody
-      // has opened the new Notifications tab yet.
+      // Keep the in-app alert broad, but prefer an explicitly configured
+      // tenant email destination over emailing every ADMIN/MANAGER directly.
       const fallbackUsers = await prisma.user.findMany({
         where: { tenantId, role: { in: ["ADMIN", "MANAGER"] } },
-        select: { id: true },
+        select: { id: true, email: true },
       });
       if (!fallbackUsers.length) return;
       await notifyMany({
@@ -93,7 +166,37 @@ async function notifyDiagnosticSubmitted({
         entityType: "TravelDiagnostic",
         entityId: diagnosticId,
         channels: ["db", "socket"],
+        fanoutOptionalChannels: false,
+        fanoutBrowserPush: true,
       });
+      if (tenantEmailConfig === null) return;
+
+      const ccRecipients = tenantEmailConfig.ccRecipients || [];
+      const configuredTo = tenantEmailConfig.receiverEmail || ccRecipients[0];
+      if (configuredTo) {
+        const normalizedTo = String(configuredTo).trim().toLowerCase();
+        const cc = [...new Set(ccRecipients
+          .map((address) => String(address || "").trim().toLowerCase())
+          .filter((address) => address && address !== normalizedTo))];
+        await sendEmail({
+          tenantId,
+          to: configuredTo,
+          cc,
+          subject: title,
+          text: email.text,
+          html: email.html,
+        });
+      } else {
+        await Promise.all(fallbackUsers
+          .filter((user) => user.email)
+          .map((user) => sendEmail({
+            tenantId,
+            to: user.email,
+            subject: title,
+            text: email.text,
+            html: email.html,
+          })));
+      }
       return;
     }
 
@@ -120,6 +223,8 @@ async function notifyDiagnosticSubmitted({
             entityType: "TravelDiagnostic",
             entityId: diagnosticId,
             channels: ["db", "socket"],
+            fanoutOptionalChannels: false,
+            fanoutBrowserPush: true,
           });
         } catch (e) {
           console.warn(`[diagnosticNotifications] db notify failed for user ${r.userId} (non-fatal):`, e.message);
@@ -127,7 +232,14 @@ async function notifyDiagnosticSubmitted({
       }
       if (r.channels.includes("email") && user.email) {
         try {
-          await sendEmail({ tenantId, to: user.email, subject: title, text: message });
+          const primaryEmail = String(user.email).trim().toLowerCase();
+          const cc = [...new Set([
+            ...(tenantEmailConfig?.ccRecipients || []),
+            tenantEmailConfig?.receiverEmail,
+          ]
+            .map((address) => String(address || "").trim().toLowerCase())
+            .filter((address) => address && address !== primaryEmail))];
+          await sendEmail({ tenantId, to: user.email, cc, subject: title, text: email.text, html: email.html });
         } catch (e) {
           console.warn(`[diagnosticNotifications] email failed for user ${r.userId} (non-fatal):`, e.message);
         }

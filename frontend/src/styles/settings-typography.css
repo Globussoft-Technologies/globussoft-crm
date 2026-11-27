@@ -1,0 +1,77 @@
+/* Shared typography for the Settings workspace and its standalone nested pages. */
+.gs-page,
+.settings-nested-page,
+.field-config-page {
+  font-family: var(--font-family);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: var(--letter-spacing-body);
+  line-height: var(--line-height-body);
+}
+
+.gs-page :is(h1, h2, h3, h4, h5, h6),
+.settings-nested-page :is(h1, h2, h3, h4, h5, h6),
+.field-config-page :is(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--font-family) !important;
+  font-weight: var(--font-weight-semibold) !important;
+  letter-spacing: var(--letter-spacing-heading) !important;
+  line-height: var(--line-height-heading) !important;
+}
+
+.gs-page h1,
+.settings-nested-page h1,
+.field-config-page h1 {
+  font-size: var(--font-size-page-title) !important;
+  font-weight: var(--font-weight-bold) !important;
+}
+
+.gs-page :is(h2, h3),
+.settings-nested-page :is(h2, h3),
+.field-config-page :is(h2, h3) {
+  font-size: var(--font-size-section-title) !important;
+}
+
+.gs-page :is(p, label, button, input, select, textarea, th, td),
+.settings-nested-page :is(p, label, button, input, select, textarea, th, td),
+.field-config-page :is(p, label, button, input, select, textarea, th, td) {
+  font-family: var(--font-family) !important;
+  font-size: var(--font-size-body) !important;
+  line-height: var(--line-height-body) !important;
+}
+
+.gs-page :is(label, th),
+.settings-nested-page :is(label, th),
+.field-config-page :is(label, th) {
+  font-size: var(--font-size-label) !important;
+  font-weight: var(--font-weight-medium) !important;
+}
+
+.gs-page :is(small, code),
+.settings-nested-page :is(small, code),
+.field-config-page :is(small, code) {
+  font-size: var(--font-size-caption) !important;
+  line-height: var(--line-height-body) !important;
+}
+
+.gs-page :is(.gs-nav-group > p, .gs-app-category),
+.settings-nested-page :is(.gs-nav-group > p, .gs-app-category),
+.field-config-page :is(.field-config-detail-label, .field-config-chip) {
+  font-size: var(--font-size-caption) !important;
+  font-weight: var(--font-weight-semibold) !important;
+  letter-spacing: 0.06em !important;
+}
+
+.gs-page :is(.btn-primary, .btn-secondary, .gs-nav-item, .gs-app-action),
+.settings-nested-page :is(.btn-primary, .btn-secondary),
+.field-config-page :is(.field-config-button, .field-config-icon-button, .field-config-inline-action) {
+  font-size: var(--font-size-body) !important;
+  font-weight: var(--font-weight-semibold) !important;
+}
+
+@container settings-page (max-width: 560px) {
+  .gs-page,
+  .settings-nested-page,
+  .field-config-page {
+    font-size: var(--font-size-label);
+  }
+}

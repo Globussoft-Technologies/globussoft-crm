@@ -378,14 +378,26 @@ function SelectedTrip() {
     page === undefined ? undefined : isPublishedTripPage(page),
     generated,
   );
+  const durationDays =
+    trip.departDate && trip.returnDate ? tripDurationDays(trip) : null;
   return (
     <div className="travel-trip-detail-page ts-detail" style={{ padding: 24, maxWidth: 1100, margin: "0 auto" }}>
       <header id="trip-header" className="ts-trip-header">
         <Link className="ts-back" to={backTo} style={backLink}><ChevronLeft size={16} /> {backLabel}</Link>
         <div>
-          <h1 style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 6px" }}>
-            <Luggage size={28} aria-hidden /> {trip.tripCode}
-          </h1>
+          <div className="ts-trip-title-row">
+            <h1 style={{ display: "flex", alignItems: "center", gap: 8, margin: 0 }}>
+              <Luggage size={28} aria-hidden /> {trip.tripCode}
+            </h1>
+            {durationDays && (
+              <span
+                className="ts-trip-duration-badge"
+                aria-label={`Trip duration: ${durationDays} ${durationDays === 1 ? "day" : "days"}`}
+              >
+                {durationDays} {durationDays === 1 ? "day" : "days"}
+              </span>
+            )}
+          </div>
           <div
             style={{
               color: "var(--text-secondary)",
@@ -395,7 +407,8 @@ function SelectedTrip() {
             }}
           >
             <CalendarIcon size={14} /> {fmt(trip.departDate)} →{" "}
-            {fmt(trip.returnDate)} · {trip.destination}
+            {fmt(trip.returnDate)}
+            <span aria-hidden="true">·</span> {trip.destination}
           </div>
         </div>
         <SetupHeader flags={flags} viewed={viewed} jump={jump} />

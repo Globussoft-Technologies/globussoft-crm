@@ -1994,7 +1994,7 @@ describe('Document requirements', () => {
   });
 
   test('POST document preserves the complete consent document above the former 10k limit', async () => {
-    const completeTerms = `TERMS AND CONDITIONS ${'Clause text. '.repeat(1100)}`;
+    const completeTerms = `TERMS AND CONDITIONS ${'Clause text. '.repeat(1100).trimEnd()}`;
     prisma.tripDocumentRequirement.create.mockResolvedValue({
       id: 11,
       tripId: 100,
@@ -2554,7 +2554,8 @@ describe('POST /api/travel/trips/:id/registrations/:rid/approve', () => {
     expect(email.text).not.toContain('http://localhost:5173/pay/');
     expect(email.text).toContain('Click here to proceed for payment:');
     expect(email.html).toContain('Click here to proceed for payment');
-    expect(email.html).toContain('href="http://localhost:5173/pay/');
+    const paymentPortalBaseUrl = process.env.FRONTEND_URL || process.env.PUBLIC_BASE_URL || 'http://localhost:5173';
+    expect(email.html).toContain(`href="${paymentPortalBaseUrl}/pay/`);
     expect(email.html).not.toContain('display:inline-block');
     expect(email.html).not.toContain('background:#4f46e5');
   });
